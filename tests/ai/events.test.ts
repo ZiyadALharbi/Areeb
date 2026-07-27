@@ -78,7 +78,6 @@ describe("AssistantMessageEvent", () => {
 			},
 			{
 				type: "done",
-				reason: "stop",
 				message: {
 					role: "assistant",
 					content: [{ type: "text", text: "Hello" }],
@@ -98,7 +97,6 @@ describe("AssistantMessageEvent", () => {
 			},
 			{
 				type: "error",
-				reason: "error",
 				message: {
 					role: "assistant",
 					content: [{ type: "text", text: "Partial answer" }],
@@ -195,10 +193,33 @@ describe("AssistantMessageEvent", () => {
 		expect(endEvent.toolCall.arguments).toEqual({ query: "Areeb" });
 	});
 
-	test("keeps terminal reasons equal to message stop reasons", () => {
+	test("uses the terminal message as the single source of the stop reason", () => {
+		type DoneEvent = Extract<AssistantMessageEvent, { type: "done" }>;
+		type ErrorEvent = Extract<AssistantMessageEvent, { type: "error" }>;
+		type DoneStopReason = DoneEvent["message"]["stopReason"];
+		type ErrorStopReason = ErrorEvent["message"]["stopReason"];
+		type DoneHasReason = "reason" extends keyof DoneEvent ? true : false;
+		type ErrorHasReason = "reason" extends keyof ErrorEvent ? true : false;
+		type FailedErrorMessageIsRequired =
+			ErrorEvent["message"] extends Required<
+				Pick<ErrorEvent["message"], "errorMessage">
+			>
+				? true
+				: false;
+		type SuccessfulErrorMessageIsForbidden =
+			Exclude<DoneEvent["message"]["errorMessage"], undefined> extends never
+				? true
+				: false;
+
+		const successReasons: DoneStopReason[] = ["stop", "length", "tool_call"];
+		const failureReasons: ErrorStopReason[] = ["error", "aborted"];
+		const doneHasReason: DoneHasReason = false;
+		const errorHasReason: ErrorHasReason = false;
+		const failedErrorMessageIsRequired: FailedErrorMessageIsRequired = true;
+		const successfulErrorMessageIsForbidden: SuccessfulErrorMessageIsForbidden = true;
+
 		const doneEvent: AssistantMessageEvent = {
 			type: "done",
-			reason: "length",
 			message: {
 				role: "assistant",
 				content: [{ type: "text", text: "Truncated answer" }],
@@ -217,7 +238,6 @@ describe("AssistantMessageEvent", () => {
 		};
 		const errorEvent: AssistantMessageEvent = {
 			type: "error",
-			reason: "aborted",
 			message: {
 				role: "assistant",
 				content: [{ type: "text", text: "Partial answer" }],
@@ -236,14 +256,19 @@ describe("AssistantMessageEvent", () => {
 			},
 		};
 
-		expect(doneEvent.reason).toBe(doneEvent.message.stopReason);
-		expect(errorEvent.reason).toBe(errorEvent.message.stopReason);
+		expect(successReasons).toEqual(["stop", "length", "tool_call"]);
+		expect(failureReasons).toEqual(["error", "aborted"]);
+		expect(doneEvent.message.stopReason).toBe("length");
+		expect(errorEvent.message.stopReason).toBe("aborted");
+		expect(doneHasReason).toBe(false);
+		expect(errorHasReason).toBe(false);
+		expect(failedErrorMessageIsRequired).toBe(true);
+		expect(successfulErrorMessageIsForbidden).toBe(true);
 	});
 
 	test("preserves partial content and metadata on failure", () => {
 		const event: Extract<AssistantMessageEvent, { type: "error" }> = {
 			type: "error",
-			reason: "error",
 			message: {
 				role: "assistant",
 				content: [{ type: "text", text: "Partial answer" }],

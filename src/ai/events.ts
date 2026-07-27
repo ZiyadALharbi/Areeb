@@ -10,11 +10,18 @@ type SuccessReason = Extract<StopReason, "stop" | "length" | "tool_call">;
 
 type FailureReason = Extract<StopReason, "error" | "aborted">;
 
-type SuccessfulAssistantMessage = AssistantMessage & {
+type SuccessfulAssistantMessage = Omit<
+	AssistantMessage,
+	"stopReason" | "errorMessage"
+> & {
 	stopReason: SuccessReason;
+	errorMessage?: never;
 };
 
-type FailedAssistantMessage = AssistantMessage & {
+type FailedAssistantMessage = Omit<
+	AssistantMessage,
+	"stopReason" | "errorMessage"
+> & {
 	stopReason: FailureReason;
 	errorMessage: string;
 };
@@ -70,11 +77,9 @@ export type AssistantMessageEvent =
 	  }
 	| {
 			type: "done";
-			reason: SuccessReason;
 			message: SuccessfulAssistantMessage;
 	  }
 	| {
 			type: "error";
-			reason: FailureReason;
 			message: FailedAssistantMessage;
 	  };
