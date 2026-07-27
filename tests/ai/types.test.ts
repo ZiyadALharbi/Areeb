@@ -7,7 +7,7 @@ import type {
 	ToolDefinition,
 	ToolResultContent,
 	UserContent,
-} from "./types.ts";
+} from "../../src/ai/types.ts";
 
 function assertNever(value: never): never {
 	throw new Error(`Unexpected value: ${JSON.stringify(value)}`);
