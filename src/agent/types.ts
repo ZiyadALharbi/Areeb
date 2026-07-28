@@ -84,9 +84,6 @@ export interface AgentContext extends AgentState {
 }
 
 
-
-
-
 export type AgentEvent =
 	// Agent lifecycle
 	| { type: "agent_start" }
