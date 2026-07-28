@@ -1,16 +1,21 @@
 {
-  "name": "areeb",
-  "module": "index.ts",
-  "type": "module",
-  "private": true,
-  "devDependencies": {
-    "@biomejs/biome": "^2.5.4",
-    "@types/bun": "^1.3.14"
-  },
-  "peerDependencies": {
-    "typescript": "7"
-  },
-  "dependencies": {
-    "zod": "^4.4.3"
-  }
+	"name": "areeb",
+	"module": "index.ts",
+	"type": "module",
+	"private": true,
+	"devDependencies": {
+		"typescript": "7",
+		"@biomejs/biome": "^2.5.4",
+		"@types/bun": "^1.3.14"
+	},
+	"peerDependencies": {
+	},
+	"dependencies": {
+		"zod": "^4.4.3"
+	},
+	"scripts": {
+		"check": "biome check . && tsc --noEmit",
+		"test": "bun test",
+		"build": "bun build ./index.ts --outdir ./dist --target bun"
+	}
 }
