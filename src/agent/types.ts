@@ -4,6 +4,8 @@ import type {
 	ToolDefinition,
 	ToolResultContent,
 } from "../ai/types.ts";
+import type { AssistantMessageEvent } from "../ai/events.ts";
+import type { ToolResultMessage } from "../ai/types.ts";
 
 
 /**
@@ -80,3 +82,26 @@ export interface AgentContext extends AgentState {
 	tools: AgentTool[];
 	messageConverter?: AgentMessageConverter;
 }
+
+
+
+
+
+export type AgentEvent =
+	// Agent lifecycle
+	| { type: "agent_start" }
+	| { type: "agent_end"; messages: AgentMessage[] }
+
+	// Turn lifecycle
+	| { type: "turn_start" }
+	| { type: "turn_end"; message: AgentMessage; toolResults: ToolResultMessage[]; }
+
+	// Message lifecycle
+	| { type: "message_start"; message: AgentMessage }
+	| { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent; }
+	| { type: "message_end"; message: AgentMessage }
+
+	// Tool execution lifecycle
+	| { type: "tool_execution_start"; toolCall: AgentToolCall; }
+	| { type: "tool_execution_update"; toolCall: AgentToolCall; update: AgentToolUpdate; }
+	| { type: "tool_execution_end"; toolCall: AgentToolCall; result: ToolResultMessage; };
