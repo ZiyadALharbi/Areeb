@@ -17,13 +17,22 @@ type StreamState<TResult> =
 export class EventStream<TEvent, TResult = TEvent>
 	implements AsyncIterable<TEvent>
 {
-	private readonly events: TEvent[] = [];
-	private readonly waiters: EventWaiter<TEvent>[] = [];
+	private readonly events: TEvent[] = []; // buffered events that have not been consumed.
+	private readonly waiters: EventWaiter<TEvent>[] = []; // pending `next()` calls waiting for events.
 	private readonly finalResult: Promise<TResult>;
 	private resolveResult!: (result: TResult) => void;
 	private rejectResult!: (error: unknown) => void;
 	private state: StreamState<TResult> = { status: "open" };
-	private iteratorCreated = false;
+  private iteratorCreated = false;
+
+  /**
+   *
+   * The constructor receives two policies:
+   * 1. How to identify a terminal event.
+   * 2. How to get the final result from it.
+   *
+   * This keeps `EventStream` generic. It knows nothing about assistant messages or `"done"` events.
+   */
 
 	constructor(
 		private readonly isTerminalEvent: (event: TEvent) => boolean,
