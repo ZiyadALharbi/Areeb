@@ -12,7 +12,7 @@ export type ReasoningLevel = "off" | ThinkingLevel;
 
 export interface StreamOptions {
   readonly signal?: AbortSignal;
-  readonly timeoutMs?: number;
+  readonly timeout?: number;
 	readonly maxRetries?: number;
 	readonly reasoning?: ReasoningLevel;
 }
