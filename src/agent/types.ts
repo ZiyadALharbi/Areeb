@@ -1,12 +1,11 @@
+import type { AssistantMessageEvent } from "../ai/events.ts";
 import type {
 	Message,
 	ToolCall,
 	ToolDefinition,
 	ToolResultContent,
+	ToolResultMessage,
 } from "../ai/types.ts";
-import type { AssistantMessageEvent } from "../ai/events.ts";
-import type { ToolResultMessage } from "../ai/types.ts";
-
 
 /**
  * Applications can augment this interface with their own message types.
@@ -18,28 +17,28 @@ import type { ToolResultMessage } from "../ai/types.ts";
  * 	}
  * }
  */
+// biome-ignore lint/suspicious/noEmptyInterface: This interface is intentionally empty so consumers can augment it.
 export interface CustomAgentMessages {}
 
 export type AgentMessage =
 	| Message
-  | CustomAgentMessages[keyof CustomAgentMessages];
+	| CustomAgentMessages[keyof CustomAgentMessages];
 
-  /**
-   * Converts agent messages into model-compatible messages.
-   * Custom messages may be converted, expanded, or filtered out.
-   */
-  export type AgentMessageConverter = (
+/**
+ * Converts agent messages into model-compatible messages.
+ * Custom messages may be converted, expanded, or filtered out.
+ */
+export type AgentMessageConverter = (
 	messages: AgentMessage[],
-  ) => Message[] | Promise<Message[]>;
+) => Message[] | Promise<Message[]>;
 
-  /**
-   * Persistent conversation state. Runtime dependencies do not belong here.
-   */
-  export interface AgentState {
+/**
+ * Persistent conversation state. Runtime dependencies do not belong here.
+ */
+export interface AgentState {
 	systemPrompt?: string;
 	messages: AgentMessage[];
-  }
-
+}
 
 export type AgentToolCall = ToolCall;
 
@@ -83,7 +82,6 @@ export interface AgentContext extends AgentState {
 	messageConverter?: AgentMessageConverter;
 }
 
-
 export type AgentEvent =
 	// Agent lifecycle
 	| { type: "agent_start" }
@@ -91,14 +89,30 @@ export type AgentEvent =
 
 	// Turn lifecycle
 	| { type: "turn_start" }
-	| { type: "turn_end"; message: AgentMessage; toolResults: ToolResultMessage[]; }
+	| {
+			type: "turn_end";
+			message: AgentMessage;
+			toolResults: ToolResultMessage[];
+	  }
 
 	// Message lifecycle
 	| { type: "message_start"; message: AgentMessage }
-	| { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent; }
+	| {
+			type: "message_update";
+			message: AgentMessage;
+			assistantMessageEvent: AssistantMessageEvent;
+	  }
 	| { type: "message_end"; message: AgentMessage }
 
 	// Tool execution lifecycle
-	| { type: "tool_execution_start"; toolCall: AgentToolCall; }
-	| { type: "tool_execution_update"; toolCall: AgentToolCall; update: AgentToolUpdate; }
-	| { type: "tool_execution_end"; toolCall: AgentToolCall; result: ToolResultMessage; };
+	| { type: "tool_execution_start"; toolCall: AgentToolCall }
+	| {
+			type: "tool_execution_update";
+			toolCall: AgentToolCall;
+			update: AgentToolUpdate;
+	  }
+	| {
+			type: "tool_execution_end";
+			toolCall: AgentToolCall;
+			result: ToolResultMessage;
+	  };
