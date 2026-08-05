@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { z } from "zod";
+import { runAgentLoop } from "../../src/agent/agent_loop.ts";
+import type { AgentContext, AgentEvent } from "../../src/agent/types.ts";
 import type { AssistantMessageEvent } from "../../src/ai/events.ts";
 import { OpenAICompatibleProvider } from "../../src/ai/openai_compatible_provider.ts";
-import type { ModelContext } from "../../src/ai/types.ts";
+import type { ModelContext, UserMessage } from "../../src/ai/types.ts";
 
 const servers: Bun.Server<unknown>[] = [];
 
@@ -192,7 +194,6 @@ describe("OpenAICompatibleProvider", () => {
 
 		const stream = provider.streamResponse("requested-model", context, {
 			reasoning: "high",
-			maxRetries: 0,
 		});
 		const events = await collect(stream);
 		const result = await stream.result();
@@ -265,6 +266,12 @@ describe("OpenAICompatibleProvider", () => {
 			"toolcall_end",
 			"done",
 		]);
+		const startEvent = events.find((event) => event.type === "start");
+		const firstTextDelta = events.find((event) => event.type === "text_delta");
+		expect(startEvent?.partial.content).toEqual([]);
+		expect(firstTextDelta?.partial.content).toEqual([
+			{ type: "text", text: "Hello" },
+		]);
 		expect(result).toMatchObject({
 			role: "assistant",
 			provider: "compatible",
@@ -317,7 +324,7 @@ describe("OpenAICompatibleProvider", () => {
 		});
 
 		const message = await provider
-			.streamResponse("model", { messages: [], tools: [] }, { maxRetries: 0 })
+			.streamResponse("model", { messages: [], tools: [] })
 			.result();
 
 		expect(requestBody).toBeDefined();
@@ -374,6 +381,269 @@ describe("OpenAICompatibleProvider", () => {
 		expect(requestBodies[2]).toMatchObject({ enable_thinking: false });
 	});
 
+	test("retries transient request failures before exposing the stream", async () => {
+		let requestCount = 0;
+		const { baseUrl } = startServer(() => {
+			requestCount += 1;
+			if (requestCount === 1) {
+				return new Response(
+					JSON.stringify({ error: { message: "temporary failure" } }),
+					{
+						status: 500,
+						headers: {
+							"Content-Type": "application/json",
+							"retry-after-ms": "0",
+						},
+					},
+				);
+			}
+			return sseResponse([
+				chunk([
+					{
+						index: 0,
+						delta: { content: "Recovered" },
+						finish_reason: "stop",
+					},
+				]),
+			]);
+		});
+		const provider = new OpenAICompatibleProvider({
+			providerId: "compatible",
+			baseUrl,
+			retry: { maxRetries: 1 },
+		});
+
+		const events = await collect(
+			provider.streamResponse("model", { messages: [] }),
+		);
+
+		expect(requestCount).toBe(2);
+		expect(events.map((event) => event.type)).toEqual([
+			"start",
+			"text_start",
+			"text_delta",
+			"text_end",
+			"done",
+		]);
+	});
+
+	test("uses retry classification and backoff from provider configuration", async () => {
+		let requestCount = 0;
+		const retryIndexes: number[] = [];
+		const { baseUrl } = startServer(() => {
+			requestCount += 1;
+			if (requestCount === 1) {
+				return new Response(
+					JSON.stringify({ error: { message: "custom retry" } }),
+					{
+						status: 400,
+						headers: { "Content-Type": "application/json" },
+					},
+				);
+			}
+			return sseResponse([
+				chunk([{ index: 0, delta: {}, finish_reason: "stop" }]),
+			]);
+		});
+		const provider = new OpenAICompatibleProvider({
+			providerId: "compatible",
+			baseUrl,
+			retry: {
+				maxRetries: 1,
+				isRetryable: () => true,
+				backoffMs: (_error, retryIndex) => {
+					retryIndexes.push(retryIndex);
+					return 0;
+				},
+			},
+		});
+
+		const message = await provider
+			.streamResponse("model", { messages: [] })
+			.result();
+
+		expect(requestCount).toBe(2);
+		expect(retryIndexes).toEqual([0]);
+		expect(message.stopReason).toBe("stop");
+	});
+
+	test("keeps a recovered retry inside one agent turn", async () => {
+		let requestCount = 0;
+		const { baseUrl } = startServer(() => {
+			requestCount += 1;
+			if (requestCount === 1) {
+				return new Response(
+					JSON.stringify({ error: { message: "temporary failure" } }),
+					{
+						status: 500,
+						headers: {
+							"Content-Type": "application/json",
+							"retry-after-ms": "0",
+						},
+					},
+				);
+			}
+			return sseResponse([
+				chunk([
+					{
+						index: 0,
+						delta: { content: "Recovered" },
+						finish_reason: "stop",
+					},
+				]),
+			]);
+		});
+		const provider = new OpenAICompatibleProvider({
+			providerId: "compatible",
+			baseUrl,
+			retry: { maxRetries: 1 },
+		});
+		const prompt: UserMessage = {
+			role: "user",
+			content: [{ type: "text", text: "Hello" }],
+			timestamp: 1,
+		};
+		const context: AgentContext = {
+			systemPrompt: "You are Areeb.",
+			messages: [],
+			tools: [],
+		};
+		const agentEvents: AgentEvent[] = [];
+
+		const result = await runAgentLoop(
+			[prompt],
+			context,
+			{ provider, model: "model" },
+			(event) => {
+				agentEvents.push(event);
+			},
+		);
+
+		expect(requestCount).toBe(2);
+		expect(
+			agentEvents.filter((event) => event.type === "agent_start"),
+		).toHaveLength(1);
+		expect(
+			agentEvents.filter((event) => event.type === "turn_start"),
+		).toHaveLength(1);
+		expect(
+			agentEvents.filter((event) => event.type === "message_end"),
+		).toHaveLength(2);
+		expect(
+			agentEvents.filter((event) => event.type === "turn_end"),
+		).toHaveLength(1);
+		expect(
+			agentEvents.filter((event) => event.type === "agent_end"),
+		).toHaveLength(1);
+		expect(result.at(-1)).toMatchObject({
+			role: "assistant",
+			content: [{ type: "text", text: "Recovered" }],
+			stopReason: "stop",
+		});
+	});
+
+	test("does not retry after a provider stream has been exposed", async () => {
+		let requestCount = 0;
+		const { baseUrl } = startServer(() => {
+			requestCount += 1;
+			return sseResponse([
+				chunk([
+					{
+						index: 0,
+						delta: { content: "Partial" },
+						finish_reason: null,
+					},
+				]),
+			]);
+		});
+		const provider = new OpenAICompatibleProvider({
+			providerId: "compatible",
+			baseUrl,
+			retry: { maxRetries: 2 },
+		});
+		const stream = provider.streamResponse("model", { messages: [] });
+
+		const events = await collect(stream);
+		const result = await stream.result();
+
+		expect(requestCount).toBe(1);
+		expect(events.map((event) => event.type)).toEqual([
+			"start",
+			"text_start",
+			"text_delta",
+			"error",
+		]);
+		expect(result).toMatchObject({
+			content: [{ type: "text", text: "Partial" }],
+			stopReason: "error",
+			errorMessage: "The provider stream ended without a finish reason",
+		});
+	});
+
+	test("returns one final error after exhausting transient retries", async () => {
+		let requestCount = 0;
+		const { baseUrl } = startServer(() => {
+			requestCount += 1;
+			return new Response(JSON.stringify({ error: { message: "try later" } }), {
+				status: 503,
+				headers: {
+					"Content-Type": "application/json",
+					"retry-after-ms": "0",
+				},
+			});
+		});
+		const provider = new OpenAICompatibleProvider({
+			providerId: "compatible",
+			baseUrl,
+			retry: { maxRetries: 2 },
+		});
+		const stream = provider.streamResponse("model", { messages: [] });
+
+		const events = await collect(stream);
+
+		expect(requestCount).toBe(3);
+		expect(events.map((event) => event.type)).toEqual(["error"]);
+		expect(await stream.result()).toMatchObject({
+			content: [],
+			stopReason: "error",
+			errorMessage: "503 try later",
+		});
+	});
+
+	test("can abort while waiting for a provider retry", async () => {
+		let requestCount = 0;
+		const controller = new AbortController();
+		const { baseUrl } = startServer(() => {
+			requestCount += 1;
+			setTimeout(() => controller.abort(), 10);
+			return new Response(JSON.stringify({ error: { message: "try later" } }), {
+				status: 503,
+				headers: {
+					"Content-Type": "application/json",
+					"retry-after-ms": "10000",
+				},
+			});
+		});
+		const provider = new OpenAICompatibleProvider({
+			providerId: "compatible",
+			baseUrl,
+			retry: { maxRetries: 2 },
+		});
+		const stream = provider.streamResponse(
+			"model",
+			{ messages: [] },
+			{ signal: controller.signal },
+		);
+		const events = await collect(stream);
+
+		expect(requestCount).toBe(1);
+		expect(events.map((event) => event.type)).toEqual(["error"]);
+		expect(await stream.result()).toMatchObject({
+			stopReason: "aborted",
+			errorMessage: "The model request was aborted",
+		});
+	});
+
 	test("forwards AbortSignal and returns partial content in an aborted terminal error", async () => {
 		const encoder = new TextEncoder();
 		const { baseUrl } = startServer((request) => {
@@ -409,7 +679,7 @@ describe("OpenAICompatibleProvider", () => {
 		const stream = provider.streamResponse(
 			"model",
 			{ messages: [] },
-			{ signal: controller.signal, maxRetries: 0 },
+			{ signal: controller.signal },
 		);
 		const events: AssistantMessageEvent[] = [];
 

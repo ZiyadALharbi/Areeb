@@ -20,15 +20,21 @@ function successfulScript(text: string): AssistantMessageEvent[] {
 		stopReason: "stop" as const,
 		timestamp: 1_753_632_000_000,
 	};
+	const emptyPartial = { ...message, content: [] };
+	const startedTextPartial = {
+		...message,
+		content: [{ type: "text" as const, text: "" }],
+	};
 
 	return [
-		{ type: "start" },
-		{ type: "text_start", contentIndex: 0 },
-		{ type: "text_delta", contentIndex: 0, delta: text },
+		{ type: "start", partial: emptyPartial },
+		{ type: "text_start", contentIndex: 0, partial: startedTextPartial },
+		{ type: "text_delta", contentIndex: 0, delta: text, partial: message },
 		{
 			type: "text_end",
 			contentIndex: 0,
 			content: { type: "text", text },
+			partial: message,
 		},
 		{ type: "done", message },
 	];
@@ -103,7 +109,11 @@ describe("FakeProvider", () => {
 	});
 
 	test("rejects a script without a terminal event", () => {
-		const provider = new FakeProvider([[{ type: "start" }]]);
+		const startEvent = successfulScript("Never finishes")[0];
+		if (!startEvent) {
+			throw new Error("The test script must contain a start event");
+		}
+		const provider = new FakeProvider([[startEvent]]);
 
 		expect(() =>
 			provider.streamResponse("fake-model", { messages: [] }),

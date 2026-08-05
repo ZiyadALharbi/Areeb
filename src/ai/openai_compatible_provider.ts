@@ -1,4 +1,8 @@
-import OpenAI, { APIUserAbortError } from "openai";
+import OpenAI, {
+	APIConnectionError,
+	APIError,
+	APIUserAbortError,
+} from "openai";
 import type {
 	ChatCompletionAssistantMessageParam,
 	ChatCompletionChunk,
@@ -15,6 +19,7 @@ import {
 } from "./event-stream.ts";
 import type {
 	ModelProvider,
+	ProviderRetryConfig,
 	ReasoningLevel,
 	StreamOptions,
 } from "./provider_protocol.ts";
@@ -47,6 +52,7 @@ export interface OpenAICompatibleConfig {
 	readonly apiKey?: string;
 	readonly headers?: Readonly<Record<string, string>>;
 	readonly compat?: OpenAICompatibleCompat;
+	readonly retry?: ProviderRetryConfig;
 }
 
 type SuccessfulStopReason = Extract<
@@ -87,10 +93,12 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
 	private readonly client: OpenAI;
 	private readonly compat: OpenAICompatibleCompat;
+	private readonly retry: ProviderRetryConfig;
 
 	constructor(config: OpenAICompatibleConfig) {
 		this.providerId = config.providerId;
 		this.compat = config.compat ?? {};
+		this.retry = { ...config.retry };
 		this.client = new OpenAI({
 			apiKey: config.apiKey ?? "not-needed",
 			baseURL: config.baseUrl,
@@ -121,16 +129,26 @@ export class OpenAICompatibleProvider implements ModelProvider {
 		let finishReason: NormalizedFinishReason | undefined;
 		const toolCallsByStreamIndex = new Map<number, StreamingToolCall>();
 
-		eventStream.push({ type: "start" });
-
 		try {
 			const request = this.buildRequest(model, context, options);
-			const chunks = await this.client.chat.completions.create(request, {
-				...(options?.signal ? { signal: options.signal } : {}),
-				...(options?.timeout !== undefined ? { timeout: options.timeout } : {}),
-				...(options?.maxRetries !== undefined
-					? { maxRetries: options.maxRetries }
-					: {}),
+			const chunks = await retryProviderRequest(
+				() =>
+					this.client.chat.completions.create(request, {
+						...(options?.signal ? { signal: options.signal } : {}),
+						...(options?.timeout !== undefined
+							? { timeout: options.timeout }
+							: {}),
+						maxRetries: 0,
+					}),
+				this.retry,
+				options?.signal,
+			);
+
+			// Failed attempts remain private to the provider. Consumers see a normal
+			// assistant stream only after a request has been established.
+			eventStream.push({
+				type: "start",
+				partial: cloneAssistantMessage(output),
 			});
 
 			for await (const chunk of chunks) {
@@ -153,6 +171,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
 						eventStream.push({
 							type: "text_start",
 							contentIndex: textContentIndex,
+							partial: cloneAssistantMessage(output),
 						});
 					}
 
@@ -165,6 +184,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
 						type: "text_delta",
 						contentIndex: textContentIndex,
 						delta: textDelta,
+						partial: cloneAssistantMessage(output),
 					});
 				}
 
@@ -176,6 +196,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
 						eventStream.push({
 							type: "thinking_start",
 							contentIndex: thinkingContentIndex,
+							partial: cloneAssistantMessage(output),
 						});
 					}
 
@@ -188,6 +209,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
 						type: "thinking_delta",
 						contentIndex: thinkingContentIndex,
 						delta: reasoningDelta,
+						partial: cloneAssistantMessage(output),
 					});
 				}
 
@@ -214,6 +236,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
 							contentIndex: streamingToolCall.contentIndex,
 							toolCallId: toolCall.id,
 							toolName: toolCall.name,
+							partial: cloneAssistantMessage(output),
 						});
 					}
 
@@ -232,6 +255,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
 							contentIndex: streamingToolCall.contentIndex,
 							toolCallId: streamingToolCall.toolCall.id,
 							argumentsDelta,
+							partial: cloneAssistantMessage(output),
 						});
 					}
 				}
@@ -247,7 +271,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
 			this.finishContent(
 				eventStream,
-				content,
+				output,
 				textContentIndex,
 				thinkingContentIndex,
 				toolCallsByStreamIndex,
@@ -397,11 +421,12 @@ export class OpenAICompatibleProvider implements ModelProvider {
 
 	private finishContent(
 		eventStream: AssistantMessageEventStream,
-		content: AssistantContent[],
+		output: AssistantMessage,
 		textContentIndex: number | undefined,
 		thinkingContentIndex: number | undefined,
 		toolCallsByStreamIndex: ReadonlyMap<number, StreamingToolCall>,
 	): void {
+		const { content } = output;
 		const toolCallsByContentIndex = new Map(
 			[...toolCallsByStreamIndex.values()].map((toolCall) => [
 				toolCall.contentIndex,
@@ -423,6 +448,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
 					type: "text_end",
 					contentIndex,
 					content: block,
+					partial: cloneAssistantMessage(output),
 				});
 				continue;
 			}
@@ -435,6 +461,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
 					type: "thinking_end",
 					contentIndex,
 					content: block,
+					partial: cloneAssistantMessage(output),
 				});
 				continue;
 			}
@@ -449,6 +476,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
 					type: "toolcall_end",
 					contentIndex,
 					toolCall: streamingToolCall.toolCall,
+					partial: cloneAssistantMessage(output),
 				});
 			}
 		}
@@ -725,6 +753,163 @@ function isAbortError(
 		error instanceof APIUserAbortError ||
 		(error instanceof Error && error.name === "AbortError")
 	);
+}
+
+const DEFAULT_MAX_RETRIES = 2;
+const DEFAULT_MAX_RETRY_DELAY_MS = 60_000;
+
+function normalizeMaxRetries(maxRetries: number | undefined): number {
+	if (maxRetries === undefined) {
+		return DEFAULT_MAX_RETRIES;
+	}
+	if (!Number.isFinite(maxRetries) || maxRetries <= 0) {
+		return 0;
+	}
+	return Math.floor(maxRetries);
+}
+
+async function retryProviderRequest<T>(
+	request: () => Promise<T>,
+	config: ProviderRetryConfig,
+	signal?: AbortSignal,
+): Promise<T> {
+	const maxRetries = normalizeMaxRetries(config.maxRetries);
+	let retriesRemaining = maxRetries;
+
+	while (true) {
+		try {
+			return await request();
+		} catch (error) {
+			if (signal?.aborted) {
+				throw createAbortError();
+			}
+			const isRetryable = config.isRetryable ?? isRetryableError;
+			if (retriesRemaining <= 0 || !isRetryable(error)) {
+				throw error;
+			}
+
+			const retryIndex = maxRetries - retriesRemaining;
+			retriesRemaining -= 1;
+			const backoffMs = config.backoffMs ?? retryDelayMs;
+			await waitForRetry(
+				validateRetryDelayMs(
+					backoffMs(error, retryIndex),
+					config.maxRetryDelayMs,
+					error,
+				),
+				signal,
+			);
+		}
+	}
+}
+
+function isRetryableError(error: unknown): boolean {
+	if (error instanceof APIConnectionError) {
+		return true;
+	}
+	if (!(error instanceof APIError)) {
+		return false;
+	}
+
+	const shouldRetry = error.headers?.get("x-should-retry");
+	if (shouldRetry === "true") {
+		return true;
+	}
+	if (shouldRetry === "false") {
+		return false;
+	}
+
+	return (
+		error.status === 408 ||
+		error.status === 409 ||
+		error.status === 429 ||
+		(error.status !== undefined && error.status >= 500)
+	);
+}
+
+function retryDelayMs(error: unknown, retryIndex: number): number {
+	const headers = error instanceof APIError ? error.headers : undefined;
+	const retryAfterMs = headers?.get("retry-after-ms");
+	if (retryAfterMs !== null && retryAfterMs !== undefined) {
+		const parsed = Number.parseFloat(retryAfterMs);
+		if (Number.isFinite(parsed)) {
+			return parsed;
+		}
+	}
+
+	const retryAfter = headers?.get("retry-after");
+	if (retryAfter !== null && retryAfter !== undefined) {
+		const seconds = Number.parseFloat(retryAfter);
+		if (Number.isFinite(seconds)) {
+			return seconds * 1_000;
+		}
+		const dateDelay = Date.parse(retryAfter) - Date.now();
+		if (Number.isFinite(dateDelay)) {
+			return dateDelay;
+		}
+	}
+
+	const exponentialDelay = Math.min(500 * 2 ** retryIndex, 8_000);
+	return exponentialDelay * (1 - Math.random() * 0.25);
+}
+
+function validateRetryDelayMs(
+	delayMs: number,
+	maxRetryDelayMs: number | undefined,
+	error: unknown,
+): number {
+	if (!Number.isFinite(delayMs)) {
+		throw new Error("Retry backoff must return a finite delay");
+	}
+	const normalizedDelayMs = Math.max(0, delayMs);
+	const maxDelayMs = maxRetryDelayMs ?? DEFAULT_MAX_RETRY_DELAY_MS;
+	if (maxDelayMs > 0 && normalizedDelayMs > maxDelayMs) {
+		throw new Error(
+			`Server requested ${Math.ceil(normalizedDelayMs / 1_000)}s retry delay (max: ${Math.ceil(maxDelayMs / 1_000)}s). ${errorToMessage(error)}`,
+		);
+	}
+	return normalizedDelayMs;
+}
+
+function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+	if (signal?.aborted) {
+		return Promise.reject(createAbortError());
+	}
+
+	return new Promise<void>((resolve, reject) => {
+		const timeout = setTimeout(() => {
+			signal?.removeEventListener("abort", onAbort);
+			resolve();
+		}, delayMs);
+		const onAbort = (): void => {
+			clearTimeout(timeout);
+			signal?.removeEventListener("abort", onAbort);
+			reject(createAbortError());
+		};
+		signal?.addEventListener("abort", onAbort, { once: true });
+	});
+}
+
+function createAbortError(): Error {
+	const error = new Error("The model request was aborted");
+	error.name = "AbortError";
+	return error;
+}
+
+function cloneAssistantMessage(message: AssistantMessage): AssistantMessage {
+	return {
+		...message,
+		content: message.content.map((part) => {
+			if (part.type === "tool_call") {
+				return {
+					...part,
+					arguments: structuredClone(part.arguments),
+				};
+			}
+			return { ...part };
+		}),
+		usage: { ...message.usage },
+	};
 }
 
 function errorToMessage(error: unknown): string {

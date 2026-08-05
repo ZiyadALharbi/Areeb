@@ -148,6 +148,10 @@ describe("AssistantMessageEventStream", () => {
 			},
 		};
 		const stream = createAssistantMessageEventStream();
+		const startEvent: AssistantMessageEvent = {
+			type: "start",
+			partial: event.message,
+		};
 		const received: AssistantMessageEvent[] = [];
 		const consuming = (async () => {
 			for await (const receivedEvent of stream) {
@@ -155,11 +159,11 @@ describe("AssistantMessageEventStream", () => {
 			}
 		})();
 
-		stream.push({ type: "start" });
+		stream.push(startEvent);
 		stream.push(event);
 
 		await consuming;
-		expect(received).toEqual([{ type: "start" }, event]);
+		expect(received).toEqual([startEvent, event]);
 		await expect(stream.result()).resolves.toBe(event.message);
 	});
 
@@ -184,6 +188,10 @@ describe("AssistantMessageEventStream", () => {
 			},
 		};
 		const stream = createAssistantMessageEventStream();
+		const startEvent: AssistantMessageEvent = {
+			type: "start",
+			partial: event.message,
+		};
 		const received: AssistantMessageEvent[] = [];
 		const consuming = (async () => {
 			for await (const receivedEvent of stream) {
@@ -191,11 +199,11 @@ describe("AssistantMessageEventStream", () => {
 			}
 		})();
 
-		stream.push({ type: "start" });
+		stream.push(startEvent);
 		stream.push(event);
 
 		await consuming;
-		expect(received).toEqual([{ type: "start" }, event]);
+		expect(received).toEqual([startEvent, event]);
 		await expect(stream.result()).resolves.toBe(event.message);
 	});
 });
