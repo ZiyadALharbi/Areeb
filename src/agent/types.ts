@@ -78,6 +78,7 @@ export interface AgentTool<TInput = unknown, TDetails = unknown>
  * Persistent state combined with dependencies needed by the running loop.
  */
 export interface AgentContext extends AgentState {
+  systemPrompt: string;
 	tools: AgentTool[];
 	messageConverter?: AgentMessageConverter;
 }
