@@ -1,4 +1,5 @@
 import type { AssistantMessageEvent } from "../ai/events.ts";
+import type { ModelProvider, StreamOptions } from "../ai/provider_protocol.ts";
 import type {
 	Message,
 	ToolCall,
@@ -51,6 +52,8 @@ export type AgentToolCall = ToolCall;
 export interface AgentToolResult<TDetails = unknown> {
 	content: ToolResultContent[];
 	details?: TDetails;
+	/** Allows a tool to intentionally return a model-visible failure. */
+	isError?: boolean;
 }
 
 /**
@@ -78,14 +81,41 @@ export interface AgentTool<TInput = unknown, TDetails = unknown>
  * Persistent state combined with dependencies needed by the running loop.
  */
 export interface AgentContext extends AgentState {
+	systemPrompt: string;
 	tools: AgentTool[];
 	messageConverter?: AgentMessageConverter;
 }
 
+export type AgentMessageDrain = () =>
+	| readonly AgentMessage[]
+	| Promise<readonly AgentMessage[]>;
+
+/** Runtime configuration for one pure agent-loop invocation. */
+export interface AgentLoopConfig {
+	provider: ModelProvider;
+	model: string;
+	streamOptions?: StreamOptions;
+	maxTurns?: number;
+	getSteeringMessages?: AgentMessageDrain;
+	getFollowUpMessages?: AgentMessageDrain;
+}
+
+export type AgentEventSink = (event: AgentEvent) => void | Promise<void>;
+
+export type AgentEndReason =
+	| "completed"
+	| "provider_error"
+	| "aborted"
+	| "max_turns";
+
 export type AgentEvent =
 	// Agent lifecycle
 	| { type: "agent_start" }
-	| { type: "agent_end"; messages: AgentMessage[] }
+	| {
+			type: "agent_end";
+			messages: AgentMessage[];
+			reason: AgentEndReason;
+	  }
 
 	// Turn lifecycle
 	| { type: "turn_start" }

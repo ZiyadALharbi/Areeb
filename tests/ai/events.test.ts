@@ -1,5 +1,26 @@
 import { describe, expect, test } from "bun:test";
 import type { AssistantMessageEvent } from "../../src/ai/events.ts";
+import type { AssistantMessage } from "../../src/ai/types.ts";
+
+function partialMessage(
+	content: AssistantMessage["content"] = [],
+): AssistantMessage {
+	return {
+		role: "assistant",
+		content,
+		provider: "openai",
+		model: "gpt-5",
+		usage: {
+			inputTokens: 0,
+			outputTokens: 0,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+			totalTokens: 0,
+		},
+		stopReason: "stop",
+		timestamp: 1_753_632_000_000,
+	};
+}
 
 function assertNever(value: never): never {
 	throw new Error(`Unexpected event: ${JSON.stringify(value)}`);
@@ -38,33 +59,43 @@ function eventType(event: AssistantMessageEvent): string {
 
 describe("AssistantMessageEvent", () => {
 	test("narrows every event variant exhaustively", () => {
+		const partial = partialMessage();
 		const events: AssistantMessageEvent[] = [
-			{ type: "start" },
-			{ type: "text_start", contentIndex: 0 },
-			{ type: "text_delta", contentIndex: 0, delta: "Hello" },
+			{ type: "start", partial },
+			{ type: "text_start", contentIndex: 0, partial },
+			{ type: "text_delta", contentIndex: 0, delta: "Hello", partial },
 			{
 				type: "text_end",
 				contentIndex: 0,
 				content: { type: "text", text: "Hello" },
+				partial,
 			},
-			{ type: "thinking_start", contentIndex: 1 },
-			{ type: "thinking_delta", contentIndex: 1, delta: "Reasoning" },
+			{ type: "thinking_start", contentIndex: 1, partial },
+			{
+				type: "thinking_delta",
+				contentIndex: 1,
+				delta: "Reasoning",
+				partial,
+			},
 			{
 				type: "thinking_end",
 				contentIndex: 1,
 				content: { type: "thinking", thinking: "Reasoning" },
+				partial,
 			},
 			{
 				type: "toolcall_start",
 				contentIndex: 2,
 				toolCallId: "call-1",
 				toolName: "search",
+				partial,
 			},
 			{
 				type: "toolcall_delta",
 				contentIndex: 2,
 				toolCallId: "call-1",
 				argumentsDelta: '{"query":"Areeb"}',
+				partial,
 			},
 			{
 				type: "toolcall_end",
@@ -75,6 +106,7 @@ describe("AssistantMessageEvent", () => {
 					name: "search",
 					arguments: { query: "Areeb" },
 				},
+				partial,
 			},
 			{
 				type: "done",
@@ -133,19 +165,26 @@ describe("AssistantMessageEvent", () => {
 	});
 
 	test("correlates streamed content by index and tool-call ID", () => {
+		const partial = partialMessage();
 		type StreamedContentEvent = Extract<
 			AssistantMessageEvent,
 			{ contentIndex: number }
 		>;
 
 		const events: StreamedContentEvent[] = [
-			{ type: "text_delta", contentIndex: 0, delta: "Hello" },
-			{ type: "thinking_delta", contentIndex: 1, delta: "Reasoning" },
+			{ type: "text_delta", contentIndex: 0, delta: "Hello", partial },
+			{
+				type: "thinking_delta",
+				contentIndex: 1,
+				delta: "Reasoning",
+				partial,
+			},
 			{
 				type: "toolcall_delta",
 				contentIndex: 2,
 				toolCallId: "call-1",
 				argumentsDelta: '{"query":',
+				partial,
 			},
 			{
 				type: "toolcall_end",
@@ -156,6 +195,7 @@ describe("AssistantMessageEvent", () => {
 					name: "search",
 					arguments: { query: "Areeb" },
 				},
+				partial,
 			},
 		];
 
@@ -169,6 +209,7 @@ describe("AssistantMessageEvent", () => {
 	});
 
 	test("keeps raw argument deltas separate from normalized tool calls", () => {
+		const partial = partialMessage();
 		const deltaEvent: Extract<
 			AssistantMessageEvent,
 			{ type: "toolcall_delta" }
@@ -177,6 +218,7 @@ describe("AssistantMessageEvent", () => {
 			contentIndex: 0,
 			toolCallId: "call-1",
 			argumentsDelta: '{"query":"Areeb"}',
+			partial,
 		};
 		const endEvent: Extract<AssistantMessageEvent, { type: "toolcall_end" }> = {
 			type: "toolcall_end",
@@ -187,6 +229,7 @@ describe("AssistantMessageEvent", () => {
 				name: "search",
 				arguments: { query: "Areeb" },
 			},
+			partial,
 		};
 
 		expect(typeof deltaEvent.argumentsDelta).toBe("string");
