@@ -74,7 +74,7 @@ async function runLoop(
 ): Promise<AgentMessage[]> {
 	let providerTurns = 0;
 	let firstTurnStarted = true;
-	let pendingMessages: AgentMessage[] = [];
+	let pendingMessages = await drainMessages(config.getSteeringMessages);
 
 	while (true) {
 		if (hasReachedMaxTurns(providerTurns, config.maxTurns)) {
@@ -86,11 +86,11 @@ async function runLoop(
 
 		if (!firstTurnStarted) {
 			await emit({ type: "turn_start" });
-			await injectMessages(pendingMessages, context, newMessages, emit);
-			pendingMessages = [];
 		} else {
 			firstTurnStarted = false;
 		}
+		await injectMessages(pendingMessages, context, newMessages, emit);
+		pendingMessages = [];
 
 		providerTurns += 1;
 		const assistantMessage = await streamAssistantResponse(
@@ -123,12 +123,10 @@ async function runLoop(
 		const toolCalls = assistantMessage.content.filter(
 			(content): content is AgentToolCall => content.type === "tool_call",
 		);
-		const toolResults = await executeToolCalls(
-			toolCalls,
-			context.tools,
-			signal,
-			emit,
-		);
+		const toolResults =
+			assistantMessage.stopReason === "length"
+				? await failTruncatedToolCalls(toolCalls, emit)
+				: await executeToolCalls(toolCalls, context.tools, signal, emit);
 		for (const toolResult of toolResults) {
 			context.messages.push(toolResult);
 			newMessages.push(toolResult);
@@ -325,34 +323,60 @@ async function executeToolCalls(
 	const messages: ToolResultMessage[] = [];
 
 	for (const toolCall of toolCalls) {
-		if (signal?.aborted) {
-			break;
-		}
-
 		await emit({ type: "tool_execution_start", toolCall });
-		const result = await executeToolCall(
-			toolCall,
-			toolsByName.get(toolCall.name),
-			signal,
-			emit,
-		);
-		const message: ToolResultMessage = {
-			role: "tool_result",
-			toolCallId: toolCall.id,
-			toolName: toolCall.name,
-			content: result.content,
-			...(result.details !== undefined ? { details: result.details } : {}),
-			isError: result.isError ?? false,
-			timestamp: Date.now(),
-		};
-
-		await emit({ type: "tool_execution_end", toolCall, result: message });
-		await emit({ type: "message_start", message });
-		await emit({ type: "message_end", message });
+		const result = signal?.aborted
+			? failedToolResult("Tool call interrupted by user")
+			: await executeToolCall(
+					toolCall,
+					toolsByName.get(toolCall.name),
+					signal,
+					emit,
+				);
+		const message = await emitToolResult(toolCall, result, emit);
 		messages.push(message);
 	}
 
 	return messages;
+}
+
+async function failTruncatedToolCalls(
+	toolCalls: readonly AgentToolCall[],
+	emit: AgentEventSink,
+): Promise<ToolResultMessage[]> {
+	const messages: ToolResultMessage[] = [];
+	for (const toolCall of toolCalls) {
+		await emit({ type: "tool_execution_start", toolCall });
+		const message = await emitToolResult(
+			toolCall,
+			failedToolResult(
+				`Tool call "${toolCall.name}" was not executed: the response hit the output token limit, so its arguments may be truncated. Re-issue the tool call with complete arguments.`,
+			),
+			emit,
+		);
+		messages.push(message);
+	}
+	return messages;
+}
+
+async function emitToolResult(
+	toolCall: AgentToolCall,
+	result: AgentToolResult,
+	emit: AgentEventSink,
+): Promise<ToolResultMessage> {
+	const message: ToolResultMessage = {
+		role: "tool_result",
+		toolCallId: toolCall.id,
+		toolName: toolCall.name,
+		content: result.content,
+		...(result.details !== undefined ? { details: result.details } : {}),
+		isError: result.isError ?? false,
+		timestamp: Date.now(),
+	};
+
+	await emit({ type: "tool_execution_end", toolCall, result: message });
+	await emit({ type: "message_start", message });
+	await emit({ type: "message_end", message });
+	return message;
 }
 
 async function executeToolCall(
@@ -381,9 +405,13 @@ async function executeToolCall(
 	}
 
 	const updateEmissions: Promise<void>[] = [];
+	let acceptingUpdates = true;
 	let result: AgentToolResult;
 	try {
 		result = await tool.execute(parsedArguments, signal, (update) => {
+			if (!acceptingUpdates) {
+				return;
+			}
 			const emission = Promise.resolve().then(() =>
 				emit({
 					type: "tool_execution_update",
@@ -396,6 +424,8 @@ async function executeToolCall(
 		});
 	} catch (error) {
 		result = failedToolResult(errorToMessage(error));
+	} finally {
+		acceptingUpdates = false;
 	}
 
 	await Promise.all(updateEmissions);
