@@ -257,6 +257,48 @@ describe("runAgentLoop", () => {
 		).toHaveLength(2);
 	});
 
+	test("ignores tool updates emitted after execution settles", async () => {
+		const firstMessage = assistant(
+			[
+				{
+					type: "tool_call",
+					id: "late-update",
+					name: "deferred-update",
+					arguments: {},
+				},
+			],
+			"tool_call",
+		);
+		const provider = new FakeProvider([
+			simpleScript(firstMessage),
+			simpleScript(assistant([{ type: "text", text: "Done" }], "stop", 3)),
+		]);
+		let emitLateUpdate: (() => void | Promise<void>) | undefined;
+		const tool: AgentTool = {
+			name: "deferred-update",
+			description: "Attempts an update after returning",
+			inputSchema: z.object({}),
+			async execute(_input, _signal, onUpdate) {
+				emitLateUpdate = () =>
+					onUpdate?.({ content: [{ type: "text", text: "too late" }] });
+				return { content: [{ type: "text", text: "done" }] };
+			},
+		};
+		const { events, emit } = collector();
+
+		await runAgentLoop(
+			[user("Use the tool")],
+			context([], [tool]),
+			config(provider),
+			emit,
+		);
+		await emitLateUpdate?.();
+
+		expect(
+			events.filter((event) => event.type === "tool_execution_update"),
+		).toEqual([]);
+	});
+
 	test("isolates unknown tools, invalid arguments, and tool exceptions", async () => {
 		const calls: AssistantContent[] = [
 			{
@@ -410,7 +452,7 @@ describe("runAgentLoop", () => {
 		});
 	});
 
-	test("cancellation stops the remaining sequential tool batch", async () => {
+	test("cancellation finalizes every remaining sequential tool call", async () => {
 		const controller = new AbortController();
 		const provider = new FakeProvider([
 			simpleScript(
@@ -455,20 +497,28 @@ describe("runAgentLoop", () => {
 		);
 
 		expect(executions).toBe(1);
-		expect(
-			result.filter((message) => message.role === "tool_result"),
-		).toHaveLength(1);
+		const toolResults = result.filter(
+			(message) => message.role === "tool_result",
+		);
+		expect(toolResults).toHaveLength(2);
+		expect(toolResults.map((message) => message.toolCallId)).toEqual([
+			"first",
+			"second",
+		]);
+		expect(toolResults[1]?.content).toEqual([
+			{ type: "text", text: "Tool call interrupted by user" },
+		]);
+		expect(toolResults[1]?.isError).toBe(true);
 		expect(events.at(-1)).toMatchObject({
 			type: "agent_end",
 			reason: "aborted",
 		});
 	});
 
-	test("injects steering before follow-ups at their Pi-style boundaries", async () => {
+	test("polls queued steering before the first provider request", async () => {
 		const provider = new FakeProvider([
 			simpleScript(assistant([{ type: "text", text: "First" }], "stop", 2)),
 			simpleScript(assistant([{ type: "text", text: "Second" }], "stop", 3)),
-			simpleScript(assistant([{ type: "text", text: "Third" }], "stop", 4)),
 		]);
 		const steering = user("Steer", 10);
 		const followUp = user("Follow up", 11);
@@ -485,11 +535,55 @@ describe("runAgentLoop", () => {
 			() => undefined,
 		);
 
-		expect(provider.calls).toHaveLength(3);
-		expect(provider.calls[1]?.context.messages).toContain(steering);
-		expect(provider.calls[2]?.context.messages).toContain(followUp);
+		expect(provider.calls).toHaveLength(2);
+		expect(provider.calls[0]?.context.messages).toContain(steering);
+		expect(provider.calls[1]?.context.messages).toContain(followUp);
 		expect(result).toContain(steering);
 		expect(result).toContain(followUp);
+	});
+
+	test("fails tool calls from length-truncated assistant messages", async () => {
+		const provider = new FakeProvider([
+			simpleScript(
+				assistant(
+					[
+						{
+							type: "tool_call",
+							id: "truncated",
+							name: "echo",
+							arguments: { value: "partial" },
+						},
+					],
+					"length",
+				),
+			),
+			simpleScript(assistant([{ type: "text", text: "Recovered" }], "stop", 3)),
+		]);
+		let executions = 0;
+		const echo: AgentTool<{ value: string }> = {
+			name: "echo",
+			description: "Echoes text",
+			inputSchema: z.object({ value: z.string() }),
+			async execute(input) {
+				executions += 1;
+				return { content: [{ type: "text", text: input.value }] };
+			},
+		};
+
+		const result = await runAgentLoop(
+			[user("Echo")],
+			context([], [echo]),
+			config(provider),
+			() => undefined,
+		);
+		const toolResult = result.find((message) => message.role === "tool_result");
+
+		expect(executions).toBe(0);
+		expect(provider.calls).toHaveLength(2);
+		expect(toolResult?.isError).toBe(true);
+		expect(
+			toolResult?.content[0]?.type === "text" && toolResult.content[0].text,
+		).toContain("output token limit");
 	});
 
 	test("turns synchronous provider failures into terminal agent messages", async () => {

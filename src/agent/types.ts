@@ -1,3 +1,4 @@
+import type { EventStream } from "../ai/event-stream.ts";
 import type { AssistantMessageEvent } from "../ai/events.ts";
 import type { ModelProvider, StreamOptions } from "../ai/provider_protocol.ts";
 import type {
@@ -100,6 +101,39 @@ export interface AgentLoopConfig {
 	getFollowUpMessages?: AgentMessageDrain;
 }
 
+export type QueueMode = "one_at_a_time" | "all";
+
+/** Shallow snapshots of the harness's pending prompt queues. */
+export interface QueuedMessages {
+	readonly steering: readonly AgentMessage[];
+	readonly followUp: readonly AgentMessage[];
+	readonly count: number;
+}
+
+export type AgentEventListener = (event: AgentEvent) => void | Promise<void>;
+
+/**
+ * Stable options owned by an AgentHarness.
+ *
+ * A run-specific AbortSignal is intentionally forbidden because the harness
+ * creates a fresh controller for every invocation.
+ */
+export type AgentHarnessStreamOptions = Omit<StreamOptions, "signal"> & {
+	readonly signal?: never;
+};
+
+export interface AgentHarnessConfig {
+	readonly provider: ModelProvider;
+	readonly model: string;
+	readonly systemPrompt: string;
+	readonly tools?: readonly AgentTool[];
+	readonly messageConverter?: AgentMessageConverter;
+	readonly streamOptions?: AgentHarnessStreamOptions;
+	readonly maxTurns?: number;
+	readonly steeringMode?: QueueMode;
+	readonly followUpMode?: QueueMode;
+}
+
 export type AgentEventSink = (event: AgentEvent) => void | Promise<void>;
 
 export type AgentEndReason =
@@ -146,3 +180,6 @@ export type AgentEvent =
 			toolCall: AgentToolCall;
 			result: ToolResultMessage;
 	  };
+
+/** A single agent invocation's events and invocation-local message result. */
+export type AgentRunStream = EventStream<AgentEvent, AgentMessage[]>;
