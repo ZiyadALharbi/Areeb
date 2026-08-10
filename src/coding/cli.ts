@@ -61,11 +61,19 @@ function systemPrompt(cwd: string): string {
 
 async function runPrintMode(prompt: string, model: string): Promise<void> {
 	const cwd = process.cwd();
+	const providerConfig = openAICompatibleConfigFromEnv();
+
 	const harness = new AgentHarness({
-		provider: new OpenAICompatibleProvider(openAICompatibleConfigFromEnv()),
+		provider: new OpenAICompatibleProvider({
+			...providerConfig,
+			compat: {
+				thinkingLevelMap: { off: "none" },
+			},
+		}),
 		model,
 		systemPrompt: systemPrompt(cwd),
 		tools: createCodingTools(cwd),
+		streamOptions: { reasoning: "off" },
 	});
 	const stream = harness.prompt(prompt);
 	let endReason: AgentEndReason | undefined;
