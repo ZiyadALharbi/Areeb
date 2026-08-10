@@ -73,3 +73,4 @@ export type {
 	UserContent,
 	UserMessage,
 } from "./src/ai/types.ts";
+export * from "./src/coding/index.ts";
