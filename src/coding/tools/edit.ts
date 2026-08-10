@@ -31,7 +31,6 @@ const textEditSchema = z.object({
 		.describe("Replacement text. Use an empty string to delete oldText."),
 });
 
-
 function normalizeEditArguments(input: unknown): unknown {
 	if (typeof input !== "object" || input === null || Array.isArray(input)) {
 		return input;
@@ -46,14 +45,11 @@ function normalizeEditArguments(input: unknown): unknown {
 		} catch {
 			// Leave malformed JSON in place so the schema returns a useful error.
 		}
-  }
-  if (
-		normalized.edits !== undefined &&
-		!Array.isArray(normalized.edits)
-	) {
+	}
+	if (normalized.edits !== undefined && !Array.isArray(normalized.edits)) {
 		// Preserve invalid explicit edits so the schema reports the error.
 		return normalized;
-  }
+	}
 
 	if (
 		typeof normalized.oldText === "string" &&
@@ -143,7 +139,7 @@ export function createEditToolDefinition(
 	return {
 		name: "edit",
 		description:
-		"Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+			"Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
 		promptSnippet:
 			"Make precise file edits with exact text replacement, including multiple disjoint edits in one call",
 		promptGuidelines: [
@@ -162,10 +158,14 @@ export function createEditToolDefinition(
 					bytes = await operations.readFile(absolutePath, signal);
 				} catch (error) {
 					throwIfAborted(signal);
-					const message = error instanceof Error ? error.message : String(error);
-					throw new Error(`Could not edit ${path}: failed to read file: ${message}`, {
-						cause: error,
-					});
+					const message =
+						error instanceof Error ? error.message : String(error);
+					throw new Error(
+						`Could not edit ${path}: failed to read file: ${message}`,
+						{
+							cause: error,
+						},
+					);
 				}
 				throwIfAborted(signal);
 				const original = decodeUtf8(bytes, path);
@@ -180,10 +180,14 @@ export function createEditToolDefinition(
 					await operations.writeFile(absolutePath, finalContent);
 				} catch (error) {
 					throwIfAborted(signal);
-					const message = error instanceof Error ? error.message : String(error);
-					throw new Error(`Could not edit ${path}: failed to write file: ${message}`, {
-						cause: error,
-					});
+					const message =
+						error instanceof Error ? error.message : String(error);
+					throw new Error(
+						`Could not edit ${path}: failed to write file: ${message}`,
+						{
+							cause: error,
+						},
+					);
 				}
 
 				throwIfAborted(signal);
