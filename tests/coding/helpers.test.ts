@@ -89,6 +89,23 @@ describe("coding output truncation", () => {
 			outputLines: 2,
 		});
 	});
+
+	test("reports the limit that actually removes a terminal newline", () => {
+		const options = { maxLines: 1, maxBytes: 1 };
+		expect(truncateHead("a\n", options).truncatedBy).toBe("bytes");
+		expect(truncateTail("a\n", options).truncatedBy).toBe("bytes");
+		expect(
+			truncateTail("a\nlong", { maxLines: 1, maxBytes: 2 }).truncatedBy,
+		).toBe("bytes");
+	});
+
+	test("rejects limits outside the positive safe-integer range", () => {
+		for (const maxBytes of [0, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+			expect(() => truncateTail("text", { maxBytes })).toThrow(
+				"maxBytes must be a positive safe integer",
+			);
+		}
+	});
 });
 
 describe("file mutation queue", () => {

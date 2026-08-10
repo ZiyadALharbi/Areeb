@@ -8,6 +8,11 @@ export interface TruncationOptions {
 	maxBytes?: number;
 }
 
+export interface ResolvedTruncationLimits {
+	maxLines: number;
+	maxBytes: number;
+}
+
 export interface TruncationResult {
 	content: string;
 	truncated: boolean;
@@ -51,28 +56,27 @@ function splitPhysicalLines(content: string): string[] {
 	return lines;
 }
 
-function limits(options: TruncationOptions): {
-	maxLines: number;
-	maxBytes: number;
-} {
+export function resolveTruncationLimits(
+	options: TruncationOptions = {},
+): ResolvedTruncationLimits {
 	const maxLines = options.maxLines ?? DEFAULT_MAX_LINES;
 	const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
-	if (!Number.isInteger(maxLines) || maxLines < 1) {
-		throw new Error("maxLines must be a positive integer");
+	if (!Number.isSafeInteger(maxLines) || maxLines < 1) {
+		throw new Error("maxLines must be a positive safe integer");
 	}
-	if (!Number.isInteger(maxBytes) || maxBytes < 1) {
-		throw new Error("maxBytes must be a positive integer");
+	if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+		throw new Error("maxBytes must be a positive safe integer");
 	}
 	return { maxLines, maxBytes };
 }
 
 function untruncated(
 	content: string,
+	totalLines: number,
+	totalBytes: number,
 	maxLines: number,
 	maxBytes: number,
 ): TruncationResult {
-	const totalLines = countPhysicalLines(content);
-	const totalBytes = utf8ByteLength(content);
 	return {
 		content,
 		truncated: false,
@@ -92,11 +96,11 @@ export function truncateHead(
 	content: string,
 	options: TruncationOptions = {},
 ): TruncationResult {
-	const { maxLines, maxBytes } = limits(options);
+	const { maxLines, maxBytes } = resolveTruncationLimits(options);
 	const totalLines = countPhysicalLines(content);
 	const totalBytes = utf8ByteLength(content);
 	if (totalLines <= maxLines && totalBytes <= maxBytes) {
-		return untruncated(content, maxLines, maxBytes);
+		return untruncated(content, totalLines, totalBytes, maxLines, maxBytes);
 	}
 
 	const lines = splitPhysicalLines(content);
@@ -119,7 +123,7 @@ export function truncateHead(
 
 	const output: string[] = [];
 	let outputBytes = 0;
-	let truncatedBy: "lines" | "bytes" = "lines";
+	let truncatedBy: "lines" | "bytes" | null = null;
 	for (let index = 0; index < lines.length && index < maxLines; index += 1) {
 		const line = lines[index] ?? "";
 		const candidateBytes = utf8ByteLength(line) + (output.length > 0 ? 1 : 0);
@@ -130,9 +134,14 @@ export function truncateHead(
 		output.push(line);
 		outputBytes += candidateBytes;
 	}
-	if (output.length === maxLines && output.length < lines.length) {
+	if (
+		truncatedBy === null &&
+		output.length === maxLines &&
+		output.length < lines.length
+	) {
 		truncatedBy = "lines";
 	}
+	truncatedBy ??= totalBytes > maxBytes ? "bytes" : "lines";
 
 	const truncatedContent = output.join("\n");
 	return {
@@ -142,7 +151,7 @@ export function truncateHead(
 		totalLines,
 		totalBytes,
 		outputLines: output.length,
-		outputBytes: utf8ByteLength(truncatedContent),
+		outputBytes,
 		lastLinePartial: false,
 		firstLineExceedsLimit: false,
 		maxLines,
@@ -166,17 +175,17 @@ export function truncateTail(
 	content: string,
 	options: TruncationOptions = {},
 ): TruncationResult {
-	const { maxLines, maxBytes } = limits(options);
+	const { maxLines, maxBytes } = resolveTruncationLimits(options);
 	const totalLines = countPhysicalLines(content);
 	const totalBytes = utf8ByteLength(content);
 	if (totalLines <= maxLines && totalBytes <= maxBytes) {
-		return untruncated(content, maxLines, maxBytes);
+		return untruncated(content, totalLines, totalBytes, maxLines, maxBytes);
 	}
 
 	const lines = splitPhysicalLines(content);
 	const output: string[] = [];
 	let outputBytes = 0;
-	let truncatedBy: "lines" | "bytes" = "lines";
+	let truncatedBy: "lines" | "bytes" | null = null;
 	let lastLinePartial = false;
 
 	for (
@@ -199,9 +208,14 @@ export function truncateTail(
 		output.unshift(line);
 		outputBytes += candidateBytes;
 	}
-	if (output.length === maxLines && output.length < lines.length) {
+	if (
+		truncatedBy === null &&
+		output.length === maxLines &&
+		output.length < lines.length
+	) {
 		truncatedBy = "lines";
 	}
+	truncatedBy ??= totalBytes > maxBytes ? "bytes" : "lines";
 
 	const truncatedContent = output.join("\n");
 	return {
@@ -211,7 +225,7 @@ export function truncateTail(
 		totalLines,
 		totalBytes,
 		outputLines: output.length,
-		outputBytes: utf8ByteLength(truncatedContent),
+		outputBytes,
 		lastLinePartial,
 		firstLineExceedsLimit: false,
 		maxLines,

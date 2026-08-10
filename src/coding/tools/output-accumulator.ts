@@ -3,8 +3,7 @@ import { createWriteStream, type WriteStream } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-	DEFAULT_MAX_BYTES,
-	DEFAULT_MAX_LINES,
+	resolveTruncationLimits,
 	type TruncationResult,
 	truncateTail,
 	utf8ByteLength,
@@ -24,6 +23,7 @@ export interface OutputSnapshot {
 }
 
 type OutputChannel = "stdout" | "stderr";
+type AccumulatorState = "active" | "finished" | "closed";
 
 /** Incremental combined shell capture with bounded display memory. */
 export class OutputAccumulator {
@@ -35,47 +35,51 @@ export class OutputAccumulator {
 		stdout: new TextDecoder("utf-8"),
 		stderr: new TextDecoder("utf-8"),
 	};
-	private rawChunks: Buffer[] = [];
+	private pendingText: string[] = [];
 	private tail = "";
-	private totalBytes = 0;
+	private tailBytes = 0;
+	private totalRawBytes = 0;
+	private totalDecodedBytes = 0;
 	private completedLines = 0;
 	private hasOpenLine = false;
 	private currentLineBytes = 0;
-	private finished = false;
+	private state: AccumulatorState = "active";
 	private tempPath: string | undefined;
 	private tempStream: WriteStream | undefined;
 	private tempError: Error | undefined;
 
 	constructor(options: OutputAccumulatorOptions = {}) {
-		this.maxLines = options.maxLines ?? DEFAULT_MAX_LINES;
-		this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
-		this.rollingBytes = Math.max(this.maxBytes * 2, 1);
+		const { maxLines, maxBytes } = resolveTruncationLimits(options);
+		this.maxLines = maxLines;
+		this.maxBytes = maxBytes;
+		this.rollingBytes = maxBytes * 2;
 		this.tempFilePrefix = options.tempFilePrefix ?? "areeb-bash";
 	}
 
 	append(channel: OutputChannel, data: Uint8Array): void {
-		if (this.finished || data.byteLength === 0) {
+		if (this.state !== "active") {
+			throw new Error(`Cannot append to a ${this.state} output accumulator`);
+		}
+		if (data.byteLength === 0) {
 			return;
 		}
-		const raw = Buffer.from(data);
-		if (this.tempStream) {
-			this.tempStream.write(raw);
-		} else {
-			this.rawChunks.push(raw);
-		}
-		this.appendText(this.decoders[channel].decode(raw, { stream: true }));
+		this.totalRawBytes += data.byteLength;
+		this.appendText(this.decoders[channel].decode(data, { stream: true }));
 		if (this.shouldPersist()) {
 			this.ensureTempFile();
 		}
 	}
 
 	finish(): void {
-		if (this.finished) {
+		if (this.state === "finished") {
 			return;
 		}
-		this.finished = true;
+		if (this.state === "closed") {
+			throw new Error("Cannot finish a closed output accumulator");
+		}
 		this.appendText(this.decoders.stdout.decode());
 		this.appendText(this.decoders.stderr.decode());
+		this.state = "finished";
 		if (this.shouldPersist()) {
 			this.ensureTempFile();
 		}
@@ -88,16 +92,16 @@ export class OutputAccumulator {
 		});
 		const totalLines = this.completedLines + (this.hasOpenLine ? 1 : 0);
 		const truncated =
-			totalLines > this.maxLines || this.totalBytes > this.maxBytes;
+			totalLines > this.maxLines || this.totalDecodedBytes > this.maxBytes;
 		const truncation: TruncationResult = {
 			...tailTruncation,
 			truncated,
 			truncatedBy: truncated
 				? (tailTruncation.truncatedBy ??
-					(this.totalBytes > this.maxBytes ? "bytes" : "lines"))
+					(this.totalDecodedBytes > this.maxBytes ? "bytes" : "lines"))
 				: null,
 			totalLines,
-			totalBytes: this.totalBytes,
+			totalBytes: this.totalDecodedBytes,
 		};
 		return {
 			content: truncated ? truncation.content : this.tail,
@@ -108,6 +112,13 @@ export class OutputAccumulator {
 	}
 
 	async close(): Promise<void> {
+		if (this.state === "closed") {
+			return;
+		}
+		if (this.state === "active") {
+			this.finish();
+		}
+		this.state = "closed";
 		const stream = this.tempStream;
 		this.tempStream = undefined;
 		if (this.tempError) {
@@ -138,9 +149,15 @@ export class OutputAccumulator {
 		if (text.length === 0) {
 			return;
 		}
+		if (this.tempStream) {
+			this.tempStream.write(text, "utf8");
+		} else {
+			this.pendingText.push(text);
+		}
 		const bytes = utf8ByteLength(text);
-		this.totalBytes += bytes;
+		this.totalDecodedBytes += bytes;
 		this.tail += text;
+		this.tailBytes += bytes;
 
 		let newlineCount = 0;
 		let lastNewline = -1;
@@ -161,12 +178,15 @@ export class OutputAccumulator {
 			this.currentLineBytes = utf8ByteLength(trailing);
 			this.hasOpenLine = trailing.length > 0;
 		}
-		this.trimTail();
+		if (this.tailBytes > this.rollingBytes * 2) {
+			this.trimTail();
+		}
 	}
 
 	private trimTail(): void {
 		const bytes = Buffer.from(this.tail, "utf8");
-		if (bytes.length <= this.rollingBytes * 2) {
+		if (bytes.length <= this.rollingBytes) {
+			this.tailBytes = bytes.length;
 			return;
 		}
 		let start = bytes.length - this.rollingBytes;
@@ -174,11 +194,13 @@ export class OutputAccumulator {
 			start += 1;
 		}
 		this.tail = bytes.subarray(start).toString("utf8");
+		this.tailBytes = bytes.length - start;
 	}
 
 	private shouldPersist(): boolean {
 		return (
-			this.totalBytes > this.maxBytes ||
+			this.totalRawBytes > this.maxBytes ||
+			this.totalDecodedBytes > this.maxBytes ||
 			this.completedLines + (this.hasOpenLine ? 1 : 0) > this.maxLines
 		);
 	}
@@ -196,9 +218,9 @@ export class OutputAccumulator {
 			this.tempError = error;
 		});
 		this.tempStream = stream;
-		for (const chunk of this.rawChunks) {
-			stream.write(chunk);
+		for (const text of this.pendingText) {
+			stream.write(text, "utf8");
 		}
-		this.rawChunks = [];
+		this.pendingText = [];
 	}
 }
