@@ -1,13 +1,11 @@
 #!/usr/bin/env bun
 
 import { parseArgs } from "node:util";
-import type { AgentEndReason } from "./index.ts";
-import {
-	AgentHarness,
-	createCodingTools,
-	OpenAICompatibleProvider,
-	openAICompatibleConfigFromEnv,
-} from "./index.ts";
+import { AgentHarness } from "../agent/harness.ts";
+import type { AgentEndReason } from "../agent/types.ts";
+import { openAICompatibleConfigFromEnv } from "../ai/environment.ts";
+import { OpenAICompatibleProvider } from "../ai/openai_compatible_provider.ts";
+import { createCodingTools } from "./tools/index.ts";
 
 const USAGE = `Usage: areeb -p <prompt> [--model <model>]
 

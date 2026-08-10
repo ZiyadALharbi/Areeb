@@ -2,7 +2,7 @@
 	"name": "areeb",
 	"module": "index.ts",
 	"bin": {
-		"areeb": "./cli.ts"
+		"areeb": "./src/coding/cli.ts"
 	},
 	"type": "module",
 	"private": true,
