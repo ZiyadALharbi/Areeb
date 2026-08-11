@@ -1,6 +1,9 @@
 {
 	"name": "areeb",
 	"module": "index.ts",
+	"bin": {
+		"areeb": "./src/coding/cli.ts"
+	},
 	"type": "module",
 	"private": true,
 	"devDependencies": {
