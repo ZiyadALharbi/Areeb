@@ -20,14 +20,14 @@ import {
 import type {
 	ModelProvider,
 	ProviderRetryConfig,
-	ReasoningLevel,
 	StreamOptions,
 } from "./provider_protocol.ts";
 import type {
 	AssistantContent,
 	AssistantMessage,
 	Message,
-	ModelContext,
+  ModelContext,
+	ReasoningLevel,
 	StopReason,
 	ToolCall,
 	ToolDefinition,
