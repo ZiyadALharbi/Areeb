@@ -1,5 +1,5 @@
 import { SessionError } from "./errors.ts";
-import { Session, assertJsonValue, assertUuid } from "./session.ts";
+import { assertJsonValue, assertUuid, Session } from "./session.ts";
 import { SessionState } from "./state.ts";
 import type {
 	EntryQuery,
@@ -41,10 +41,7 @@ export class MemorySessionStorage implements SessionStorage {
 		assertJsonValue(metadata, "session metadata");
 		assertUuid(metadata.id, "session id");
 
-		if (
-			!Number.isSafeInteger(metadata.createdAt) ||
-			metadata.createdAt < 0
-		) {
+		if (!Number.isSafeInteger(metadata.createdAt) || metadata.createdAt < 0) {
 			throw new SessionError(
 				"invalid_payload",
 				"Session createdAt must be a non-negative safe integer",
@@ -83,15 +80,11 @@ export class MemorySessionStorage implements SessionStorage {
 		assertUuid(entry.id, "entry id");
 
 		return this.enqueueWrite(() => {
-			const storedEntry = Object.assign(
-				{},
-				structuredClone(entry),
-				{
-					parentId: this.state.getLeafId(),
-					seq: this.state.nextSequence,
-					timestamp: readTimestamp(this.clock),
-				},
-			) as unknown as TEntry;
+			const storedEntry = Object.assign({}, structuredClone(entry), {
+				parentId: this.state.getLeafId(),
+				seq: this.state.nextSequence,
+				timestamp: readTimestamp(this.clock),
+			}) as unknown as TEntry;
 
 			this.state.applyMutation({
 				kind: "entry",
@@ -142,10 +135,7 @@ export class MemorySessionStorage implements SessionStorage {
 		return this.state.getLabel(targetId);
 	}
 
-	async setLabel(
-		targetId: string,
-		label: string | null,
-	): Promise<void> {
+	async setLabel(targetId: string, label: string | null): Promise<void> {
 		assertJsonValue(targetId, "targetId");
 		assertJsonValue(label, "label");
 
@@ -161,9 +151,7 @@ export class MemorySessionStorage implements SessionStorage {
 		});
 	}
 
-	private enqueueWrite<T>(
-		operation: () => T | Promise<T>,
-	): Promise<T> {
+	private enqueueWrite<T>(operation: () => T | Promise<T>): Promise<T> {
 		const result = this.writeQueue.then(operation);
 
 		this.writeQueue = result.then(
@@ -181,9 +169,7 @@ export interface MemorySessionRepositoryOptions {
 	readonly entryIdGenerator?: SessionIdGenerator;
 }
 
-export class MemorySessionRepository
-	implements SessionRepository
-{
+export class MemorySessionRepository implements SessionRepository {
 	private readonly sessions = new Map<string, MemorySessionStorage>();
 	private readonly clock: SessionClock;
 	private readonly sessionIdGenerator: SessionIdGenerator;
@@ -197,9 +183,7 @@ export class MemorySessionRepository
 			options.entryIdGenerator ?? (() => crypto.randomUUID());
 	}
 
-	async create(
-		options: SessionCreateOptions,
-	): Promise<SessionHandle> {
+	async create(options: SessionCreateOptions): Promise<SessionHandle> {
 		assertJsonValue(options, "session create options");
 
 		const id = options.id ?? this.sessionIdGenerator();
@@ -210,10 +194,7 @@ export class MemorySessionRepository
 		}
 
 		if (this.sessions.has(id)) {
-			throw new SessionError(
-				"already_exists",
-				`Session already exists: ${id}`,
-			);
+			throw new SessionError("already_exists", `Session already exists: ${id}`);
 		}
 
 		const metadata: SessionMetadata = {
@@ -240,36 +221,26 @@ export class MemorySessionRepository
 
 		const storage = this.sessions.get(metadata.id);
 		if (storage === undefined) {
-			throw new SessionError(
-				"not_found",
-				`Session not found: ${metadata.id}`,
-			);
+			throw new SessionError("not_found", `Session not found: ${metadata.id}`);
 		}
 
 		return new Session(storage, this.entryIdGenerator);
 	}
 
-	async list(
-		options: SessionListOptions = {},
-	): Promise<SessionMetadata[]> {
+	async list(options: SessionListOptions = {}): Promise<SessionMetadata[]> {
 		assertJsonValue(options, "session list options");
 
 		const metadata = await Promise.all(
-			[...this.sessions.values()].map((storage) =>
-				storage.getMetadata(),
-			),
+			[...this.sessions.values()].map((storage) => storage.getMetadata()),
 		);
 
 		return metadata
 			.filter(
-				(session) =>
-					options.cwd === undefined ||
-					session.cwd === options.cwd,
+				(session) => options.cwd === undefined || session.cwd === options.cwd,
 			)
 			.sort(
 				(left, right) =>
-					right.createdAt - left.createdAt ||
-					left.id.localeCompare(right.id),
+					right.createdAt - left.createdAt || left.id.localeCompare(right.id),
 			);
 	}
 }
