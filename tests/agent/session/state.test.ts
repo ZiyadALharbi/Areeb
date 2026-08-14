@@ -3,6 +3,7 @@ import { SessionError } from "../../../src/agent/session/errors.ts";
 import { SessionState } from "../../../src/agent/session/state.ts";
 import type {
 	EntryMutation,
+	EntryQuery,
 	JsonValue,
 	NewSessionEntry,
 	ProvisionedSessionEntry,
@@ -59,6 +60,74 @@ function expectInvalidMutation(
 	const error = thrown as SessionError;
 	expect(error.code).toBe("invalid_mutation");
 	expect(error.message).toContain(messageFragment);
+}
+
+function expectInvalidQuery(action: () => void, messageFragment: string): void {
+	let thrown: unknown;
+	try {
+		action();
+	} catch (error) {
+		thrown = error;
+	}
+
+	expect(thrown).toBeInstanceOf(SessionError);
+	const error = thrown as SessionError;
+	expect(error.code).toBe("invalid_query");
+	expect(error.message).toContain(messageFragment);
+}
+
+function createQueryableState(): SessionState {
+	const state = new SessionState();
+	state.applyMutation(
+		customMutation(ENTRY_ID, 1, null, { nested: { value: 1 } }),
+	);
+	state.applyMutation({
+		kind: "entry",
+		entry: {
+			type: "model_change",
+			id: CHILD_A_ID,
+			seq: 2,
+			parentId: ENTRY_ID,
+			timestamp: 102,
+			provider: "openai",
+			model: "model-a",
+		},
+	});
+	state.applyMutation({
+		kind: "entry",
+		entry: {
+			type: "custom",
+			id: SECOND_ROOT_ID,
+			seq: 3,
+			parentId: CHILD_A_ID,
+			timestamp: 103,
+			customType: "note",
+			data: { text: "sibling branch" },
+		},
+	});
+	state.applyMutation({
+		kind: "pointer",
+		seq: 4,
+		timestamp: 104,
+		pointer: "main",
+		leafId: ENTRY_ID,
+	});
+	state.applyMutation({
+		kind: "entry",
+		entry: {
+			type: "message",
+			id: CHILD_B_ID,
+			seq: 5,
+			parentId: ENTRY_ID,
+			timestamp: 105,
+			message: {
+				role: "user",
+				content: [{ type: "text", text: "main branch" }],
+				timestamp: 105,
+			},
+		},
+	});
+	return state;
 }
 
 function getEntryType(entry: SessionEntry): SessionEntry["type"] {
@@ -515,5 +584,156 @@ describe("SessionState", () => {
 			throw new Error("Expected custom child entry");
 		}
 		expect(childRead.data).toEqual({ nested: { value: 1 } });
+	});
+});
+
+describe("SessionState queries", () => {
+	test("returns global entries newest first by default", () => {
+		const state = createQueryableState();
+
+		expect(state.findEntries().map((entry) => entry.id)).toEqual([
+			CHILD_B_ID,
+			SECOND_ROOT_ID,
+			CHILD_A_ID,
+			ENTRY_ID,
+		]);
+		expect(
+			state.findEntries({ order: "oldest_first" }).map((entry) => entry.id),
+		).toEqual([ENTRY_ID, CHILD_A_ID, SECOND_ROOT_ID, CHILD_B_ID]);
+	});
+
+	test("filters by entry type and custom type", () => {
+		const state = createQueryableState();
+
+		expect(
+			state.findEntries({ type: "message" }).map((entry) => entry.id),
+		).toEqual([CHILD_B_ID]);
+		expect(
+			state
+				.findEntries({ type: "custom", order: "oldest_first" })
+				.map((entry) => entry.id),
+		).toEqual([ENTRY_ID, SECOND_ROOT_ID]);
+		expect(
+			state.findEntries({ customType: "note" }).map((entry) => entry.id),
+		).toEqual([SECOND_ROOT_ID]);
+	});
+
+	test("applies exclusive cursors and limits in the selected order", () => {
+		const state = createQueryableState();
+
+		expect(
+			state
+				.findEntries({
+					order: "oldest_first",
+					cursor: { afterSeq: 2 },
+				})
+				.map((entry) => entry.seq),
+		).toEqual([3, 5]);
+		expect(
+			state
+				.findEntries({ cursor: { afterSeq: 5 }, limit: 2 })
+				.map((entry) => entry.seq),
+		).toEqual([3, 2]);
+	});
+
+	test("walks only the selected branch and isolates siblings", () => {
+		const state = createQueryableState();
+
+		expect(
+			state
+				.findEntriesOnBranch({ startId: CHILD_B_ID })
+				.map((entry) => entry.id),
+		).toEqual([CHILD_B_ID, ENTRY_ID]);
+		expect(
+			state
+				.findEntriesOnBranch({
+					startId: SECOND_ROOT_ID,
+					order: "oldest_first",
+				})
+				.map((entry) => entry.id),
+		).toEqual([ENTRY_ID, CHILD_A_ID, SECOND_ROOT_ID]);
+	});
+
+	test("includes ID and type stopping bounds", () => {
+		const state = createQueryableState();
+
+		expect(
+			state
+				.findEntriesOnBranch({
+					startId: SECOND_ROOT_ID,
+					stopAtId: CHILD_A_ID,
+				})
+				.map((entry) => entry.id),
+		).toEqual([SECOND_ROOT_ID, CHILD_A_ID]);
+		expect(
+			state
+				.findEntriesOnBranch({
+					startId: SECOND_ROOT_ID,
+					stopAtType: "model_change",
+				})
+				.map((entry) => entry.id),
+		).toEqual([SECOND_ROOT_ID, CHILD_A_ID]);
+	});
+
+	test("rejects missing branch starts", () => {
+		const state = createQueryableState();
+
+		expect(() =>
+			state.findEntriesOnBranch({
+				startId: "00000000-0000-4000-8000-000000000099",
+			}),
+		).toThrow("Entry not found");
+
+		try {
+			state.findEntriesOnBranch({
+				startId: "00000000-0000-4000-8000-000000000099",
+			});
+		} catch (error) {
+			expect(error).toBeInstanceOf(SessionError);
+			expect((error as SessionError).code).toBe("not_found");
+		}
+	});
+
+	test("rejects invalid limits, cursors, filters, and orders", () => {
+		const state = createQueryableState();
+
+		expectInvalidQuery(
+			() => state.findEntries({ limit: 0 }),
+			"limit must be a positive safe integer",
+		);
+		expectInvalidQuery(
+			() => state.findEntries({ cursor: { afterSeq: -1 } }),
+			"cursor afterSeq must be a non-negative safe integer",
+		);
+		expectInvalidQuery(
+			() => state.findEntries({ type: "message", customType: "note" }),
+			"customType cannot be combined",
+		);
+		expectInvalidQuery(
+			() => state.findEntries({ order: "sideways" } as unknown as EntryQuery),
+			"unknown order sideways",
+		);
+	});
+
+	test("returns defensive copies from global and branch queries", () => {
+		const state = createQueryableState();
+		const globalEntry = state.findEntries({ order: "oldest_first" })[0];
+
+		expect(globalEntry?.type).toBe("custom");
+		if (globalEntry?.type !== "custom") {
+			throw new Error("Expected custom entry");
+		}
+		const data = globalEntry.data as { nested: { value: number } };
+		data.nested.value = 99;
+
+		const branchEntry = state.findEntriesOnBranch({
+			startId: CHILD_B_ID,
+			order: "oldest_first",
+		})[0];
+		expect(branchEntry?.type).toBe("custom");
+		if (branchEntry?.type !== "custom") {
+			throw new Error("Expected custom branch entry");
+		}
+		expect(branchEntry.data).toEqual({ nested: { value: 1 } });
 	});
 });

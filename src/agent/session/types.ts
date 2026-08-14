@@ -1,5 +1,5 @@
-import type { AgentMessage } from "../types.ts";
 import type { ReasoningLevel, Usage } from "../../ai/types.ts";
+import type { AgentMessage } from "../types.ts";
 
 export type JsonPrimitive = null | boolean | number | string;
 
