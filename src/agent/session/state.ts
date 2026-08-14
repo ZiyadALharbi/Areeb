@@ -1,5 +1,11 @@
 import { SessionError } from "./errors.ts";
-import type { SessionEntry, SessionMutation } from "./types.ts";
+import type {
+  EntryOrder,
+  EntryQuery,
+  SessionEntry,
+  SessionMutation,
+  StorageBranchEntryQuery,
+} from "./types.ts";
 
 // Deep Clone: changing the cloned object does not change the orignal.
 function clone<T>(value: T): T {
@@ -55,6 +61,25 @@ export class SessionState {
     return clone(this.childrenByParent.get(parentId) ?? []);
   }
 
+  findEntries(query: EntryQuery = {}): SessionEntry[] {
+	this.validateQuery(query);
+	return this.queryEntries(this.entries, query, "oldest_first");
+  }
+  
+  findEntriesOnBranch(
+	query: StorageBranchEntryQuery,
+  ): SessionEntry[] {
+	this.validateQuery(query);
+  
+	const branch = this.walkToRoot(
+		query.startId,
+		query.stopAtId,
+		query.stopAtType,
+	);
+  
+	return this.queryEntries(branch, query, "newest_first");
+  }
+
   validateMutation(mutation: SessionMutation): void {
     const sequence = mutation.kind === "entry" ? mutation.entry.seq : mutation.seq;
 
@@ -75,7 +100,7 @@ export class SessionState {
         if (mutation.pointer !== "main") {
   					this.invalid(`unknown pointer ${String(mutation.pointer)}`);
   				}
-        
+
   				if (
   					mutation.leafId !== null &&
   					!this.entriesById.has(mutation.leafId)
@@ -95,7 +120,7 @@ export class SessionState {
 					);
 				}
 				return;
-        
+
     }
   }
 
@@ -126,7 +151,7 @@ export class SessionState {
 				this.leafId = mutation.leafId;
 				this.sequence = mutation.seq;
 				return;
-      
+
 			case "fact":
 				// Apply either a session-name fact or an entry-label fact:
 				// - name + value     → set the session name.
@@ -141,25 +166,178 @@ export class SessionState {
 				} else {
 					this.labels.set(mutation.targetId, mutation.value);
 				}
-      
+
 				// Record the mutation as processed and stop handling this case.
 				this.sequence = mutation.seq;
 				return;
     }
   }
 
+  /**
+   * Walks one parent chain from a selected entry toward the root.
+   *
+   * A branch is one path through the session history. For example:
+   *
+   *   A (root) → B → C
+   *
+   * Starting at C returns [C, B, A]. The stop bounds are inclusive, so the
+   * entry that matches stopAtId or stopAtType is included in the result.
+   * A visited set detects cycles such as A → B → A, preventing an infinite
+   * loop while traversing invalid parent links.
+   */
+  private walkToRoot(
+	startId: string,
+	stopAtId?: string,
+  stopAtType?: SessionEntry["type"],
+  ): SessionEntry[] {
+	// Find the entry where the traversal should begin.
+	let current = this.entriesById.get(startId);
+	if (current === undefined) {
+		throw new SessionError("not_found", `Entry not found: ${startId}`);
+	}
+  
+	// Collect the path from the starting entry toward the root.
+	const branch: SessionEntry[] = [];
+	// Track visited IDs so a cyclic parent chain cannot loop forever.
+	const visited = new Set<string>();
+  
+	while (true) {
+		// Seeing the same ID twice means the branch contains a cycle.
+		if (visited.has(current.id)) {
+			this.invalid(`branch contains a cycle at ${current.id}`);
+		}
+  
+		// Include the current entry before checking stop conditions; bounds are inclusive.
+		visited.add(current.id);
+		branch.push(current);
+  
+		// Stop at the requested ID, requested type, or the root entry.
+		if (
+			current.id === stopAtId ||
+			current.type === stopAtType ||
+			current.parentId === null
+		) {
+			break;
+		}
+  
+		// Move one step upward through the parent chain.
+		const parent = this.entriesById.get(current.parentId);
+		if (parent === undefined) {
+			// A non-root entry must reference an existing parent.
+			this.invalid(`entry references missing parent ${current.parentId}`);
+		}
+  
+		current = parent;
+	}
+  
+	// Return the collected branch, ordered from the starting entry to the root.
+	return branch;
+  }
+
+  /**
+   * Applies ordering, filters, cursor pagination, and limit without exposing
+   * stored entry references.
+   */
+  private queryEntries(
+	entries: readonly SessionEntry[],
+	query: EntryQuery,
+	naturalOrder: EntryOrder,
+  ): SessionEntry[] {
+	const order = query.order ?? "newest_first";
+	const ordered =
+		order === naturalOrder ? entries : [...entries].reverse();
+	const results: SessionEntry[] = [];
+  
+	for (const entry of ordered) {
+		if (query.type !== undefined && entry.type !== query.type) {
+			continue;
+		}
+  
+		if (
+			query.customType !== undefined &&
+			(entry.type !== "custom" ||
+				entry.customType !== query.customType)
+		) {
+			continue;
+		}
+  
+		const afterSeq = query.cursor?.afterSeq;
+		if (
+			afterSeq !== undefined &&
+			(order === "oldest_first"
+				? entry.seq <= afterSeq
+				: entry.seq >= afterSeq)
+		) {
+			continue;
+		}
+  
+		results.push(clone(entry));
+  
+		if (
+			query.limit !== undefined &&
+			results.length === query.limit
+		) {
+			break;
+		}
+	}
+  
+	return results;
+  }
+
+  private validateQuery(query: EntryQuery): void {
+	if (
+		query.order !== undefined &&
+		query.order !== "newest_first" &&
+		query.order !== "oldest_first"
+	) {
+		this.invalidQuery(`unknown order ${String(query.order)}`);
+	}
+  
+	if (
+		query.limit !== undefined &&
+		(!Number.isSafeInteger(query.limit) || query.limit <= 0)
+	) {
+		this.invalidQuery("limit must be a positive safe integer");
+	}
+  
+	if (
+		query.cursor !== undefined &&
+		(!Number.isSafeInteger(query.cursor.afterSeq) ||
+			query.cursor.afterSeq < 0)
+	) {
+		this.invalidQuery(
+			"cursor afterSeq must be a non-negative safe integer",
+		);
+	}
+  
+	if (
+		query.customType !== undefined &&
+		query.type !== undefined &&
+		query.type !== "custom"
+	) {
+		this.invalidQuery(
+			"customType cannot be combined with a non-custom entry type",
+		);
+	}
+  }
+  
+  private invalidQuery(message: string): never {
+	throw new SessionError("invalid_query", `Invalid entry query: ${message}`);
+  }
+
+  
   private validateEntry(entry: SessionEntry): void {
 		if (this.entriesById.has(entry.id)) {
 			this.invalid(`duplicate entry id ${entry.id}`);
 		}
-  
+
 		if (
 			entry.parentId !== null &&
 			!this.entriesById.has(entry.parentId)
 		) {
 			this.invalid(`entry references missing parent ${entry.parentId}`);
 		}
-  
+
 		/*
 		 * Entry mutations always extend main. Creating a branch requires an
 		 * explicit pointer mutation before the new entry.
@@ -169,7 +347,7 @@ export class SessionState {
 				`entry parent ${String(entry.parentId)} does not match main leaf ${String(this.leafId)}`,
 			);
 		}
-  
+
 		if (
 			entry.type === "branch_summary" &&
 			!this.entriesById.has(entry.sourceLeafId)
