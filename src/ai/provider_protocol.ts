@@ -1,6 +1,7 @@
 import type { AssistantMessageEventStream } from "./event-stream.ts";
-import type { ModelContext, ReasoningLevel, ThinkingLevel } from "./types.ts";
+import type { ModelContext, ReasoningLevel } from "./types.ts";
 
+export type { ReasoningLevel, ThinkingLevel } from "./types.ts";
 
 
 export interface StreamOptions {
