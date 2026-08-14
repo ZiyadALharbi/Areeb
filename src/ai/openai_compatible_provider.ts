@@ -26,7 +26,7 @@ import type {
 	AssistantContent,
 	AssistantMessage,
 	Message,
-  ModelContext,
+	ModelContext,
 	ReasoningLevel,
 	StopReason,
 	ToolCall,
