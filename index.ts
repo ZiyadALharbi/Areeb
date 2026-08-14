@@ -3,6 +3,7 @@ export {
 	runAgentLoopContinue,
 } from "./src/agent/agent_loop.ts";
 export { AgentHarness } from "./src/agent/harness.ts";
+export * from "./src/agent/session/index.ts";
 export type {
 	AgentContext,
 	AgentEndReason,

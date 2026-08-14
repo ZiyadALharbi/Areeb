@@ -22,6 +22,7 @@ import type {
 import type {
 	AssistantContent,
 	AssistantMessage,
+	Message,
 	ModelContext,
 	ToolCall,
 	ToolResultMessage,
@@ -761,7 +762,7 @@ describe("AgentHarness continuation", () => {
 	});
 
 	test("uses loop continuation for valid user and tool-result tails", async () => {
-		const tailCases: AgentMessage[][] = [
+		const tailCases: Message[][] = [
 			[user("Continue this")],
 			(() => {
 				const call = toolCall("finished");

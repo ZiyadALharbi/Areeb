@@ -1,5 +1,9 @@
 import type { ZodType } from "zod";
 
+export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh";
+
+export type ReasoningLevel = "off" | ThinkingLevel;
+
 export interface TextContent {
 	type: "text";
 	text: string;

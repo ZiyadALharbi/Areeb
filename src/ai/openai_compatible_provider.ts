@@ -20,7 +20,6 @@ import {
 import type {
 	ModelProvider,
 	ProviderRetryConfig,
-	ReasoningLevel,
 	StreamOptions,
 } from "./provider_protocol.ts";
 import type {
@@ -28,6 +27,7 @@ import type {
 	AssistantMessage,
 	Message,
 	ModelContext,
+	ReasoningLevel,
 	StopReason,
 	ToolCall,
 	ToolDefinition,

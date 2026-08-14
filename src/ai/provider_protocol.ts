@@ -1,9 +1,7 @@
 import type { AssistantMessageEventStream } from "./event-stream.ts";
-import type { ModelContext } from "./types.ts";
+import type { ModelContext, ReasoningLevel } from "./types.ts";
 
-export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh";
-
-export type ReasoningLevel = "off" | ThinkingLevel;
+export type { ReasoningLevel, ThinkingLevel } from "./types.ts";
 
 export interface StreamOptions {
 	readonly signal?: AbortSignal;
