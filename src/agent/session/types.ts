@@ -8,6 +8,9 @@ export type JsonValue =
 	| JsonValue[]
 	| { [key: string]: JsonValue };
 
+	export interface JsonObject {
+		[key: string]: JsonValue;
+	}
 
 export interface SessionEntryBase {
 	id: string;
@@ -94,11 +97,11 @@ export type SessionEntry =
  *
  * The facade has provisioned id, while storage still owns parentId, seq,
  * and timestamp.
- * 
+ *
  * NewSessionEntry          → before the facade creates id
  * ProvisionedSessionEntry  → after id exists, before storage metadata exists
  */
- 
+
 	export type ProvisionedSessionEntry<
 		TEntry extends SessionEntry = SessionEntry,
 	> = TEntry extends SessionEntry
@@ -159,4 +162,82 @@ export interface EntryCursor {
 	 * newest_first → 4, 3, 2, ...
 	 */
 	readonly afterSeq: number;
+}
+
+export interface EntryQuery {
+	readonly type?: SessionEntryType;
+	readonly customType?: string;
+	readonly order?: EntryOrder;
+	readonly limit?: number;
+	readonly cursor?: EntryCursor;
+}
+export interface BranchEntryQuery extends EntryQuery {
+	/**
+	 * Defaults to the active main leaf when omitted.
+	 * Explicit null represents an empty branch.
+	 * EntryQuery       → general entry filters
+	 * BranchEntryQuery → general filters + branch start/stop rules
+	 */
+	startId?: string | null;
+
+	/** Inclusive stopping bound. */
+	stopAtId?: string;
+
+	/** Inclusive stopping bound. */
+	stopAtType?: SessionEntryType;
+}
+
+/**
+ * Storage receives an explicit non-null branch start so it never resolves
+ * the active pointer separately from the query operation.
+ */
+export interface StorageBranchEntryQuery extends EntryQuery {
+	readonly startId: string;
+	readonly stopAtId?: string;
+	readonly stopAtType?: SessionEntryType;
+}
+
+export interface SessionMetadata {
+	readonly id: string;
+	readonly createdAt: number;
+	readonly cwd: string;
+	readonly parentSessionId?: string;
+	readonly metadata?: JsonObject;
+}
+
+export interface SessionCreateOptions {
+	readonly id?: string;
+	readonly cwd: string;
+	readonly parentSessionId?: string;
+	readonly metadata?: JsonObject;
+}
+
+export interface SessionListOptions {
+	readonly cwd?: string;
+}
+
+export interface SessionModel {
+	readonly provider: string;
+	readonly model: string;
+}
+
+export interface SessionContext {
+	readonly messages: AgentMessage[];
+	readonly model: SessionModel | null;
+	readonly reasoning: ReasoningLevel;
+	readonly activeToolNames: string[] | null;
+}
+
+export interface SessionCompactionMessage {
+	readonly role: "session_compaction";
+	readonly summary: string;
+	readonly tokensBefore: number;
+	readonly timestamp: number;
+}
+
+export interface SessionBranchSummaryMessage {
+	readonly role: "session_branch_summary";
+	readonly summary: string;
+	readonly sourceLeafId: string;
+	readonly timestamp: number;
 }
