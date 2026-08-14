@@ -61,7 +61,7 @@ export interface BranchSummaryEntry extends SessionEntryBase {
 export interface CustomEntry extends SessionEntryBase {
 	type: "custom";
 	customType: string;
-  data?: unknown;
+  data?: JsonValue;
 }
 
 export type SessionEntry =
