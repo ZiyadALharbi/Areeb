@@ -149,6 +149,14 @@ export interface EntryCursor {
 	 *
 	 * oldest_first returns entries with greater sequences.
 	 * newest_first returns entries with smaller sequences.
+	 *
+	 * oldest = created earliest
+	 * newest = created latest
+	 * seq determines their order
+	 *
+	 * With afterSeq: 5:
+	 * oldest_first → 6, 7, 8, ...
+	 * newest_first → 4, 3, 2, ...
 	 */
-	afterSeq: number;
+	readonly afterSeq: number;
 }
