@@ -266,6 +266,32 @@ export interface SessionContextBuildOptions {
  * Public storage-neutral session contract.
  *
  * Concrete repositories return a Session facade implementing this contract.
+ * It is the public API for working with a session.
+ *
+ * The facade separates application code from the storage implementation:
+ *
+ * it seperates
+ * application code → SessionHandle → storage implementation
+ * 
+ *
+ * How to apply it:
+ *
+ * A concrete session class must implement all of these methods:
+ *
+ * ```
+ * class Session implements SessionHandle {
+ *   // Implement getEntry, appendMessage, buildContext, etc.
+ * }
+ * ```
+ *
+ * Callers use the interface:
+ *
+ * ```
+ * async function processSession(session: SessionHandle) {
+ *   await session.appendMessage(message);
+ *   const context = await session.buildContext();
+ * }
+ * ```
  */
 export interface SessionHandle<
 	TMetadata extends SessionMetadata = SessionMetadata,
@@ -292,3 +318,115 @@ export interface SessionHandle<
 
 	buildContext(options?: SessionContextBuildOptions): Promise<SessionContext>;
 }
+
+/**
+ * Backend contract used by the Session facade.
+ *
+ * Implementations must serialize mutations. JSONL storage must persist first
+ * and update replay state only after the append succeeds.
+ * 
+ * 
+ * `SessionHandle` and `SessionStorage` are two layers:
+ *
+ * Application code
+ *       ↓
+ * SessionHandle   (public facade)
+ *       ↓
+ * SessionStorage  (internal persistence backend)
+ *       ↓
+ * JSONL / database / files
+ * 
+ * SessionHandle:
+ * Used by the rest of the application
+ * It provides convenient session operations
+ * 
+ * SessionStorage:
+ * Used internally by the session implementation
+ * It provides low-level persistence operations
+ * 
+ * SessionHandle  = what users can do with a session
+ * SessionStorage = how the session is stored
+ * 
+ * session.appendMessage(message);
+ * 
+ * The handle may internally call:
+ * 
+ * ```ts
+ * storage.appendEntry(provisionedEntry);
+ * ```
+ The application uses the handle; the handle uses storage.
+ */
+export interface SessionStorage<
+	TMetadata extends SessionMetadata = SessionMetadata,
+> {
+	getMetadata(): Promise<TMetadata>;
+	getLeafId(): Promise<string | null>;
+	moveLeaf(id: string | null): Promise<void>;
+
+	appendEntry<TEntry extends SessionEntry>(
+		entry: ProvisionedSessionEntry<TEntry>,
+	): Promise<TEntry>;
+
+	getEntry(id: string): Promise<SessionEntry | undefined>;
+	getChildren(parentId: string | null): Promise<SessionEntry[]>;
+	findEntries(query?: EntryQuery): Promise<SessionEntry[]>;
+	findEntriesOnBranch(
+		query: StorageBranchEntryQuery,
+	): Promise<SessionEntry[]>;
+
+	getName(): Promise<string | undefined>;
+	setName(name: string | null): Promise<void>;
+	getLabel(targetId: string): Promise<string | undefined>;
+	setLabel(targetId: string, label: string | null): Promise<void>;
+}
+
+
+/**
+ * `SessionRepository` describes an object that manages multiple sessions.
+ * 
+ * It has three configurable type parameters:
+ * 
+ * - `TMetadata`: the metadata shape for a session
+ * - `TCreateOptions`: options needed to create a session
+ * - `TListOptions`: options used to list sessions
+ * 
+ * 
+ * create:
+ *  Creates a new session.
+ *  - receives creation options
+ *  - asynchronously returns a `SessionHandle`
+ *  - `Promise` means the operation may involve disk/database work
+ * 
+ * open:
+ *  Opens an existing session using its metadata.
+ *  The comment means repeated calls to `open` through the same repository reuse the same storage writer.
+ * 
+ * list:
+ *  Lists session metadata.
+ *  - `options?` means options are optional
+ *  - returns an array of metadata asynchronously
+ * 
+ * Example usage:
+ * const metadata = await repository.list();
+ * const session = await repository.open(metadata[0]);
+ */
+
+export interface SessionRepository<
+	TMetadata extends SessionMetadata = SessionMetadata,
+	TCreateOptions extends SessionCreateOptions = SessionCreateOptions,
+	TListOptions extends SessionListOptions = SessionListOptions,
+> {
+	create(options: TCreateOptions): Promise<SessionHandle<TMetadata>>;
+
+	/**
+	 * Opens metadata returned by list().
+	 *
+	 * Repeated opens through one repository share the same storage writer.
+	 */
+	open(metadata: TMetadata): Promise<SessionHandle<TMetadata>>;
+
+	list(options?: TListOptions): Promise<TMetadata[]>;
+}
+
+export type SessionIdGenerator = () => string;
+export type SessionClock = () => number;
