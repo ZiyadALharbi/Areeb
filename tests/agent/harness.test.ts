@@ -21,8 +21,8 @@ import type {
 } from "../../src/ai/provider_protocol.ts";
 import type {
 	AssistantContent,
-  AssistantMessage,
-  Message,
+	AssistantMessage,
+	Message,
 	ModelContext,
 	ToolCall,
 	ToolResultMessage,

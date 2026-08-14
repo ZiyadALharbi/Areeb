@@ -8,9 +8,9 @@ export type JsonValue =
 	| JsonValue[]
 	| { [key: string]: JsonValue };
 
-	export interface JsonObject {
-		[key: string]: JsonValue;
-	}
+export interface JsonObject {
+	[key: string]: JsonValue;
+}
 
 export interface SessionEntryBase {
 	id: string;
@@ -18,7 +18,6 @@ export interface SessionEntryBase {
 	parentId: string | null;
 	timestamp: number;
 }
-
 
 export interface MessageEntry extends SessionEntryBase {
 	type: "message";
@@ -45,23 +44,23 @@ export interface CompactionEntry extends SessionEntryBase {
 	type: "compaction";
 	summary: string;
 	retainedTail: AgentMessage[];
-  tokensBefore: number;
-  details?: unknown;
-  usage?: Usage;
+	tokensBefore: number;
+	details?: unknown;
+	usage?: Usage;
 }
 
 export interface BranchSummaryEntry extends SessionEntryBase {
 	type: "branch_summary";
 	sourceLeafId: string;
-  summary: string;
-  details?: unknown;
+	summary: string;
+	details?: unknown;
 	usage?: Usage;
 }
 
 export interface CustomEntry extends SessionEntryBase {
 	type: "custom";
 	customType: string;
-  data?: JsonValue;
+	data?: JsonValue;
 }
 
 export type SessionEntry =
@@ -71,28 +70,24 @@ export type SessionEntry =
 	| ActiveToolsChangeEntry
 	| CompactionEntry
 	| BranchSummaryEntry
-  | CustomEntry;
+	| CustomEntry;
 
-  export type SessionEntryType = SessionEntry["type"];
+export type SessionEntryType = SessionEntry["type"];
 
-  export type SessionEntryOfType<TType extends SessionEntryType> = Extract<
+export type SessionEntryOfType<TType extends SessionEntryType> = Extract<
 	SessionEntry,
 	{ type: TType }
-  >;
+>;
 
-  /**
-   * Entry input accepted by the public Session facade.
-   *
-   * The facade generates id. Storage assigns parentId, seq, and timestamp.
-   */
-  export type NewSessionEntry<
-	TEntry extends SessionEntry = SessionEntry,
-  > = TEntry extends SessionEntry
-	? Omit<TEntry, keyof SessionEntryBase>
-	: never;
+/**
+ * Entry input accepted by the public Session facade.
+ *
+ * The facade generates id. Storage assigns parentId, seq, and timestamp.
+ */
+export type NewSessionEntry<TEntry extends SessionEntry = SessionEntry> =
+	TEntry extends SessionEntry ? Omit<TEntry, keyof SessionEntryBase> : never;
 
-
-	/**
+/**
  * Entry accepted by a storage backend.
  *
  * The facade has provisioned id, while storage still owns parentId, seq,
@@ -102,47 +97,44 @@ export type SessionEntry =
  * ProvisionedSessionEntry  → after id exists, before storage metadata exists
  */
 
-	export type ProvisionedSessionEntry<
-		TEntry extends SessionEntry = SessionEntry,
-	> = TEntry extends SessionEntry
-		? Omit<TEntry, "parentId" | "seq" | "timestamp">
-		: never;
+export type ProvisionedSessionEntry<
+	TEntry extends SessionEntry = SessionEntry,
+> = TEntry extends SessionEntry
+	? Omit<TEntry, "parentId" | "seq" | "timestamp">
+	: never;
 
-	export interface EntryMutation {
-		kind: "entry";
-		entry: SessionEntry;
-	}
+export interface EntryMutation {
+	kind: "entry";
+	entry: SessionEntry;
+}
 
-	export interface PointerMutation {
-		kind: "pointer";
-		seq: number;
-		timestamp: number;
-		pointer: "main";
-		leafId: string | null;
-	}
+export interface PointerMutation {
+	kind: "pointer";
+	seq: number;
+	timestamp: number;
+	pointer: "main";
+	leafId: string | null;
+}
 
-	export interface NameFactMutation {
-		kind: "fact";
-		seq: number;
-		timestamp: number;
-		fact: "name";
-		value: string | null;
-	}
+export interface NameFactMutation {
+	kind: "fact";
+	seq: number;
+	timestamp: number;
+	fact: "name";
+	value: string | null;
+}
 
-	export interface LabelFactMutation {
-		kind: "fact";
-		seq: number;
-		timestamp: number;
-		fact: "label";
-		targetId: string;
-		value: string | null;
-  }
+export interface LabelFactMutation {
+	kind: "fact";
+	seq: number;
+	timestamp: number;
+	fact: "label";
+	targetId: string;
+	value: string | null;
+}
 export type FactMutation = NameFactMutation | LabelFactMutation;
 
-export type SessionMutation =
-  | EntryMutation
-  | PointerMutation
-  | FactMutation;
+export type SessionMutation = EntryMutation | PointerMutation | FactMutation;
 
 export type EntryOrder = "newest_first" | "oldest_first";
 
@@ -272,7 +264,7 @@ export interface SessionContextBuildOptions {
  *
  * it seperates
  * application code → SessionHandle → storage implementation
- * 
+ *
  *
  * How to apply it:
  *
@@ -307,9 +299,7 @@ export interface SessionHandle<
 
 	appendMessage(message: AgentMessage): Promise<string>;
 	appendCustomEntry(customType: string, data?: JsonValue): Promise<string>;
-	appendEntry<TEntry extends NewSessionEntry>(
-		entry: TEntry,
-	): Promise<string>;
+	appendEntry<TEntry extends NewSessionEntry>(entry: TEntry): Promise<string>;
 
 	getName(): Promise<string | undefined>;
 	setName(name: string | null): Promise<void>;
@@ -370,9 +360,7 @@ export interface SessionStorage<
 	getEntry(id: string): Promise<SessionEntry | undefined>;
 	getChildren(parentId: string | null): Promise<SessionEntry[]>;
 	findEntries(query?: EntryQuery): Promise<SessionEntry[]>;
-	findEntriesOnBranch(
-		query: StorageBranchEntryQuery,
-	): Promise<SessionEntry[]>;
+	findEntriesOnBranch(query: StorageBranchEntryQuery): Promise<SessionEntry[]>;
 
 	getName(): Promise<string | undefined>;
 	setName(name: string | null): Promise<void>;
@@ -380,32 +368,31 @@ export interface SessionStorage<
 	setLabel(targetId: string, label: string | null): Promise<void>;
 }
 
-
 /**
  * `SessionRepository` describes an object that manages multiple sessions.
- * 
+ *
  * It has three configurable type parameters:
- * 
+ *
  * - `TMetadata`: the metadata shape for a session
  * - `TCreateOptions`: options needed to create a session
  * - `TListOptions`: options used to list sessions
- * 
- * 
+ *
+ *
  * create:
  *  Creates a new session.
  *  - receives creation options
  *  - asynchronously returns a `SessionHandle`
  *  - `Promise` means the operation may involve disk/database work
- * 
+ *
  * open:
  *  Opens an existing session using its metadata.
  *  The comment means repeated calls to `open` through the same repository reuse the same storage writer.
- * 
+ *
  * list:
  *  Lists session metadata.
  *  - `options?` means options are optional
  *  - returns an array of metadata asynchronously
- * 
+ *
  * Example usage:
  * const metadata = await repository.list();
  * const session = await repository.open(metadata[0]);

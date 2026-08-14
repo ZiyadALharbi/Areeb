@@ -3,7 +3,6 @@ import type { ModelContext, ReasoningLevel } from "./types.ts";
 
 export type { ReasoningLevel, ThinkingLevel } from "./types.ts";
 
-
 export interface StreamOptions {
 	readonly signal?: AbortSignal;
 	readonly timeout?: number;
