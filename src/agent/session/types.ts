@@ -192,52 +192,103 @@ export interface BranchEntryQuery extends EntryQuery {
  * the active pointer separately from the query operation.
  */
 export interface StorageBranchEntryQuery extends EntryQuery {
-	readonly startId: string;
-	readonly stopAtId?: string;
-	readonly stopAtType?: SessionEntryType;
+	startId: string;
+	stopAtId?: string;
+	stopAtType?: SessionEntryType;
 }
 
 export interface SessionMetadata {
-	readonly id: string;
-	readonly createdAt: number;
-	readonly cwd: string;
-	readonly parentSessionId?: string;
-	readonly metadata?: JsonObject;
+	id: string;
+	createdAt: number;
+	cwd: string;
+	parentSessionId?: string;
+	metadata?: JsonObject;
 }
 
 export interface SessionCreateOptions {
-	readonly id?: string;
-	readonly cwd: string;
-	readonly parentSessionId?: string;
-	readonly metadata?: JsonObject;
+	id?: string;
+	cwd: string;
+	parentSessionId?: string;
+	metadata?: JsonObject;
 }
 
 export interface SessionListOptions {
-	readonly cwd?: string;
+	cwd?: string;
 }
 
 export interface SessionModel {
-	readonly provider: string;
-	readonly model: string;
+	provider: string;
+	model: string;
 }
 
 export interface SessionContext {
-	readonly messages: AgentMessage[];
-	readonly model: SessionModel | null;
-	readonly reasoning: ReasoningLevel;
-	readonly activeToolNames: string[] | null;
+	messages: AgentMessage[];
+	model: SessionModel | null;
+	reasoning: ReasoningLevel;
+	activeToolNames: string[] | null;
 }
 
 export interface SessionCompactionMessage {
-	readonly role: "session_compaction";
-	readonly summary: string;
-	readonly tokensBefore: number;
-	readonly timestamp: number;
+	role: "session_compaction";
+	summary: string;
+	tokensBefore: number;
+	timestamp: number;
 }
 
 export interface SessionBranchSummaryMessage {
-	readonly role: "session_branch_summary";
-	readonly summary: string;
-	readonly sourceLeafId: string;
-	readonly timestamp: number;
+	role: "session_branch_summary";
+	summary: string;
+	sourceLeafId: string;
+	timestamp: number;
+}
+
+/* This is useful for adding features to an existing shared type without editing the original file. */
+declare module "../types.ts" {
+	interface CustomAgentMessages {
+		session_compaction: SessionCompactionMessage;
+		session_branch_summary: SessionBranchSummaryMessage;
+	}
+}
+
+export type CustomEntryContextProjector = (
+	entry: CustomEntry,
+	index: number,
+	entries: readonly SessionEntry[],
+) => readonly AgentMessage[] | undefined;
+
+export interface SessionContextBuildOptions {
+	readonly customEntryProjectors?: Readonly<
+		Record<string, CustomEntryContextProjector>
+	>;
+}
+
+/**
+ * Public storage-neutral session contract.
+ *
+ * Concrete repositories return a Session facade implementing this contract.
+ */
+export interface SessionHandle<
+	TMetadata extends SessionMetadata = SessionMetadata,
+> {
+	getMetadata(): Promise<TMetadata>;
+	getLeafId(): Promise<string | null>;
+	moveLeaf(id: string | null): Promise<void>;
+
+	getEntry(id: string): Promise<SessionEntry | undefined>;
+	getChildren(parentId: string | null): Promise<SessionEntry[]>;
+	findEntries(query?: EntryQuery): Promise<SessionEntry[]>;
+	findEntriesOnBranch(query?: BranchEntryQuery): Promise<SessionEntry[]>;
+
+	appendMessage(message: AgentMessage): Promise<string>;
+	appendCustomEntry(customType: string, data?: JsonValue): Promise<string>;
+	appendEntry<TEntry extends NewSessionEntry>(
+		entry: TEntry,
+	): Promise<string>;
+
+	getName(): Promise<string | undefined>;
+	setName(name: string | null): Promise<void>;
+	getLabel(targetId: string): Promise<string | undefined>;
+	setLabel(targetId: string, label: string | null): Promise<void>;
+
+	buildContext(options?: SessionContextBuildOptions): Promise<SessionContext>;
 }
