@@ -52,17 +52,20 @@ export function assertJsonValue(
 
 		if (typeof current === "number") {
 			if (!Number.isFinite(current)) {
-				return invalid(path, "numbers must be finite");
+				invalid(path, "numbers must be finite");
+				return;
 			}
 			return;
 		}
 
 		if (typeof current !== "object" || current === null) {
-			return invalid(path, `${typeof current} is not valid JSON`);
+			invalid(path, `${typeof current} is not valid JSON`);
+			return;
 		}
 
 		if (ancestors.has(current)) {
-			return invalid(path, "cycles are not valid JSON");
+			invalid(path, "cycles are not valid JSON");
+			return;
 		}
 
 		ancestors.add(current);
@@ -71,7 +74,8 @@ export function assertJsonValue(
 			if (Array.isArray(current)) {
 				for (const key of Reflect.ownKeys(current)) {
 					if (typeof key === "symbol") {
-						return invalid(path, "symbol properties are not valid JSON");
+						invalid(path, "symbol properties are not valid JSON");
+						return;
 					}
 
 					if (key === "length") {
@@ -85,7 +89,8 @@ export function assertJsonValue(
 						String(index) !== key ||
 						index >= current.length
 					) {
-						return invalid(path, `unexpected array property ${String(key)}`);
+						invalid(path, `unexpected array property ${String(key)}`);
+						return;
 					}
 				}
 
@@ -93,7 +98,8 @@ export function assertJsonValue(
 					const propertyPath = `${path}[${index}]`;
 
 					if (!Object.hasOwn(current, index)) {
-						return invalid(propertyPath, "sparse arrays are not valid JSON");
+						invalid(propertyPath, "sparse arrays are not valid JSON");
+						return;
 					}
 
 					const descriptor = Object.getOwnPropertyDescriptor(
@@ -102,14 +108,13 @@ export function assertJsonValue(
 					);
 
 					if (descriptor === undefined || !("value" in descriptor)) {
-						return invalid(propertyPath, "accessors are not valid JSON");
+						invalid(propertyPath, "accessors are not valid JSON");
+						return;
 					}
 
 					if (!descriptor.enumerable) {
-						return invalid(
-							propertyPath,
-							"non-enumerable values are not valid JSON",
-						);
+						invalid(propertyPath, "non-enumerable values are not valid JSON");
+						return;
 					}
 
 					visit(descriptor.value, propertyPath);
@@ -120,26 +125,27 @@ export function assertJsonValue(
 
 			const prototype = Object.getPrototypeOf(current);
 			if (prototype !== Object.prototype && prototype !== null) {
-				return invalid(path, "objects must be plain objects");
+				invalid(path, "objects must be plain objects");
+				return;
 			}
 
 			for (const key of Reflect.ownKeys(current)) {
 				if (typeof key === "symbol") {
-					return invalid(path, "symbol properties are not valid JSON");
+					invalid(path, "symbol properties are not valid JSON");
+					return;
 				}
 
 				const propertyPath = `${path}[${JSON.stringify(key)}]`;
 				const descriptor = Object.getOwnPropertyDescriptor(current, key);
 
 				if (descriptor === undefined || !("value" in descriptor)) {
-					return invalid(propertyPath, "accessors are not valid JSON");
+					invalid(propertyPath, "accessors are not valid JSON");
+					return;
 				}
 
 				if (!descriptor.enumerable) {
-					return invalid(
-						propertyPath,
-						"non-enumerable values are not valid JSON",
-					);
+					invalid(propertyPath, "non-enumerable values are not valid JSON");
+					return;
 				}
 
 				visit(descriptor.value, propertyPath);
