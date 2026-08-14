@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { SessionError } from "../../../src/agent/session/errors.ts";
+import { SessionState } from "../../../src/agent/session/state.ts";
 import type {
+	EntryMutation,
+	JsonValue,
 	NewSessionEntry,
 	ProvisionedSessionEntry,
 	SessionEntry,
@@ -10,6 +13,9 @@ import type { AgentMessage } from "../../../src/agent/types.ts";
 import type { Message } from "../../../src/ai/types.ts";
 
 const ENTRY_ID = "00000000-0000-4000-8000-000000000001";
+const CHILD_A_ID = "00000000-0000-4000-8000-000000000002";
+const CHILD_B_ID = "00000000-0000-4000-8000-000000000003";
+const SECOND_ROOT_ID = "00000000-0000-4000-8000-000000000004";
 
 const entryBase = {
 	id: ENTRY_ID,
@@ -17,6 +23,43 @@ const entryBase = {
 	parentId: null,
 	timestamp: 100,
 };
+
+function customMutation(
+	id: string,
+	seq: number,
+	parentId: string | null,
+	data?: JsonValue,
+): EntryMutation {
+	return {
+		kind: "entry",
+		entry: {
+			type: "custom",
+			id,
+			seq,
+			parentId,
+			timestamp: 100 + seq,
+			customType: "test",
+			...(data === undefined ? {} : { data }),
+		},
+	};
+}
+
+function expectInvalidMutation(
+	action: () => void,
+	messageFragment: string,
+): void {
+	let thrown: unknown;
+	try {
+		action();
+	} catch (error) {
+		thrown = error;
+	}
+
+	expect(thrown).toBeInstanceOf(SessionError);
+	const error = thrown as SessionError;
+	expect(error.code).toBe("invalid_mutation");
+	expect(error.message).toContain(messageFragment);
+}
 
 function getEntryType(entry: SessionEntry): SessionEntry["type"] {
 	switch (entry.type) {
@@ -220,5 +263,257 @@ describe("session type contracts", () => {
 		expect(error.path).toBe("/sessions/example.jsonl");
 		expect(error.line).toBe(3);
 		expect(error.cause).toBe(cause);
+	});
+});
+
+describe("SessionState", () => {
+	test("starts with an empty main pointer and no facts", () => {
+		const state = new SessionState();
+
+		expect(state.nextSequence).toBe(1);
+		expect(state.getLeafId()).toBeNull();
+		expect(state.getName()).toBeUndefined();
+		expect(state.getLabel(ENTRY_ID)).toBeUndefined();
+		expect(state.getEntry(ENTRY_ID)).toBeUndefined();
+		expect(state.getChildren(null)).toEqual([]);
+	});
+
+	test("replays entries, pointer movement, branches, and new roots", () => {
+		const state = new SessionState();
+
+		state.applyMutation(customMutation(ENTRY_ID, 1, null));
+		state.applyMutation(customMutation(CHILD_A_ID, 2, ENTRY_ID));
+		state.applyMutation({
+			kind: "pointer",
+			seq: 3,
+			timestamp: 103,
+			pointer: "main",
+			leafId: ENTRY_ID,
+		});
+		state.applyMutation(customMutation(CHILD_B_ID, 4, ENTRY_ID));
+
+		expect(state.getLeafId()).toBe(CHILD_B_ID);
+		expect(state.getChildren(ENTRY_ID).map((entry) => entry.id)).toEqual([
+			CHILD_A_ID,
+			CHILD_B_ID,
+		]);
+
+		state.applyMutation({
+			kind: "pointer",
+			seq: 5,
+			timestamp: 105,
+			pointer: "main",
+			leafId: null,
+		});
+		state.applyMutation(customMutation(SECOND_ROOT_ID, 6, null));
+
+		expect(state.getLeafId()).toBe(SECOND_ROOT_ID);
+		expect(state.getChildren(null).map((entry) => entry.id)).toEqual([
+			ENTRY_ID,
+			SECOND_ROOT_ID,
+		]);
+		expect(state.nextSequence).toBe(7);
+	});
+
+	test("replays name and label facts including explicit clears", () => {
+		const state = new SessionState();
+		state.applyMutation(customMutation(ENTRY_ID, 1, null));
+		state.applyMutation({
+			kind: "fact",
+			seq: 2,
+			timestamp: 102,
+			fact: "name",
+			value: "Research",
+		});
+		state.applyMutation({
+			kind: "fact",
+			seq: 3,
+			timestamp: 103,
+			fact: "label",
+			targetId: ENTRY_ID,
+			value: "checkpoint",
+		});
+
+		expect(state.getName()).toBe("Research");
+		expect(state.getLabel(ENTRY_ID)).toBe("checkpoint");
+
+		state.applyMutation({
+			kind: "fact",
+			seq: 4,
+			timestamp: 104,
+			fact: "name",
+			value: null,
+		});
+		state.applyMutation({
+			kind: "fact",
+			seq: 5,
+			timestamp: 105,
+			fact: "label",
+			targetId: ENTRY_ID,
+			value: null,
+		});
+
+		expect(state.getName()).toBeUndefined();
+		expect(state.getLabel(ENTRY_ID)).toBeUndefined();
+	});
+
+	test("constructs state by replaying an existing mutation history", () => {
+		const state = new SessionState([
+			customMutation(ENTRY_ID, 1, null),
+			customMutation(CHILD_A_ID, 2, ENTRY_ID),
+			{
+				kind: "pointer",
+				seq: 3,
+				timestamp: 103,
+				pointer: "main",
+				leafId: ENTRY_ID,
+			},
+		]);
+
+		expect(state.getLeafId()).toBe(ENTRY_ID);
+		expect(state.nextSequence).toBe(4);
+		expect(state.getEntry(CHILD_A_ID)?.parentId).toBe(ENTRY_ID);
+	});
+
+	test("validation does not mutate state", () => {
+		const state = new SessionState();
+		const candidate = customMutation(ENTRY_ID, 1, null);
+
+		state.validateMutation(candidate);
+
+		expect(state.nextSequence).toBe(1);
+		expect(state.getLeafId()).toBeNull();
+		expect(state.getEntry(ENTRY_ID)).toBeUndefined();
+	});
+
+	test("rejects non-consecutive and unsafe sequences without mutation", () => {
+		const state = new SessionState();
+
+		expectInvalidMutation(
+			() => state.applyMutation(customMutation(ENTRY_ID, 2, null)),
+			"expected seq 1, received 2",
+		);
+		expectInvalidMutation(
+			() =>
+				state.applyMutation(
+					customMutation(ENTRY_ID, Number.POSITIVE_INFINITY, null),
+				),
+			"expected seq 1",
+		);
+
+		expect(state.nextSequence).toBe(1);
+		expect(state.getLeafId()).toBeNull();
+	});
+
+	test("rejects duplicate IDs, missing parents, and stale parents", () => {
+		const state = new SessionState();
+
+		expectInvalidMutation(
+			() => state.applyMutation(customMutation(CHILD_A_ID, 1, ENTRY_ID)),
+			"missing parent",
+		);
+
+		state.applyMutation(customMutation(ENTRY_ID, 1, null));
+		expectInvalidMutation(
+			() => state.applyMutation(customMutation(ENTRY_ID, 2, ENTRY_ID)),
+			"duplicate entry id",
+		);
+
+		state.applyMutation(customMutation(CHILD_A_ID, 2, ENTRY_ID));
+		expectInvalidMutation(
+			() => state.applyMutation(customMutation(CHILD_B_ID, 3, ENTRY_ID)),
+			"does not match main leaf",
+		);
+
+		expect(state.nextSequence).toBe(3);
+		expect(state.getLeafId()).toBe(CHILD_A_ID);
+	});
+
+	test("rejects invalid pointer, label, and branch-summary references", () => {
+		const pointerState = new SessionState();
+		expectInvalidMutation(
+			() =>
+				pointerState.applyMutation({
+					kind: "pointer",
+					seq: 1,
+					timestamp: 101,
+					pointer: "main",
+					leafId: ENTRY_ID,
+				}),
+			"pointer references missing entry",
+		);
+
+		const labelState = new SessionState();
+		expectInvalidMutation(
+			() =>
+				labelState.applyMutation({
+					kind: "fact",
+					seq: 1,
+					timestamp: 101,
+					fact: "label",
+					targetId: ENTRY_ID,
+					value: null,
+				}),
+			"label references missing entry",
+		);
+
+		const branchState = new SessionState();
+		expectInvalidMutation(
+			() =>
+				branchState.applyMutation({
+					kind: "entry",
+					entry: {
+						type: "branch_summary",
+						id: ENTRY_ID,
+						seq: 1,
+						parentId: null,
+						timestamp: 101,
+						sourceLeafId: CHILD_A_ID,
+						summary: "missing source",
+					},
+				}),
+			"branch summary references missing source",
+		);
+	});
+
+	test("rejects pointer names other than main at runtime", () => {
+		const state = new SessionState();
+		const mutation = {
+			kind: "pointer",
+			seq: 1,
+			timestamp: 101,
+			pointer: "worker",
+			leafId: null,
+		} as unknown as SessionMutation;
+
+		expectInvalidMutation(
+			() => state.applyMutation(mutation),
+			"unknown pointer worker",
+		);
+	});
+
+	test("stores and returns defensive entry copies", () => {
+		const state = new SessionState();
+		const data = { nested: { value: 1 } };
+		const mutation = customMutation(ENTRY_ID, 1, null, data);
+
+		state.applyMutation(mutation);
+		data.nested.value = 2;
+
+		const firstRead = state.getEntry(ENTRY_ID);
+		expect(firstRead?.type).toBe("custom");
+		if (firstRead?.type !== "custom") {
+			throw new Error("Expected custom entry");
+		}
+		expect(firstRead.data).toEqual({ nested: { value: 1 } });
+
+		const firstData = firstRead.data as { nested: { value: number } };
+		firstData.nested.value = 3;
+		const childRead = state.getChildren(null)[0];
+		expect(childRead?.type).toBe("custom");
+		if (childRead?.type !== "custom") {
+			throw new Error("Expected custom child entry");
+		}
+		expect(childRead.data).toEqual({ nested: { value: 1 } });
 	});
 });
