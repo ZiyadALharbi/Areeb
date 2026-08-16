@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -26,6 +26,7 @@ import type {
 	ToolCall,
 	UserMessage,
 } from "../../src/ai/types.ts";
+import { areebResourcePaths } from "../../src/coding/resources.ts";
 import {
 	CodingSession,
 	type CodingSessionConfig,
@@ -108,7 +109,7 @@ function toolCall(id: string, name = "work"): ToolCall {
 	return { type: "tool_call", id, name, arguments: {} };
 }
 
-function messageText(message: AgentMessage): string | undefined {
+function messageText(message: AgentMessage | undefined): string | undefined {
 	if (
 		typeof message !== "object" ||
 		message === null ||
@@ -588,7 +589,128 @@ describe("CodingSession commands and queues", () => {
 			handled: true,
 			message: "Unknown command: /Help",
 		});
+		expect(coding.handleCommand("/skill:missing")).toEqual({ handled: false });
 		expect(coding.steer("steer").count).toBe(1);
 		expect(coding.followUp("follow up").count).toBe(2);
+	});
+
+	test("loads immutable resource snapshots with project trust disabled by default", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "areeb-session-resources-"));
+		try {
+			const cwd = join(directory, "project");
+			const paths = areebResourcePaths({
+				cwd,
+				userRoot: join(directory, "user"),
+			});
+			await mkdir(paths.userSkills, { recursive: true });
+			await mkdir(paths.projectPrompts, { recursive: true });
+			await writeFile(
+				join(paths.userSkills, "review.md"),
+				"---\ndescription: Review code.\n---\nReview carefully.",
+			);
+			await writeFile(join(paths.projectPrompts, "private.md"), "Private.");
+
+			const session = await createMemorySession(cwd);
+			const coding = await CodingSession.load(
+				config(session, new FakeProvider([]), {
+					tools: [],
+					resourcePaths: paths,
+				}),
+			);
+			expect(coding.skills.map((skill) => skill.name)).toEqual(["review"]);
+			expect(coding.promptTemplates).toEqual([]);
+
+			await writeFile(
+				join(paths.userSkills, "later.md"),
+				"---\ndescription: Loaded after reopen.\n---\nLater body.",
+			);
+			expect(coding.skills.map((skill) => skill.name)).toEqual(["review"]);
+			const exposed = coding.skills;
+			(exposed[0] as { name: string }).name = "changed";
+			expect(coding.skills[0]?.name).toBe("review");
+
+			const trustedSession = await createMemorySession(cwd);
+			const trusted = await CodingSession.load(
+				config(trustedSession, new FakeProvider([]), {
+					tools: [],
+					resourcePaths: paths,
+					trustProjectResources: true,
+				}),
+			);
+			expect(trusted.skills.map((skill) => skill.name)).toEqual([
+				"later",
+				"review",
+			]);
+			expect(trusted.promptTemplates.map((template) => template.name)).toEqual([
+				"private",
+			]);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	test("expands string prompts and queues before provider execution and persistence", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "areeb-session-expansion-"));
+		try {
+			const cwd = join(directory, "project");
+			const paths = areebResourcePaths({
+				cwd,
+				userRoot: join(directory, "user"),
+			});
+			await mkdir(paths.userSkills, { recursive: true });
+			await mkdir(paths.userPrompts, { recursive: true });
+			await writeFile(
+				join(paths.userSkills, "review.md"),
+				"---\ndescription: Review code.\n---\nUse the checklist.\n",
+			);
+			await writeFile(
+				join(paths.userPrompts, "explain.md"),
+				"Explain {{ arguments }} clearly.",
+			);
+
+			const provider = new FakeProvider([
+				textScript("template done", 2),
+				textScript("skill done", 4),
+				textScript("raw done", 6),
+			]);
+			const session = await createMemorySession(cwd);
+			const coding = await CodingSession.load(
+				config(session, provider, { tools: [], resourcePaths: paths }),
+			);
+			expect(coding.handleCommand("/explain src/app.ts")).toEqual({
+				handled: false,
+			});
+
+			await coding.prompt("/explain src/app.ts").result();
+			expect(provider.calls[0]?.context.messages.map(messageText)).toEqual([
+				"Explain src/app.ts clearly.",
+			]);
+
+			await coding.prompt("/skill:review src/app.ts").result();
+			const expandedSkill = provider.calls[1]?.context.messages
+				.map(messageText)
+				.at(-1);
+			expect(expandedSkill).toContain('<skill name="review"');
+			expect(expandedSkill).toEndWith("</skill>\n\nsrc/app.ts");
+			expect((await session.buildContext()).messages.map(messageText)).toEqual([
+				"Explain src/app.ts clearly.",
+				"template done",
+				expandedSkill,
+				"skill done",
+			]);
+			await coding.prompt(user("/explain raw.ts", 5)).result();
+			expect(provider.calls[2]?.context.messages.map(messageText).at(-1)).toBe(
+				"/explain raw.ts",
+			);
+
+			expect(messageText(coding.steer("/explain queued.ts").steering[0])).toBe(
+				"Explain queued.ts clearly.",
+			);
+			expect(
+				messageText(coding.followUp("/skill:review later.ts").followUp[0]),
+			).toEndWith("</skill>\n\nlater.ts");
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 });

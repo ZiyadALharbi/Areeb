@@ -14,6 +14,18 @@ import type {
 } from "../agent/types.ts";
 import type { ModelProvider } from "../ai/provider_protocol.ts";
 import type { ReasoningLevel } from "../ai/types.ts";
+import {
+	expandPromptTemplateInvocation,
+	loadPromptTemplates,
+	type PromptTemplate,
+} from "./prompt-templates.ts";
+import { type AreebResourcePaths, areebResourcePaths } from "./resources.ts";
+import {
+	expandSkillInvocation,
+	isSkillDirective,
+	loadSkills,
+	type Skill,
+} from "./skills.ts";
 import { createCodingTools } from "./tools/index.ts";
 
 export interface CodingSessionConfig<
@@ -33,6 +45,10 @@ export interface CodingSessionConfig<
 	readonly messageConverter?: AgentMessageConverter;
 	readonly steeringMode?: QueueMode;
 	readonly followUpMode?: QueueMode;
+	/** Override the default ~/.areeb and <cwd>/.areeb resource paths. */
+	readonly resourcePaths?: AreebResourcePaths;
+	/** Project resources are ignored unless the caller explicitly trusts them. */
+	readonly trustProjectResources?: boolean;
 }
 
 export interface CommandResult {
@@ -59,6 +75,8 @@ export class CodingSession<
 		private readonly sessionModel: string,
 		private readonly sessionReasoning: ReasoningLevel,
 		private readonly activeTools: readonly AgentTool[],
+		private readonly loadedSkills: readonly Skill[],
+		private readonly loadedPromptTemplates: readonly PromptTemplate[],
 	) {}
 
 	static async load<TMetadata extends SessionMetadata = SessionMetadata>(
@@ -67,6 +85,18 @@ export class CodingSession<
 		validateConfig(config);
 
 		const metadata = await config.session.getMetadata();
+		const resourcePaths =
+			config.resourcePaths ?? areebResourcePaths({ cwd: metadata.cwd });
+		const skillDirectories = [resourcePaths.userSkills];
+		const promptDirectories = [resourcePaths.userPrompts];
+		if (config.trustProjectResources === true) {
+			skillDirectories.push(resourcePaths.projectSkills);
+			promptDirectories.push(resourcePaths.projectPrompts);
+		}
+		const [skills, promptTemplates] = await Promise.all([
+			loadSkills(skillDirectories),
+			loadPromptTemplates(promptDirectories),
+		]);
 		let context = await config.session.buildContext();
 		const availableTools =
 			config.tools === undefined
@@ -156,6 +186,8 @@ export class CodingSession<
 			model.model,
 			context.reasoning,
 			tools,
+			skills,
+			promptTemplates,
 		);
 		codingSession.attachPersistence();
 		return codingSession;
@@ -181,6 +213,14 @@ export class CodingSession<
 		return [...this.activeTools];
 	}
 
+	get skills(): readonly Skill[] {
+		return this.loadedSkills.map((skill) => ({ ...skill }));
+	}
+
+	get promptTemplates(): readonly PromptTemplate[] {
+		return this.loadedPromptTemplates.map((template) => ({ ...template }));
+	}
+
 	get isRunning(): boolean {
 		return this.harness.isRunning;
 	}
@@ -189,7 +229,9 @@ export class CodingSession<
 		input: string | AgentMessage | readonly AgentMessage[],
 	): AgentRunStream {
 		this.assertPersistenceHealthy();
-		return this.harness.prompt(input);
+		return this.harness.prompt(
+			typeof input === "string" ? this.expandPrompt(input) : input,
+		);
 	}
 
 	continue(): AgentRunStream {
@@ -210,7 +252,7 @@ export class CodingSession<
 	steer(input: string | AgentMessage): QueuedMessages {
 		this.assertPersistenceHealthy();
 		return typeof input === "string"
-			? this.harness.steer(input)
+			? this.harness.steer(this.expandPrompt(input))
 			: this.harness.steer(input);
 	}
 
@@ -219,7 +261,7 @@ export class CodingSession<
 	followUp(input: string | AgentMessage): QueuedMessages {
 		this.assertPersistenceHealthy();
 		return typeof input === "string"
-			? this.harness.followUp(input)
+			? this.harness.followUp(this.expandPrompt(input))
 			: this.harness.followUp(input);
 	}
 
@@ -237,12 +279,21 @@ export class CodingSession<
 				};
 			case "/exit":
 				return { handled: true, exitRequested: true };
-			default:
-				return {
-					handled: true,
-					message: `Unknown command: ${command}`,
-				};
 		}
+
+		if (
+			isSkillDirective(input) ||
+			this.loadedPromptTemplates.some((template) =>
+				isTemplateDirective(input, template.name),
+			)
+		) {
+			return { handled: false };
+		}
+
+		return {
+			handled: true,
+			message: `Unknown command: ${command}`,
+		};
 	}
 
 	private attachPersistence(): void {
@@ -267,6 +318,13 @@ export class CodingSession<
 				{ cause: this.persistenceFailure },
 			);
 		}
+	}
+
+	private expandPrompt(input: string): string {
+		const skillExpansion = expandSkillInvocation(input, this.loadedSkills);
+		return skillExpansion === input
+			? expandPromptTemplateInvocation(input, this.loadedPromptTemplates)
+			: skillExpansion;
 	}
 }
 
@@ -347,4 +405,12 @@ function isReasoningLevel(value: unknown): value is ReasoningLevel {
 		value === "high" ||
 		value === "xhigh"
 	);
+}
+
+function isTemplateDirective(input: string, name: string): boolean {
+	if (!input.startsWith(`/${name}`)) {
+		return false;
+	}
+	const nextCharacter = input[name.length + 1];
+	return nextCharacter === undefined || /\s/.test(nextCharacter);
 }

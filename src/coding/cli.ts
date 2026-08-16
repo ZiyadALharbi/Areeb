@@ -1,11 +1,11 @@
 #!/usr/bin/env bun
 
 import { parseArgs } from "node:util";
-import { AgentHarness } from "../agent/harness.ts";
+import { MemorySessionRepository } from "../agent/session/memory.ts";
 import type { AgentEndReason } from "../agent/types.ts";
 import { openAICompatibleConfigFromEnv } from "../ai/environment.ts";
 import { OpenAICompatibleProvider } from "../ai/openai_compatible_provider.ts";
-import { createCodingTools } from "./tools/index.ts";
+import { CodingSession } from "./session.ts";
 
 const USAGE = `Usage: areeb -p <prompt> [--model <model>]
 
@@ -62,8 +62,9 @@ function systemPrompt(cwd: string): string {
 async function runPrintMode(prompt: string, model: string): Promise<void> {
 	const cwd = process.cwd();
 	const providerConfig = openAICompatibleConfigFromEnv();
-
-	const harness = new AgentHarness({
+	const session = await new MemorySessionRepository().create({ cwd });
+	const coding = await CodingSession.load({
+		session,
 		provider: new OpenAICompatibleProvider({
 			...providerConfig,
 			compat: {
@@ -71,16 +72,15 @@ async function runPrintMode(prompt: string, model: string): Promise<void> {
 			},
 		}),
 		model,
+		reasoning: "off",
 		systemPrompt: systemPrompt(cwd),
-		tools: createCodingTools(cwd),
-		streamOptions: { reasoning: "off" },
 	});
-	const stream = harness.prompt(prompt);
+	const stream = coding.prompt(prompt);
 	let endReason: AgentEndReason | undefined;
 	let providerError: string | undefined;
 	let messageHasText = false;
 	let outputEndsWithNewline = true;
-	const interrupt = () => harness.abort();
+	const interrupt = () => coding.abort();
 	process.once("SIGINT", interrupt);
 
 	try {
