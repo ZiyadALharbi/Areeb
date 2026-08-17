@@ -82,17 +82,28 @@ export function buildSkillIndex(skills: readonly Skill[]): string {
 		return "";
 	}
 
-	const entries = [...skills]
-		.sort(
-			(left, right) =>
-				left.name.localeCompare(right.name) ||
-				left.filePath.localeCompare(right.filePath),
-		)
-		.map(
-			(skill) =>
-				`- <skill name="${escapeXml(skill.name)}" location="${escapeXml(skill.filePath)}">${escapeXml(skill.description)}</skill>`,
+	const lines = [
+		"The following skills provide specialized instructions for specific tasks.",
+		"Use the read tool to load a skill's file when the task matches its description.",
+		"When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
+		"",
+		"<available_skills>",
+	];
+	for (const skill of [...skills].sort(
+		(left, right) =>
+			left.name.localeCompare(right.name) ||
+			left.filePath.localeCompare(right.filePath),
+	)) {
+		lines.push("  <skill>");
+		lines.push(`    <name>${escapeXml(skill.name)}</name>`);
+		lines.push(
+			`    <description>${escapeXml(skill.description)}</description>`,
 		);
-	return `Available skills:\n${entries.join("\n")}`;
+		lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
+		lines.push("  </skill>");
+	}
+	lines.push("</available_skills>");
+	return lines.join("\n");
 }
 
 export function isSkillDirective(input: string): boolean {
@@ -224,7 +235,8 @@ function escapeXml(value: string): string {
 		.replaceAll("&", "&amp;")
 		.replaceAll('"', "&quot;")
 		.replaceAll("<", "&lt;")
-		.replaceAll(">", "&gt;");
+		.replaceAll(">", "&gt;")
+		.replaceAll("'", "&apos;");
 }
 
 function isMissing(error: unknown): boolean {

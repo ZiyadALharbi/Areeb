@@ -1,3 +1,8 @@
+export type {
+	BuildSystemPromptOptions,
+	ProjectContextFile,
+} from "./prompt-builder.ts";
+export { buildSystemPrompt } from "./prompt-builder.ts";
 export type { PromptTemplate } from "./prompt-templates.ts";
 export {
 	expandPromptTemplateInvocation,

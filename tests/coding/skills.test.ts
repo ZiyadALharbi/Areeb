@@ -97,8 +97,19 @@ Inspect references/file.md.
 src/app.ts
 carefully`);
 		const index = buildSkillIndex(skills);
-		expect(index).toContain("Review &lt;changes&gt; &amp; report.");
-		expect(index).toContain(join(directory, "review.md"));
+		expect(
+			index,
+		).toBe(`The following skills provide specialized instructions for specific tasks.
+Use the read tool to load a skill's file when the task matches its description.
+When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.
+
+<available_skills>
+  <skill>
+    <name>review</name>
+    <description>Review &lt;changes&gt; &amp; report.</description>
+    <location>${join(directory, "review.md")}</location>
+  </skill>
+</available_skills>`);
 		expect(index).not.toContain("Inspect references/file.md");
 	});
 

@@ -15,6 +15,10 @@ import type {
 import type { ModelProvider } from "../ai/provider_protocol.ts";
 import type { ReasoningLevel } from "../ai/types.ts";
 import {
+	buildSystemPrompt,
+	type ProjectContextFile,
+} from "./prompt-builder.ts";
+import {
 	expandPromptTemplateInvocation,
 	loadPromptTemplates,
 	type PromptTemplate,
@@ -26,7 +30,8 @@ import {
 	loadSkills,
 	type Skill,
 } from "./skills.ts";
-import { createCodingTools } from "./tools/index.ts";
+import { createCodingToolDefinitions } from "./tools/index.ts";
+import { type CodingToolDefinition, createAgentTool } from "./types.ts";
 
 export interface CodingSessionConfig<
 	TMetadata extends SessionMetadata = SessionMetadata,
@@ -37,9 +42,13 @@ export interface CodingSessionConfig<
 	readonly model: string;
 	/** Default reasoning level for a branch that has no stored selection. */
 	readonly reasoning: ReasoningLevel;
-	readonly systemPrompt: string;
+	/** Custom base prompt. Omit to use Areeb's default coding prompt. */
+	readonly systemPrompt?: string;
+	readonly appendSystemPrompt?: string;
+	readonly extraGuidelines?: readonly string[];
+	readonly contextFiles?: readonly ProjectContextFile[];
 	/** Complete available tool set. Omit for the built-in cwd-bound coding tools. */
-	readonly tools?: readonly AgentTool[];
+	readonly tools?: readonly CodingToolDefinition[];
 	readonly timeout?: number;
 	readonly maxTurns?: number;
 	readonly messageConverter?: AgentMessageConverter;
@@ -74,6 +83,7 @@ export class CodingSession<
 		private readonly sessionMetadata: TMetadata,
 		private readonly sessionModel: string,
 		private readonly sessionReasoning: ReasoningLevel,
+		private readonly assembledSystemPrompt: string,
 		private readonly activeTools: readonly AgentTool[],
 		private readonly loadedSkills: readonly Skill[],
 		private readonly loadedPromptTemplates: readonly PromptTemplate[],
@@ -98,11 +108,11 @@ export class CodingSession<
 			loadPromptTemplates(promptDirectories),
 		]);
 		let context = await config.session.buildContext();
-		const availableTools =
+		const availableToolDefinitions =
 			config.tools === undefined
-				? createCodingTools(metadata.cwd)
+				? createCodingToolDefinitions(metadata.cwd)
 				: [...config.tools];
-		validateAvailableTools(availableTools);
+		validateAvailableTools(availableToolDefinitions);
 
 		const hasReasoningEntry =
 			(
@@ -133,7 +143,7 @@ export class CodingSession<
 		if (context.activeToolNames === null) {
 			await config.session.appendEntry({
 				type: "active_tools_change",
-				activeToolNames: availableTools.map((tool) => tool.name),
+				activeToolNames: availableToolDefinitions.map((tool) => tool.name),
 			});
 			initialized = true;
 		}
@@ -149,12 +159,35 @@ export class CodingSession<
 			);
 		}
 
-		const tools = selectActiveTools(availableTools, context.activeToolNames);
+		const activeToolDefinitions = selectActiveTools(
+			availableToolDefinitions,
+			context.activeToolNames,
+		);
+		const systemPrompt = buildSystemPrompt({
+			cwd: metadata.cwd,
+			tools: activeToolDefinitions,
+			skills,
+			...(config.systemPrompt === undefined
+				? {}
+				: { customPrompt: config.systemPrompt }),
+			...(config.appendSystemPrompt === undefined
+				? {}
+				: { appendSystemPrompt: config.appendSystemPrompt }),
+			...(config.extraGuidelines === undefined
+				? {}
+				: { extraGuidelines: config.extraGuidelines }),
+			...(config.contextFiles === undefined
+				? {}
+				: { contextFiles: config.contextFiles }),
+		});
+		const tools = activeToolDefinitions.map((definition) =>
+			createAgentTool(definition),
+		);
 		const harness = new AgentHarness(
 			{
 				provider: config.provider,
 				model: model.model,
-				systemPrompt: config.systemPrompt,
+				systemPrompt,
 				tools,
 				streamOptions: {
 					reasoning: context.reasoning,
@@ -185,6 +218,7 @@ export class CodingSession<
 			metadata,
 			model.model,
 			context.reasoning,
+			systemPrompt,
 			tools,
 			skills,
 			promptTemplates,
@@ -207,6 +241,10 @@ export class CodingSession<
 
 	get reasoning(): ReasoningLevel {
 		return this.sessionReasoning;
+	}
+
+	get systemPrompt(): string {
+		return this.assembledSystemPrompt;
 	}
 
 	get tools(): readonly AgentTool[] {
@@ -344,9 +382,15 @@ function validateConfig(config: CodingSessionConfig): void {
 	if (!isReasoningLevel(config.reasoning)) {
 		throw new Error(`Invalid reasoning level: ${String(config.reasoning)}`);
 	}
+	if (
+		config.systemPrompt !== undefined &&
+		config.systemPrompt.trim().length === 0
+	) {
+		throw new Error("Custom system prompt cannot be empty");
+	}
 }
 
-function validateAvailableTools(tools: readonly AgentTool[]): void {
+function validateAvailableTools(tools: readonly CodingToolDefinition[]): void {
 	const names = new Set<string>();
 	for (const tool of tools) {
 		if (names.has(tool.name)) {
@@ -366,9 +410,9 @@ function requireStoredModel(
 }
 
 function selectActiveTools(
-	availableTools: readonly AgentTool[],
+	availableTools: readonly CodingToolDefinition[],
 	activeToolNames: readonly string[] | null,
-): AgentTool[] {
+): CodingToolDefinition[] {
 	if (activeToolNames === null) {
 		throw new Error(
 			"Session has no active-tool selection after initialization",
@@ -378,7 +422,7 @@ function selectActiveTools(
 	const availableByName = new Map(
 		availableTools.map((tool) => [tool.name, tool]),
 	);
-	const selected: AgentTool[] = [];
+	const selected: CodingToolDefinition[] = [];
 	const selectedNames = new Set<string>();
 
 	for (const name of activeToolNames) {
