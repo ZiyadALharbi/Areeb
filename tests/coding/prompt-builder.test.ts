@@ -62,6 +62,13 @@ Guidelines:
 - Custom rule
 - Extra rule
 - Be concise in your responses
+- Review applicable project instructions and relevant files before making changes
+- Keep changes focused and consistent with the existing architecture and conventions
+- Preserve unrelated work already present in the project
+- Follow the project's documented workflows, commands, and package manager
+- After changing code, run the applicable formatting, linting, type-checking, and test commands
+- Report verification accurately and only claim results from commands you actually ran
+- Request confirmation before destructive actions or decisions with materially unclear requirements
 - Show file paths clearly when working with files
 
 Current working directory: /workspace`);
@@ -77,6 +84,13 @@ Available tools:
 In addition to the tools above, you may have access to other custom tools depending on the project.
 
 Guidelines:
+- Review applicable project instructions and relevant files before making changes
+- Keep changes focused and consistent with the existing architecture and conventions
+- Preserve unrelated work already present in the project
+- Follow the project's documented workflows, commands, and package manager
+- After changing code, run the applicable formatting, linting, type-checking, and test commands
+- Report verification accurately and only claim results from commands you actually ran
+- Request confirmation before destructive actions or decisions with materially unclear requirements
 - Be concise in your responses
 - Show file paths clearly when working with files
 
