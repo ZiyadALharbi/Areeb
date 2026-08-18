@@ -1,6 +1,10 @@
 # Areeb
 
-Areeb is an experimental framework for building coding agents.
+> [!NOTE]
+> Areeb is currently under active development. The first release is planned for the end of August 2026.
+
+
+Areeb is a coding agent and reusable agent runtime.
 
 The project follows a layered architecture with clear separation of concerns. Each layer has a focused responsibility and depends only on the layers below it.
 
