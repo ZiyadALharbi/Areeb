@@ -14,17 +14,19 @@ import type {
 } from "../agent/types.ts";
 import type { ModelProvider } from "../ai/provider_protocol.ts";
 import type { ReasoningLevel } from "../ai/types.ts";
+import { type AreebPaths, areebPaths } from "./paths.ts";
 import {
-	buildSystemPrompt,
+	loadProjectContext,
 	type ProjectContextFile,
-} from "./prompt-builder.ts";
+} from "./project-context.ts";
+import { buildSystemPrompt } from "./prompt-builder.ts";
 import {
 	expandPromptTemplateInvocation,
 	loadPromptTemplates,
 	type PromptTemplate,
 } from "./prompt-templates.ts";
-import { type AreebResourcePaths, areebResourcePaths } from "./resources.ts";
 import {
+	discoverProjectAgentSkillDirectories,
 	expandSkillInvocation,
 	isSkillDirective,
 	loadSkills,
@@ -54,8 +56,8 @@ export interface CodingSessionConfig<
 	readonly messageConverter?: AgentMessageConverter;
 	readonly steeringMode?: QueueMode;
 	readonly followUpMode?: QueueMode;
-	/** Override the default ~/.areeb and <cwd>/.areeb resource paths. */
-	readonly resourcePaths?: AreebResourcePaths;
+	/** Override the canonical user and project resource paths. */
+	readonly resourcePaths?: AreebPaths;
 	/** Project resources are ignored unless the caller explicitly trusts them. */
 	readonly trustProjectResources?: boolean;
 }
@@ -96,16 +98,37 @@ export class CodingSession<
 
 		const metadata = await config.session.getMetadata();
 		const resourcePaths =
-			config.resourcePaths ?? areebResourcePaths({ cwd: metadata.cwd });
-		const skillDirectories = [resourcePaths.userSkills];
+			config.resourcePaths ?? areebPaths({ cwd: metadata.cwd });
+		const skillSources: (
+			| string
+			| {
+					readonly directory: string;
+					readonly layout: "agents";
+			  }
+		)[] = [
+			{ directory: resourcePaths.userAgentSkills, layout: "agents" },
+			resourcePaths.userSkills,
+		];
 		const promptDirectories = [resourcePaths.userPrompts];
 		if (config.trustProjectResources === true) {
-			skillDirectories.push(resourcePaths.projectSkills);
+			for (const directory of await discoverProjectAgentSkillDirectories(
+				metadata.cwd,
+				resourcePaths.userAgentSkills,
+			)) {
+				skillSources.push({ directory, layout: "agents" });
+			}
+			skillSources.push(resourcePaths.projectSkills);
 			promptDirectories.push(resourcePaths.projectPrompts);
 		}
-		const [skills, promptTemplates] = await Promise.all([
-			loadSkills(skillDirectories),
+		const [skills, promptTemplates, projectContextFiles] = await Promise.all([
+			loadSkills(skillSources),
 			loadPromptTemplates(promptDirectories),
+			loadProjectContext({
+				cwd: metadata.cwd,
+				userRoot: resourcePaths.userRoot,
+				trustProjectResources: config.trustProjectResources,
+				contextFiles: config.contextFiles,
+			}),
 		]);
 		let context = await config.session.buildContext();
 		const availableToolDefinitions =
@@ -176,9 +199,7 @@ export class CodingSession<
 			...(config.extraGuidelines === undefined
 				? {}
 				: { extraGuidelines: config.extraGuidelines }),
-			...(config.contextFiles === undefined
-				? {}
-				: { contextFiles: config.contextFiles }),
+			contextFiles: projectContextFiles,
 		});
 		const tools = activeToolDefinitions.map((definition) =>
 			createAgentTool(definition),

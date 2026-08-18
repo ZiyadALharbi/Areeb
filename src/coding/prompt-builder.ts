@@ -1,3 +1,4 @@
+import type { ProjectContextFile } from "./project-context.ts";
 import type { Skill } from "./skills.ts";
 import { buildSkillIndex } from "./skills.ts";
 import type { CodingToolDefinition } from "./types.ts";
@@ -15,11 +16,6 @@ const BASELINE_GUIDELINES = [
 	"Be concise in your responses",
 	"Show file paths clearly when working with files",
 ] as const;
-
-export interface ProjectContextFile {
-	readonly path: string;
-	readonly content: string;
-}
 
 export interface BuildSystemPromptOptions {
 	readonly cwd: string;
@@ -116,7 +112,7 @@ function buildProjectContext(files: readonly ProjectContextFile[]): string {
 	);
 	return `<project_context>
 
-Project-specific instructions and guidelines:
+Project-specific instructions and guidelines. Later files have higher specificity:
 
 ${instructions.join("\n\n")}
 

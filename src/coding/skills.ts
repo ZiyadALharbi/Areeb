@@ -1,6 +1,7 @@
 import type { Dirent } from "node:fs";
-import { readdir, stat } from "node:fs/promises";
+import { readdir, realpath, stat } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
+import { discoverProjectDirectories } from "./project-context.ts";
 import {
 	parseFrontmatter,
 	ResourceError,
@@ -19,30 +20,50 @@ export interface Skill {
 	readonly baseDir: string;
 }
 
-export async function loadSkills(
-	directories: string | readonly string[],
-): Promise<Skill[]> {
-	const skills: Skill[] = [];
-	const byName = new Map<string, Skill>();
+export type SkillLayout = "areeb" | "agents";
 
-	for (const directory of typeof directories === "string"
-		? [directories]
-		: directories) {
-		for (const candidate of await discoverSkillFiles(directory)) {
+export interface SkillSource {
+	readonly directory: string;
+	readonly layout: SkillLayout;
+}
+
+export async function loadSkills(
+	sources: string | SkillSource | readonly (string | SkillSource)[],
+): Promise<Skill[]> {
+	const byName = new Map<string, Skill>();
+	const canonicalFiles = new Set<string>();
+	const sourceList = (
+		Array.isArray(sources) ? sources : [sources]
+	) as readonly (string | SkillSource)[];
+
+	for (const sourceInput of sourceList) {
+		const source =
+			typeof sourceInput === "string"
+				? { directory: sourceInput, layout: "areeb" as const }
+				: sourceInput;
+		const sourceByName = new Map<string, Skill>();
+		for (const candidate of await discoverSkillFiles(source)) {
+			const canonicalPath = await canonicalSkillPath(candidate.filePath);
+			if (canonicalFiles.has(canonicalPath)) {
+				continue;
+			}
+			canonicalFiles.add(canonicalPath);
 			const skill = await loadSkill(candidate.filePath, candidate.derivedName);
-			const duplicate = byName.get(skill.name);
+			const duplicate = sourceByName.get(skill.name);
 			if (duplicate) {
 				throw new ResourceError(
 					`Duplicate skill "${skill.name}"; first loaded from ${duplicate.filePath}`,
 					skill.filePath,
 				);
 			}
+			sourceByName.set(skill.name, skill);
+		}
+		for (const skill of sourceByName.values()) {
 			byName.set(skill.name, skill);
-			skills.push(skill);
 		}
 	}
 
-	return skills.sort(
+	return [...byName.values()].sort(
 		(left, right) =>
 			left.name.localeCompare(right.name) ||
 			left.filePath.localeCompare(right.filePath),
@@ -121,7 +142,25 @@ interface SkillCandidate {
 	readonly derivedName: string;
 }
 
+export async function discoverProjectAgentSkillDirectories(
+	cwd: string,
+	userAgentSkills: string,
+): Promise<string[]> {
+	const excludedDirectory = resolve(userAgentSkills);
+	return (await discoverProjectDirectories(cwd))
+		.map((directory) => join(directory, ".agents", "skills"))
+		.filter((directory) => resolve(directory) !== excludedDirectory);
+}
+
 async function discoverSkillFiles(
+	source: SkillSource,
+): Promise<SkillCandidate[]> {
+	return source.layout === "agents"
+		? discoverAgentSkillFiles(source.directory)
+		: discoverAreebSkillFiles(source.directory);
+}
+
+async function discoverAreebSkillFiles(
 	directory: string,
 ): Promise<SkillCandidate[]> {
 	const absoluteDirectory = resolve(directory);
@@ -145,35 +184,139 @@ async function discoverSkillFiles(
 	for (const entry of entries.sort((left, right) =>
 		left.name.localeCompare(right.name),
 	)) {
-		if (entry.isFile() && extname(entry.name) === ".md") {
+		const entryPath = join(absoluteDirectory, entry.name);
+		if (extname(entry.name) === ".md") {
+			const metadata = await inspectSkillPath(
+				entryPath,
+				entry.isSymbolicLink(),
+			);
+			if (!metadata?.isFile()) {
+				continue;
+			}
 			candidates.push({
-				filePath: join(absoluteDirectory, entry.name),
+				filePath: entryPath,
 				derivedName: basename(entry.name, ".md"),
 			});
 			continue;
 		}
-		if (!entry.isDirectory()) {
+
+		const entryMetadata = await inspectSkillPath(
+			entryPath,
+			entry.isSymbolicLink(),
+		);
+		if (!(entry.isDirectory() || entryMetadata?.isDirectory())) {
 			continue;
 		}
 
-		const filePath = join(absoluteDirectory, entry.name, "SKILL.md");
-		let isFile: boolean;
-		try {
-			isFile = (await stat(filePath)).isFile();
-		} catch (error) {
-			if (isMissing(error)) {
-				continue;
-			}
-			throw new ResourceError("Unable to inspect skill", filePath, {
-				cause: error,
-			});
+		const filePath = join(entryPath, "SKILL.md");
+		const metadata = await inspectSkillPath(filePath, true);
+		if (metadata === undefined) {
+			continue;
 		}
-		if (!isFile) {
+		if (!metadata.isFile()) {
 			throw new ResourceError("Skill resource is not a file", filePath);
 		}
 		candidates.push({ filePath, derivedName: entry.name });
 	}
 	return candidates;
+}
+
+async function discoverAgentSkillFiles(
+	directory: string,
+): Promise<SkillCandidate[]> {
+	const absoluteDirectory = resolve(directory);
+	let entries: Dirent<string>[];
+	try {
+		entries = await readdir(absoluteDirectory, { withFileTypes: true });
+	} catch (error) {
+		if (isMissing(error)) {
+			return [];
+		}
+		throw new ResourceError(
+			"Unable to list skills directory",
+			absoluteDirectory,
+			{ cause: error },
+		);
+	}
+
+	const candidates: SkillCandidate[] = [];
+	const visitedDirectories = new Set<string>();
+	for (const entry of entries.sort((left, right) =>
+		left.name.localeCompare(right.name),
+	)) {
+		const entryPath = join(absoluteDirectory, entry.name);
+		const metadata = await inspectSkillPath(entryPath, entry.isSymbolicLink());
+		if (entry.isDirectory() || metadata?.isDirectory()) {
+			await walkAgentSkillDirectory(entryPath, visitedDirectories, candidates);
+		}
+	}
+	return candidates;
+}
+
+async function walkAgentSkillDirectory(
+	directory: string,
+	visitedDirectories: Set<string>,
+	candidates: SkillCandidate[],
+): Promise<void> {
+	const canonicalDirectory = await canonicalSkillPath(directory);
+	if (visitedDirectories.has(canonicalDirectory)) {
+		return;
+	}
+	visitedDirectories.add(canonicalDirectory);
+
+	let entries: Dirent<string>[];
+	try {
+		entries = await readdir(directory, { withFileTypes: true });
+	} catch (error) {
+		throw new ResourceError("Unable to list skills directory", directory, {
+			cause: error,
+		});
+	}
+	entries.sort((left, right) => left.name.localeCompare(right.name));
+
+	if (entries.some((entry) => entry.name === "SKILL.md")) {
+		const filePath = join(directory, "SKILL.md");
+		const metadata = await inspectSkillPath(filePath, false);
+		if (!metadata?.isFile()) {
+			throw new ResourceError("Skill resource is not a file", filePath);
+		}
+		candidates.push({ filePath, derivedName: basename(directory) });
+		return;
+	}
+
+	for (const entry of entries) {
+		const entryPath = join(directory, entry.name);
+		const metadata = await inspectSkillPath(entryPath, entry.isSymbolicLink());
+		if (entry.isDirectory() || metadata?.isDirectory()) {
+			await walkAgentSkillDirectory(entryPath, visitedDirectories, candidates);
+		}
+	}
+}
+
+async function inspectSkillPath(
+	filePath: string,
+	allowMissing: boolean,
+): Promise<Awaited<ReturnType<typeof stat>> | undefined> {
+	try {
+		return await stat(filePath);
+	} catch (error) {
+		if (allowMissing && isMissing(error)) {
+			return undefined;
+		}
+		throw new ResourceError("Unable to inspect skill", filePath, {
+			cause: error,
+		});
+	}
+}
+
+async function canonicalSkillPath(filePath: string): Promise<string> {
+	try {
+		return await realpath(filePath);
+	} catch (error) {
+		throw new ResourceError("Unable to resolve skill path", filePath, {
+			cause: error,
+		});
+	}
 }
 
 async function loadSkill(

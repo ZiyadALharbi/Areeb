@@ -26,7 +26,7 @@ import type {
 	ToolCall,
 	UserMessage,
 } from "../../src/ai/types.ts";
-import { areebResourcePaths } from "../../src/coding/resources.ts";
+import { areebPaths } from "../../src/coding/paths.ts";
 import {
 	CodingSession,
 	type CodingSessionConfig,
@@ -46,6 +46,11 @@ const EMPTY_USAGE = {
 	cacheWriteTokens: 0,
 	totalTokens: 0,
 };
+const EMPTY_RESOURCE_PATHS = areebPaths({
+	cwd: "/workspace",
+	userRoot: join(tmpdir(), `areeb-tests-${process.pid}-missing-user`),
+	agentsRoot: join(tmpdir(), `areeb-tests-${process.pid}-missing-agents`),
+});
 
 function user(text: string, timestamp = 1): UserMessage {
 	return {
@@ -140,6 +145,7 @@ function config<TMetadata extends SessionMetadata>(
 		model: "default-model",
 		reasoning: "low",
 		systemPrompt: "You are Areeb.",
+		resourcePaths: EMPTY_RESOURCE_PATHS,
 		...overrides,
 	};
 }
@@ -609,21 +615,50 @@ describe("CodingSession commands and queues", () => {
 		const directory = await mkdtemp(join(tmpdir(), "areeb-session-resources-"));
 		try {
 			const cwd = join(directory, "project");
-			const paths = areebResourcePaths({
+			const paths = areebPaths({
 				cwd,
 				userRoot: join(directory, "user"),
+				agentsRoot: join(directory, "agents"),
+			});
+			await mkdir(join(paths.userAgentSkills, "shared"), { recursive: true });
+			await mkdir(join(paths.projectAgentSkills, "shared"), {
+				recursive: true,
 			});
 			await mkdir(paths.userSkills, { recursive: true });
+			await mkdir(paths.userPrompts, { recursive: true });
 			await mkdir(paths.projectSkills, { recursive: true });
 			await mkdir(paths.projectPrompts, { recursive: true });
+			await writeFile(join(paths.userRoot, "AGENTS.md"), "User context.");
+			await writeFile(join(cwd, "AGENTS.md"), "Project context.");
+			await writeFile(
+				join(paths.userAgentSkills, "shared", "SKILL.md"),
+				"---\ndescription: User shared skill.\n---\nUser agents body.",
+			);
 			await writeFile(
 				join(paths.userSkills, "review.md"),
 				"---\ndescription: Review code.\n---\nReview carefully.",
 			);
+			await writeFile(
+				join(paths.userSkills, "shared.md"),
+				"---\ndescription: User Areeb override.\n---\nUser Areeb body.",
+			);
+			await writeFile(join(paths.userPrompts, "shared.md"), "User prompt.");
+			await writeFile(
+				join(paths.projectAgentSkills, "shared", "SKILL.md"),
+				"---\ndescription: Project shared skill.\n---\nProject agents body.",
+			);
 			await writeFile(join(paths.projectPrompts, "private.md"), "Private.");
+			await writeFile(
+				join(paths.projectPrompts, "shared.md"),
+				"Project prompt.",
+			);
 			await writeFile(
 				join(paths.projectSkills, "private.md"),
 				"---\ndescription: Project-only instructions.\n---\nPrivate skill.",
+			);
+			await writeFile(
+				join(paths.projectSkills, "shared.md"),
+				"---\ndescription: Project Areeb override.\n---\nProject Areeb body.",
 			);
 
 			const session = await createMemorySession(cwd);
@@ -631,18 +666,35 @@ describe("CodingSession commands and queues", () => {
 				config(session, new FakeProvider([]), {
 					systemPrompt: undefined,
 					resourcePaths: paths,
+					contextFiles: [{ path: "explicit", content: "Explicit context." }],
 				}),
 			);
-			expect(coding.skills.map((skill) => skill.name)).toEqual(["review"]);
-			expect(coding.promptTemplates).toEqual([]);
+			expect(coding.skills.map((skill) => skill.name)).toEqual([
+				"review",
+				"shared",
+			]);
+			expect(
+				coding.skills.find((skill) => skill.name === "shared")?.content,
+			).toBe("User Areeb body.");
+			expect(coding.promptTemplates.map((template) => template.name)).toEqual([
+				"shared",
+			]);
 			expect(coding.systemPrompt).toContain("<name>review</name>");
 			expect(coding.systemPrompt).not.toContain("<name>private</name>");
+			expect(coding.systemPrompt).toContain("User context.");
+			expect(coding.systemPrompt).not.toContain("Project context.");
+			expect(coding.systemPrompt.indexOf("User context.")).toBeLessThan(
+				coding.systemPrompt.indexOf("Explicit context."),
+			);
 
 			await writeFile(
 				join(paths.userSkills, "later.md"),
 				"---\ndescription: Loaded after reopen.\n---\nLater body.",
 			);
-			expect(coding.skills.map((skill) => skill.name)).toEqual(["review"]);
+			expect(coding.skills.map((skill) => skill.name)).toEqual([
+				"review",
+				"shared",
+			]);
 			const exposed = coding.skills;
 			(exposed[0] as { name: string }).name = "changed";
 			expect(coding.skills[0]?.name).toBe("review");
@@ -653,17 +705,79 @@ describe("CodingSession commands and queues", () => {
 					systemPrompt: undefined,
 					resourcePaths: paths,
 					trustProjectResources: true,
+					contextFiles: [{ path: "explicit", content: "Explicit context." }],
 				}),
 			);
 			expect(trusted.skills.map((skill) => skill.name)).toEqual([
 				"later",
 				"private",
 				"review",
+				"shared",
 			]);
+			expect(
+				trusted.skills.find((skill) => skill.name === "shared")?.content,
+			).toBe("Project Areeb body.");
 			expect(trusted.systemPrompt).toContain("<name>private</name>");
+			expect(trusted.systemPrompt).toContain("Project context.");
+			expect(trusted.systemPrompt.indexOf("Project context.")).toBeLessThan(
+				trusted.systemPrompt.indexOf("Explicit context."),
+			);
 			expect(trusted.promptTemplates.map((template) => template.name)).toEqual([
 				"private",
+				"shared",
 			]);
+			expect(
+				trusted.promptTemplates.find((template) => template.name === "shared")
+					?.content,
+			).toBe("Project prompt.");
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	test("does not read malformed project resources while untrusted", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "areeb-session-trust-"));
+		try {
+			const cwd = join(directory, "project");
+			const paths = areebPaths({
+				cwd,
+				userRoot: join(directory, "user"),
+				agentsRoot: join(directory, "agents"),
+			});
+			await mkdir(join(paths.projectAgentSkills, "invalid"), {
+				recursive: true,
+			});
+			await mkdir(paths.projectSkills, { recursive: true });
+			await mkdir(paths.projectPrompts, { recursive: true });
+			await writeFile(
+				join(paths.projectAgentSkills, "invalid", "SKILL.md"),
+				"Missing required metadata.",
+			);
+			await writeFile(
+				join(paths.projectSkills, "invalid.md"),
+				"Missing required metadata.",
+			);
+			await writeFile(join(paths.projectPrompts, "help.md"), "Reserved.");
+			await mkdir(join(cwd, "AGENTS.override.md"));
+
+			const untrustedSession = await createMemorySession(cwd);
+			await expect(
+				CodingSession.load(
+					config(untrustedSession, new FakeProvider([]), {
+						resourcePaths: paths,
+					}),
+				),
+			).resolves.toBeInstanceOf(CodingSession);
+
+			const trustedSession = await createMemorySession(cwd);
+			await expect(
+				CodingSession.load(
+					config(trustedSession, new FakeProvider([]), {
+						resourcePaths: paths,
+						trustProjectResources: true,
+					}),
+				),
+			).rejects.toThrow();
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}
@@ -673,9 +787,10 @@ describe("CodingSession commands and queues", () => {
 		const directory = await mkdtemp(join(tmpdir(), "areeb-session-expansion-"));
 		try {
 			const cwd = join(directory, "project");
-			const paths = areebResourcePaths({
+			const paths = areebPaths({
 				cwd,
 				userRoot: join(directory, "user"),
+				agentsRoot: join(directory, "agents"),
 			});
 			await mkdir(paths.userSkills, { recursive: true });
 			await mkdir(paths.userPrompts, { recursive: true });
@@ -753,7 +868,7 @@ Appended instructions
 
 <project_context>
 
-Project-specific instructions and guidelines:
+Project-specific instructions and guidelines. Later files have higher specificity:
 
 <project_instructions path="/repo/a&amp;&quot;.md">
 Trusted context

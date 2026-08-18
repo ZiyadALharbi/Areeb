@@ -1,8 +1,15 @@
 export * from "./modes/index.ts";
+export type { AreebPathOptions, AreebPaths } from "./paths.ts";
+export { areebPaths } from "./paths.ts";
 export type {
-	BuildSystemPromptOptions,
+	LoadProjectContextOptions,
 	ProjectContextFile,
-} from "./prompt-builder.ts";
+} from "./project-context.ts";
+export {
+	discoverProjectDirectories,
+	loadProjectContext,
+} from "./project-context.ts";
+export type { BuildSystemPromptOptions } from "./prompt-builder.ts";
 export { buildSystemPrompt } from "./prompt-builder.ts";
 export type { PromptTemplate } from "./prompt-templates.ts";
 export {
@@ -10,13 +17,8 @@ export {
 	loadPromptTemplates,
 	renderPromptTemplate,
 } from "./prompt-templates.ts";
-export type {
-	AreebResourcePathOptions,
-	AreebResourcePaths,
-	ParsedFrontmatter,
-} from "./resources.ts";
+export type { ParsedFrontmatter } from "./resources.ts";
 export {
-	areebResourcePaths,
 	MAX_RESOURCE_BYTES,
 	parseFrontmatter,
 	parseMarkdownFrontmatter,
@@ -25,9 +27,10 @@ export {
 } from "./resources.ts";
 export type { CodingSessionConfig, CommandResult } from "./session.ts";
 export { CodingSession } from "./session.ts";
-export type { Skill } from "./skills.ts";
+export type { Skill, SkillLayout, SkillSource } from "./skills.ts";
 export {
 	buildSkillIndex,
+	discoverProjectAgentSkillDirectories,
 	expandSkillInvocation,
 	isSkillDirective,
 	loadSkills,

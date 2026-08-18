@@ -8,12 +8,13 @@ import { runPrintMode } from "./modes/print-mode.ts";
 import { isPrintOutputMode, type PrintOutputMode } from "./modes/types.ts";
 import { CodingSession } from "./session.ts";
 
-export const USAGE = `Usage: areeb -p <prompt> [--model <model>] [--output <mode>]
+export const USAGE = `Usage: areeb -p <prompt> [--model <model>] [--output <mode>] [--trust-project]
 
 Options:
   -p, --prompt <prompt>  Run one prompt in print mode
       --model <model>    Override OPENAI_MODEL
       --output <mode>    Output mode: text, json, or transcript (default: text)
+      --trust-project    Load project-controlled resources and instructions
   -h, --help             Show this help
 
 Environment: OPENAI_API_KEY, OPENAI_MODEL, and optional OPENAI_BASE_URL
@@ -23,6 +24,7 @@ export interface CliOptions {
 	readonly prompt: string;
 	readonly model: string;
 	readonly output: PrintOutputMode;
+	readonly trustProjectResources: boolean;
 }
 
 /** Parse one-shot CLI options. Undefined represents the help short-circuit. */
@@ -33,6 +35,7 @@ export function parseCli(args: string[]): CliOptions | undefined {
 			prompt: { type: "string", short: "p" },
 			model: { type: "string" },
 			output: { type: "string" },
+			"trust-project": { type: "boolean" },
 			help: { type: "boolean", short: "h" },
 		},
 		allowPositionals: true,
@@ -65,7 +68,12 @@ export function parseCli(args: string[]): CliOptions | undefined {
 		throw new Error("Missing model. Use --model or set OPENAI_MODEL.");
 	}
 
-	return { prompt: values.prompt, model, output };
+	return {
+		prompt: values.prompt,
+		model,
+		output,
+		trustProjectResources: values["trust-project"] ?? false,
+	};
 }
 
 /** Build the ephemeral coding session and delegate output policy to print mode. */
@@ -90,6 +98,7 @@ export async function runCli(args = Bun.argv.slice(2)): Promise<number> {
 			}),
 			model: options.model,
 			reasoning: "off",
+			trustProjectResources: options.trustProjectResources,
 		});
 		return runPrintMode(coding, options.prompt, { output: options.output });
 	} catch (error) {
