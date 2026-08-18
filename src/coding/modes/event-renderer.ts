@@ -8,6 +8,7 @@ import type {
 	PrintOutputMode,
 } from "./types.ts";
 
+/** Select an output policy while keeping all terminal I/O outside the agent core. */
 export function createEventRenderer(
 	output: PrintOutputMode = "text",
 	options: EventRendererOptions = {},
@@ -33,6 +34,7 @@ function createTextRenderer(
 ): EventRenderer {
 	return {
 		async render(event) {
+			// Text mode intentionally ignores every intermediate turn and tool event.
 			if (event.type !== "agent_end" || event.reason !== "completed") {
 				return;
 			}
@@ -63,6 +65,7 @@ function createJsonRenderer(
 			if (serialized === undefined) {
 				throw new Error(`Cannot serialize agent event: ${event.type}`);
 			}
+			// A complete record is one awaited write, preserving strict JSON Lines.
 			await stdout.write(`${serialized}\n`);
 		},
 		flush: () => flushWriters(stdout, stderr),
@@ -73,6 +76,8 @@ function createTranscriptRenderer(
 	stdout: AsyncWriter,
 	stderr: AsyncWriter,
 ): EventRenderer {
+	// Transcript mode receives deltas, so it tracks only the newline state that
+	// cannot be recovered from an individual event.
 	let messageHasText = false;
 	let outputEndsWithNewline = true;
 
@@ -100,6 +105,7 @@ function createTranscriptRenderer(
 			}
 		},
 		async flush() {
+			// A stream or persistence failure can occur before message_end arrives.
 			await finishAssistantMessage();
 			await flushWriters(stdout, stderr);
 		},

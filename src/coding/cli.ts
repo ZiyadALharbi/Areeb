@@ -25,6 +25,7 @@ export interface CliOptions {
 	readonly output: PrintOutputMode;
 }
 
+/** Parse one-shot CLI options. Undefined represents the help short-circuit. */
 export function parseCli(args: string[]): CliOptions | undefined {
 	const { values, positionals } = parseArgs({
 		args,
@@ -67,6 +68,7 @@ export function parseCli(args: string[]): CliOptions | undefined {
 	return { prompt: values.prompt, model, output };
 }
 
+/** Build the ephemeral coding session and delegate output policy to print mode. */
 export async function runCli(args = Bun.argv.slice(2)): Promise<number> {
 	try {
 		const options = parseCli(args);

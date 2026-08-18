@@ -8,6 +8,10 @@ import type {
 	PrintModeSession,
 } from "./types.ts";
 
+/**
+ * Consume one prompt, render every event in order, and return a process exit
+ * code. The caller owns process.exitCode so this runner remains reusable.
+ */
 export async function runPrintMode(
 	session: PrintModeSession,
 	prompt: string,
@@ -29,6 +33,8 @@ export async function runPrintMode(
 		session.abort();
 	};
 
+	// Register before prompt() so an immediately delivered SIGINT cannot leave a
+	// provider run without a cancellation path.
 	signalTarget.once("SIGINT", interrupt);
 	try {
 		const stream = session.prompt(prompt);
@@ -38,6 +44,8 @@ export async function runPrintMode(
 
 		for await (const event of stream) {
 			if (event.type === "agent_end") {
+				// The stream itself is generic and does not enforce an agent terminal
+				// event, so print mode validates that invariant explicitly.
 				if (terminalEvent) {
 					throw new Error("Agent emitted more than one terminal event");
 				}
@@ -61,6 +69,8 @@ export async function runPrintMode(
 		await writeDiagnostic(stderr, diagnostic);
 	}
 
+	// Flush even after stream or rendering failures so already accepted output
+	// and the terminal diagnostic are not abandoned in process buffers.
 	try {
 		await renderer.flush();
 	} catch (error) {
@@ -72,6 +82,7 @@ export async function runPrintMode(
 	return exitCode;
 }
 
+/** Map expected agent outcomes separately from event formatting. */
 function outcomeFor(event: Extract<AgentEvent, { type: "agent_end" }>): {
 	exitCode: number;
 	diagnostic?: string;

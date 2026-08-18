@@ -3,6 +3,7 @@ import type { AsyncWriter } from "./types.ts";
 
 const WRITE_RETRY_DELAY_MS = 10;
 
+/** Adapt a Node writable without closing process-owned stdout or stderr. */
 export function createOutputWriter(stream: Writable): AsyncWriter {
 	return {
 		write: (content) => writeToStream(stream, content),
@@ -20,6 +21,8 @@ async function writeToStream(stream: Writable, content: string): Promise<void> {
 			if (!isRetryableWriteError(writeError)) {
 				throw writeError;
 			}
+			// These codes represent temporary buffer pressure rather than a broken
+			// destination, so retry the same complete record after a short delay.
 			await new Promise<void>((resolve) =>
 				setTimeout(resolve, WRITE_RETRY_DELAY_MS),
 			);
@@ -29,6 +32,8 @@ async function writeToStream(stream: Writable, content: string): Promise<void> {
 
 function writeChunk(stream: Writable, content: string): Promise<void> {
 	return new Promise((resolve, reject) => {
+		// The callback settles only after Node has accepted the complete chunk.
+		// Renderers await it, preventing records from interleaving.
 		const finish = (error?: Error | null): void => {
 			if (error) {
 				reject(error);
@@ -56,6 +61,7 @@ function waitForDrain(stream: Writable): Promise<void> {
 	}
 
 	return new Promise((resolve, reject) => {
+		// Do not end process-owned streams; draining is the final-flush boundary.
 		const cleanup = (): void => {
 			stream.off("drain", onDrain);
 			stream.off("error", onError);
