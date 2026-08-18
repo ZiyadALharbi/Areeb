@@ -7,13 +7,30 @@ describe("print-mode CLI parsing", () => {
 			prompt: "hello",
 			model: "fake",
 			output: "text",
+			trustProjectResources: false,
 		});
 
 		for (const output of ["text", "json", "transcript"] as const) {
 			expect(
 				parseCli(["--prompt", "hello", "--model", "fake", "--output", output]),
-			).toEqual({ prompt: "hello", model: "fake", output });
+			).toEqual({
+				prompt: "hello",
+				model: "fake",
+				output,
+				trustProjectResources: false,
+			});
 		}
+	});
+
+	test("parses explicit project trust", () => {
+		expect(
+			parseCli(["-p", "hello", "--model", "fake", "--trust-project"]),
+		).toEqual({
+			prompt: "hello",
+			model: "fake",
+			output: "text",
+			trustProjectResources: true,
+		});
 	});
 
 	test("rejects invalid and missing output values", () => {

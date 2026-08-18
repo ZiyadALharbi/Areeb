@@ -1,24 +1,8 @@
 import { readFile, stat } from "node:fs/promises";
-import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 
 /** Maximum UTF-8 size of one skill or prompt-template file. */
 export const MAX_RESOURCE_BYTES = 1024 * 1024;
-
-export interface AreebResourcePaths {
-	readonly userRoot: string;
-	readonly userSkills: string;
-	readonly userPrompts: string;
-	readonly projectRoot: string;
-	readonly projectSkills: string;
-	readonly projectPrompts: string;
-}
-
-export interface AreebResourcePathOptions {
-	readonly cwd?: string;
-	/** The Areeb resource directory itself. Defaults to ~/.areeb. */
-	readonly userRoot?: string;
-}
 
 export interface ParsedFrontmatter {
 	readonly attributes: Readonly<Record<string, string>>;
@@ -36,23 +20,6 @@ export class ResourceError extends Error {
 		this.name = "ResourceError";
 		this.filePath = filePath;
 	}
-}
-
-export function areebResourcePaths(
-	options: AreebResourcePathOptions = {},
-): AreebResourcePaths {
-	const cwd = resolve(options.cwd ?? process.cwd());
-	const userRoot = resolve(options.userRoot ?? join(homedir(), ".areeb"));
-	const projectRoot = join(cwd, ".areeb");
-
-	return Object.freeze({
-		userRoot,
-		userSkills: join(userRoot, "skills"),
-		userPrompts: join(userRoot, "prompts"),
-		projectRoot,
-		projectSkills: join(projectRoot, "skills"),
-		projectPrompts: join(projectRoot, "prompts"),
-	});
 }
 
 /** Parse Areeb's documented frontmatter subset, not general YAML. */

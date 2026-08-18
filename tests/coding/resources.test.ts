@@ -3,7 +3,6 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-	areebResourcePaths,
 	MAX_RESOURCE_BYTES,
 	parseFrontmatter,
 	ResourceError,
@@ -24,25 +23,6 @@ afterEach(async () => {
 			.splice(0)
 			.map((directory) => rm(directory, { recursive: true, force: true })),
 	);
-});
-
-describe("Areeb resource paths", () => {
-	test("uses explicit absolute user and project roots", async () => {
-		const directory = await createTempDirectory();
-		const paths = areebResourcePaths({
-			cwd: join(directory, "project"),
-			userRoot: join(directory, "user-resources"),
-		});
-
-		expect(paths).toEqual({
-			userRoot: join(directory, "user-resources"),
-			userSkills: join(directory, "user-resources", "skills"),
-			userPrompts: join(directory, "user-resources", "prompts"),
-			projectRoot: join(directory, "project", ".areeb"),
-			projectSkills: join(directory, "project", ".areeb", "skills"),
-			projectPrompts: join(directory, "project", ".areeb", "prompts"),
-		});
-	});
 });
 
 describe("resource frontmatter", () => {

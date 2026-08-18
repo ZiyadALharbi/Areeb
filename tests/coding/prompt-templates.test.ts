@@ -47,7 +47,7 @@ describe("prompt template loading", () => {
 		});
 	});
 
-	test("rejects reserved names and duplicates", async () => {
+	test("rejects reserved names and lets later sources replace earlier ones", async () => {
 		const directory = await createTempDirectory();
 		await writeFile(join(directory, "help.md"), "Cannot replace help.");
 		await expect(loadPromptTemplates(directory)).rejects.toThrow("is reserved");
@@ -56,9 +56,10 @@ describe("prompt template loading", () => {
 		const other = await createTempDirectory();
 		await writeFile(join(directory, "review.md"), "First.");
 		await writeFile(join(other, "review.md"), "Second.");
-		await expect(loadPromptTemplates([directory, other])).rejects.toThrow(
-			'Duplicate prompt template "review"',
-		);
+		const templates = await loadPromptTemplates([directory, other]);
+		expect(templates).toHaveLength(1);
+		expect(templates[0]?.content).toBe("Second.");
+		expect(templates[0]?.filePath).toBe(join(other, "review.md"));
 	});
 });
 

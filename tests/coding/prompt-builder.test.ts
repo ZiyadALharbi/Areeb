@@ -116,7 +116,7 @@ Append next
 
 <project_context>
 
-Project-specific instructions and guidelines:
+Project-specific instructions and guidelines. Later files have higher specificity:
 
 <project_instructions path="/repo/a&amp;&quot;&lt;.md">
 first

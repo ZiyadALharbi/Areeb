@@ -1,5 +1,5 @@
 import type { Dirent } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { readdir, realpath, stat } from "node:fs/promises";
 import { basename, extname, join, resolve } from "node:path";
 import {
 	parseFrontmatter,
@@ -23,27 +23,35 @@ export interface PromptTemplate {
 export async function loadPromptTemplates(
 	directories: string | readonly string[],
 ): Promise<PromptTemplate[]> {
-	const templates: PromptTemplate[] = [];
 	const byName = new Map<string, PromptTemplate>();
+	const canonicalFiles = new Set<string>();
 
 	for (const directory of typeof directories === "string"
 		? [directories]
 		: directories) {
+		const sourceByName = new Map<string, PromptTemplate>();
 		for (const filePath of await discoverPromptFiles(directory)) {
+			const canonicalPath = await canonicalPromptPath(filePath);
+			if (canonicalFiles.has(canonicalPath)) {
+				continue;
+			}
+			canonicalFiles.add(canonicalPath);
 			const template = await loadPromptTemplate(filePath);
-			const duplicate = byName.get(template.name);
+			const duplicate = sourceByName.get(template.name);
 			if (duplicate) {
 				throw new ResourceError(
 					`Duplicate prompt template "${template.name}"; first loaded from ${duplicate.filePath}`,
 					template.filePath,
 				);
 			}
+			sourceByName.set(template.name, template);
+		}
+		for (const template of sourceByName.values()) {
 			byName.set(template.name, template);
-			templates.push(template);
 		}
 	}
 
-	return templates.sort(
+	return [...byName.values()].sort(
 		(left, right) =>
 			left.name.localeCompare(right.name) ||
 			left.filePath.localeCompare(right.filePath),
@@ -112,10 +120,30 @@ async function discoverPromptFiles(directory: string): Promise<string[]> {
 		);
 	}
 
-	return entries
-		.filter((entry) => entry.isFile() && extname(entry.name) === ".md")
-		.map((entry) => join(absoluteDirectory, entry.name))
-		.sort((left, right) => left.localeCompare(right));
+	const files: string[] = [];
+	for (const entry of entries.sort((left, right) =>
+		left.name.localeCompare(right.name),
+	)) {
+		if (extname(entry.name) !== ".md") {
+			continue;
+		}
+		const filePath = join(absoluteDirectory, entry.name);
+		let metadata: Awaited<ReturnType<typeof stat>>;
+		try {
+			metadata = await stat(filePath);
+		} catch (error) {
+			if (entry.isSymbolicLink() && isMissing(error)) {
+				continue;
+			}
+			throw new ResourceError("Unable to inspect prompt template", filePath, {
+				cause: error,
+			});
+		}
+		if (metadata.isFile()) {
+			files.push(filePath);
+		}
+	}
+	return files;
 }
 
 async function loadPromptTemplate(filePath: string): Promise<PromptTemplate> {
@@ -187,4 +215,18 @@ function isMissing(error: unknown): boolean {
 		"code" in error &&
 		error.code === "ENOENT"
 	);
+}
+
+async function canonicalPromptPath(filePath: string): Promise<string> {
+	try {
+		return await realpath(filePath);
+	} catch (error) {
+		throw new ResourceError(
+			"Unable to resolve prompt template path",
+			filePath,
+			{
+				cause: error,
+			},
+		);
+	}
 }
