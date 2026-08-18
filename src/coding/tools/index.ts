@@ -1,9 +1,13 @@
 import type { AgentTool } from "../../agent/types.ts";
-import type { CodingToolOptions } from "../types.ts";
-import { createBashTool } from "./bash.ts";
-import { createEditTool } from "./edit.ts";
-import { createReadTool } from "./read.ts";
-import { createWriteTool } from "./write.ts";
+import {
+	type CodingToolDefinition,
+	type CodingToolOptions,
+	createAgentTool,
+} from "../types.ts";
+import { createBashToolDefinition } from "./bash.ts";
+import { createEditToolDefinition } from "./edit.ts";
+import { createReadToolDefinition } from "./read.ts";
+import { createWriteToolDefinition } from "./write.ts";
 
 export {
 	type BashToolDetails,
@@ -44,14 +48,23 @@ export {
 export interface CreateCodingToolsOptions extends CodingToolOptions {}
 
 /** The stable default coding-tool set: read, write, edit, then bash. */
+export function createCodingToolDefinitions(
+	options: CreateCodingToolsOptions | string = {},
+): CodingToolDefinition[] {
+	const config = typeof options === "string" ? { cwd: options } : options;
+	return [
+		createReadToolDefinition(config),
+		createWriteToolDefinition(config),
+		createEditToolDefinition(config),
+		createBashToolDefinition(config),
+	];
+}
+
+/** Adapt the default rich definitions to the provider-neutral agent contract. */
 export function createCodingTools(
 	options: CreateCodingToolsOptions | string = {},
 ): AgentTool[] {
-	const config = typeof options === "string" ? { cwd: options } : options;
-	return [
-		createReadTool(config),
-		createWriteTool(config),
-		createEditTool(config),
-		createBashTool(config),
-	];
+	return createCodingToolDefinitions(options).map((definition) =>
+		createAgentTool(definition),
+	);
 }

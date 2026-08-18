@@ -9,7 +9,7 @@ import type {
 	SessionHandle,
 	SessionMetadata,
 } from "../../src/agent/session/types.ts";
-import type { AgentMessage, AgentTool } from "../../src/agent/types.ts";
+import type { AgentMessage } from "../../src/agent/types.ts";
 import {
 	type AssistantMessageEventStream,
 	createAssistantMessageEventStream,
@@ -31,6 +31,7 @@ import {
 	CodingSession,
 	type CodingSessionConfig,
 } from "../../src/coding/session.ts";
+import type { CodingToolDefinition } from "../../src/coding/types.ts";
 
 type DoneMessage = Extract<AssistantMessageEvent, { type: "done" }>["message"];
 type ErrorMessage = Extract<
@@ -295,20 +296,27 @@ describe("CodingSession loading", () => {
 		const session = await createMemorySession();
 		await seedRuntime(session, { activeToolNames: ["beta"] });
 		await session.appendMessage(user("historical", 10));
-		const alpha: AgentTool = {
+		const alpha: CodingToolDefinition = {
 			name: "alpha",
 			description: "Alpha",
+			promptSnippet: "Run alpha",
+			promptGuidelines: ["Use alpha carefully"],
 			inputSchema: z.object({}),
-			async execute() {
+			async executor() {
 				return { content: [] };
 			},
 		};
-		const beta = { ...alpha, name: "beta" };
+		const beta = {
+			...alpha,
+			name: "beta",
+			promptSnippet: "Run beta",
+		};
 		const provider = new FakeProvider([textScript("resumed")]);
 		const coding = await CodingSession.load(
 			config(session, provider, {
 				model: "ignored-default",
 				reasoning: "minimal",
+				systemPrompt: undefined,
 				tools: [alpha, beta],
 				timeout: 50,
 			}),
@@ -317,6 +325,8 @@ describe("CodingSession loading", () => {
 		expect(coding.model).toBe("stored-model");
 		expect(coding.reasoning).toBe("high");
 		expect(coding.tools.map((tool) => tool.name)).toEqual(["beta"]);
+		expect(coding.systemPrompt).toContain("- beta: Run beta");
+		expect(coding.systemPrompt).not.toContain("- alpha: Run alpha");
 		expect(coding.messages.map(messageText)).toEqual(["historical"]);
 
 		await coding.continue().result();
@@ -324,6 +334,7 @@ describe("CodingSession loading", () => {
 			model: "stored-model",
 			options: { reasoning: "high", timeout: 50 },
 		});
+		expect(provider.calls[0]?.context.systemPrompt).toBe(coding.systemPrompt);
 		expect(provider.calls[0]?.context.messages.map(messageText)).toEqual([
 			"historical",
 		]);
@@ -380,11 +391,11 @@ describe("CodingSession persistence", () => {
 			doneScript(assistant([call], "tool_call", 2)),
 			textScript("finished", 4),
 		]);
-		const tool: AgentTool = {
+		const tool: CodingToolDefinition = {
 			name: "work",
 			description: "Work",
 			inputSchema: z.object({}),
-			async execute() {
+			async executor() {
 				return { content: [{ type: "text", text: "tool output" }] };
 			},
 		};
@@ -603,22 +614,29 @@ describe("CodingSession commands and queues", () => {
 				userRoot: join(directory, "user"),
 			});
 			await mkdir(paths.userSkills, { recursive: true });
+			await mkdir(paths.projectSkills, { recursive: true });
 			await mkdir(paths.projectPrompts, { recursive: true });
 			await writeFile(
 				join(paths.userSkills, "review.md"),
 				"---\ndescription: Review code.\n---\nReview carefully.",
 			);
 			await writeFile(join(paths.projectPrompts, "private.md"), "Private.");
+			await writeFile(
+				join(paths.projectSkills, "private.md"),
+				"---\ndescription: Project-only instructions.\n---\nPrivate skill.",
+			);
 
 			const session = await createMemorySession(cwd);
 			const coding = await CodingSession.load(
 				config(session, new FakeProvider([]), {
-					tools: [],
+					systemPrompt: undefined,
 					resourcePaths: paths,
 				}),
 			);
 			expect(coding.skills.map((skill) => skill.name)).toEqual(["review"]);
 			expect(coding.promptTemplates).toEqual([]);
+			expect(coding.systemPrompt).toContain("<name>review</name>");
+			expect(coding.systemPrompt).not.toContain("<name>private</name>");
 
 			await writeFile(
 				join(paths.userSkills, "later.md"),
@@ -632,15 +650,17 @@ describe("CodingSession commands and queues", () => {
 			const trustedSession = await createMemorySession(cwd);
 			const trusted = await CodingSession.load(
 				config(trustedSession, new FakeProvider([]), {
-					tools: [],
+					systemPrompt: undefined,
 					resourcePaths: paths,
 					trustProjectResources: true,
 				}),
 			);
 			expect(trusted.skills.map((skill) => skill.name)).toEqual([
 				"later",
+				"private",
 				"review",
 			]);
+			expect(trusted.systemPrompt).toContain("<name>private</name>");
 			expect(trusted.promptTemplates.map((template) => template.name)).toEqual([
 				"private",
 			]);
@@ -712,5 +732,48 @@ describe("CodingSession commands and queues", () => {
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}
+	});
+
+	test("composes custom prompt additions in provider-visible order", async () => {
+		const provider = new FakeProvider([textScript("done")]);
+		const session = await createMemorySession("C:\\workspace\\project");
+		const coding = await CodingSession.load(
+			config(session, provider, {
+				systemPrompt: "Custom base",
+				appendSystemPrompt: "Appended instructions",
+				extraGuidelines: ["Must not replace custom base"],
+				contextFiles: [{ path: '/repo/a&".md', content: "Trusted context" }],
+				tools: [],
+			}),
+		);
+
+		expect(coding.systemPrompt).toBe(`Custom base
+
+Appended instructions
+
+<project_context>
+
+Project-specific instructions and guidelines:
+
+<project_instructions path="/repo/a&amp;&quot;.md">
+Trusted context
+</project_instructions>
+
+</project_context>
+
+Current working directory: C:/workspace/project`);
+		expect(coding.systemPrompt).not.toContain("Must not replace custom base");
+
+		await coding.prompt("inspect").result();
+		expect(provider.calls[0]?.context.systemPrompt).toBe(coding.systemPrompt);
+	});
+
+	test("rejects whitespace-only custom system prompts", async () => {
+		const session = await createMemorySession();
+		await expect(
+			CodingSession.load(
+				config(session, new FakeProvider([]), { systemPrompt: " \n\t " }),
+			),
+		).rejects.toThrow("Custom system prompt cannot be empty");
 	});
 });

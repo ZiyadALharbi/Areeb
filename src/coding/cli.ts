@@ -55,10 +55,6 @@ function parseCli(
 	return { prompt: values.prompt, model };
 }
 
-function systemPrompt(cwd: string): string {
-	return `You are Areeb, a coding agent working in ${cwd}. Use the available tools to inspect, modify, and validate the project. Be concise and summarize completed work.`;
-}
-
 async function runPrintMode(prompt: string, model: string): Promise<void> {
 	const cwd = process.cwd();
 	const providerConfig = openAICompatibleConfigFromEnv();
@@ -73,7 +69,6 @@ async function runPrintMode(prompt: string, model: string): Promise<void> {
 		}),
 		model,
 		reasoning: "off",
-		systemPrompt: systemPrompt(cwd),
 	});
 	const stream = coding.prompt(prompt);
 	let endReason: AgentEndReason | undefined;

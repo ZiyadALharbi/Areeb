@@ -22,8 +22,8 @@ export type CodingToolConfig = string | CodingToolOptions | undefined;
  */
 export interface CodingToolDefinition<TInput = unknown, TDetails = unknown>
 	extends ToolDefinition<TInput> {
-	readonly promptSnippet: string;
-	readonly promptGuidelines: readonly string[];
+	readonly promptSnippet?: string;
+	readonly promptGuidelines?: readonly string[];
 	executor(
 		input: TInput,
 		signal?: AbortSignal,
