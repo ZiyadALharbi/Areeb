@@ -16,6 +16,7 @@
 - Inline single-line helpers that have only one call site.
 - Always ask before removing functionality or code that appears intentional.
 - Do not preserve backward compatibility unless the user asks for it.
+- Comment why, not what. Record non-obvious constraints, invariants, and intentional choices; skip anything names and types already say. Do not narrate steps, leave commented-out code, or use a comment in place of a rename or a fix.
 
 ## Commands
 - After code changes (not docs): `bun run check` (full output, no tail). Fix all errors, warnings, and infos before committing. Does not run tests.
