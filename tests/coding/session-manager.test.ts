@@ -3,7 +3,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "../../src/agent/types.ts";
+import { FakeProvider } from "../../src/ai/fake_provider.ts";
 import { areebPaths } from "../../src/coding/paths.ts";
+import { CodingSession } from "../../src/coding/session.ts";
 import {
 	CodingSessionManager,
 	findCodingSession,
@@ -207,6 +209,43 @@ describe("CodingSessionManager", () => {
 					id: SESSION_B_ID,
 					cwd: "/workspace/second",
 				},
+			);
+		});
+	});
+
+	test("derives reopened titles from names set through slash commands", async () => {
+		await withSessionHome(async (userRoot) => {
+			const cwd = "/workspace/project";
+			const manager = new CodingSessionManager({
+				cwd,
+				userRoot,
+				repositoryOptions: {
+					sessionIdGenerator: () => SESSION_A_ID,
+				},
+			});
+			const session = await manager.create();
+			const coding = await CodingSession.load({
+				session,
+				provider: new FakeProvider([]),
+				model: "model-a",
+				reasoning: "low",
+				systemPrompt: "You are Areeb.",
+				tools: [],
+				resourcePaths: areebPaths({
+					cwd,
+					userRoot,
+					agentsRoot: join(userRoot, "agents"),
+				}),
+			});
+
+			await coding.handleCommand("/name Command title");
+
+			const reopened = new CodingSessionManager({ cwd, userRoot });
+			expect(await reopened.find(SESSION_A_ID)).toMatchObject({
+				title: "Command title",
+			});
+			expect(await (await reopened.open(SESSION_A_ID)).getName()).toBe(
+				"Command title",
 			);
 		});
 	});

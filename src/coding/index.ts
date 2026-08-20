@@ -1,3 +1,16 @@
+export type {
+	CommandCapability,
+	CommandContext,
+	CommandHandler,
+	CommandOutcome,
+	CommandResult,
+	CommandSessionInfo,
+	SlashCommand,
+} from "./commands.ts";
+export {
+	CommandRegistry,
+	createDefaultCommandRegistry,
+} from "./commands.ts";
 export * from "./modes/index.ts";
 export type { AreebPathOptions, AreebPaths } from "./paths.ts";
 export { areebPaths } from "./paths.ts";
@@ -11,7 +24,10 @@ export {
 } from "./project-context.ts";
 export type { BuildSystemPromptOptions } from "./prompt-builder.ts";
 export { buildSystemPrompt } from "./prompt-builder.ts";
-export type { PromptTemplate } from "./prompt-templates.ts";
+export type {
+	LoadPromptTemplatesOptions,
+	PromptTemplate,
+} from "./prompt-templates.ts";
 export {
 	expandPromptTemplateInvocation,
 	loadPromptTemplates,
@@ -25,7 +41,7 @@ export {
 	ResourceError,
 	readResourceFile,
 } from "./resources.ts";
-export type { CodingSessionConfig, CommandResult } from "./session.ts";
+export type { CodingSessionConfig } from "./session.ts";
 export { CodingSession } from "./session.ts";
 export type {
 	CodingSessionDiscoveryOptions,

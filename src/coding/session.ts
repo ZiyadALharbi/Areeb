@@ -14,6 +14,13 @@ import type {
 } from "../agent/types.ts";
 import type { ModelProvider } from "../ai/provider_protocol.ts";
 import type { ReasoningLevel } from "../ai/types.ts";
+import {
+	type CommandContext,
+	type CommandRegistry,
+	type CommandResult,
+	createDefaultCommandRegistry,
+	type SlashCommand,
+} from "./commands.ts";
 import { type AreebPaths, areebPaths } from "./paths.ts";
 import {
 	loadProjectContext,
@@ -28,7 +35,6 @@ import {
 import {
 	discoverProjectAgentSkillDirectories,
 	expandSkillInvocation,
-	isSkillDirective,
 	loadSkills,
 	type Skill,
 } from "./skills.ts";
@@ -62,12 +68,6 @@ export interface CodingSessionConfig<
 	readonly trustProjectResources?: boolean;
 }
 
-export interface CommandResult {
-	readonly handled: boolean;
-	readonly message?: string;
-	readonly exitRequested?: boolean;
-}
-
 /**
  * Coding-agent runtime backed by an append-only session.
  *
@@ -83,12 +83,14 @@ export class CodingSession<
 		private readonly session: SessionHandle<TMetadata>,
 		private readonly harness: AgentHarness,
 		private readonly sessionMetadata: TMetadata,
+		private readonly sessionProvider: string,
 		private readonly sessionModel: string,
 		private readonly sessionReasoning: ReasoningLevel,
 		private readonly assembledSystemPrompt: string,
 		private readonly activeTools: readonly AgentTool[],
 		private readonly loadedSkills: readonly Skill[],
 		private readonly loadedPromptTemplates: readonly PromptTemplate[],
+		private readonly commandRegistry: CommandRegistry,
 	) {}
 
 	static async load<TMetadata extends SessionMetadata = SessionMetadata>(
@@ -110,6 +112,7 @@ export class CodingSession<
 			resourcePaths.userSkills,
 		];
 		const promptDirectories = [resourcePaths.userPrompts];
+		const commandRegistry = createDefaultCommandRegistry();
 		if (config.trustProjectResources === true) {
 			for (const directory of await discoverProjectAgentSkillDirectories(
 				metadata.cwd,
@@ -122,7 +125,9 @@ export class CodingSession<
 		}
 		const [skills, promptTemplates, projectContextFiles] = await Promise.all([
 			loadSkills(skillSources),
-			loadPromptTemplates(promptDirectories),
+			loadPromptTemplates(promptDirectories, {
+				reservedNames: commandRegistry.executableNames(),
+			}),
 			loadProjectContext({
 				cwd: metadata.cwd,
 				userRoot: resourcePaths.userRoot,
@@ -237,12 +242,14 @@ export class CodingSession<
 			config.session,
 			harness,
 			metadata,
+			model.provider,
 			model.model,
 			context.reasoning,
 			systemPrompt,
 			tools,
 			skills,
 			promptTemplates,
+			commandRegistry,
 		);
 		codingSession.attachPersistence();
 		return codingSession;
@@ -278,6 +285,10 @@ export class CodingSession<
 
 	get promptTemplates(): readonly PromptTemplate[] {
 		return this.loadedPromptTemplates.map((template) => ({ ...template }));
+	}
+
+	get commands(): readonly SlashCommand[] {
+		return this.commandRegistry.list();
 	}
 
 	get isRunning(): boolean {
@@ -324,35 +335,9 @@ export class CodingSession<
 			: this.harness.followUp(input);
 	}
 
-	handleCommand(input: string): CommandResult {
-		const command = input.trim();
-		if (!command.startsWith("/")) {
-			return { handled: false };
-		}
-
-		switch (command) {
-			case "/help":
-				return {
-					handled: true,
-					message: "Available commands:\n/help\n/exit",
-				};
-			case "/exit":
-				return { handled: true, exitRequested: true };
-		}
-
-		if (
-			isSkillDirective(input) ||
-			this.loadedPromptTemplates.some((template) =>
-				isTemplateDirective(input, template.name),
-			)
-		) {
-			return { handled: false };
-		}
-
-		return {
-			handled: true,
-			message: `Unknown command: ${command}`,
-		};
+	async handleCommand(input: string): Promise<CommandResult> {
+		this.assertPersistenceHealthy();
+		return this.commandRegistry.dispatch(input, this.createCommandContext());
 	}
 
 	private attachPersistence(): void {
@@ -384,6 +369,27 @@ export class CodingSession<
 		return skillExpansion === input
 			? expandPromptTemplateInvocation(input, this.loadedPromptTemplates)
 			: skillExpansion;
+	}
+
+	private createCommandContext(): CommandContext {
+		return {
+			hasCapability: () => false,
+			getSessionInfo: async () => {
+				const name = await this.session.getName();
+				return {
+					id: this.sessionMetadata.id,
+					...(name === undefined ? {} : { name }),
+					cwd: this.sessionMetadata.cwd,
+					provider: this.sessionProvider,
+					model: this.sessionModel,
+					reasoning: this.sessionReasoning,
+					messageCount: this.harness.messages.length,
+					isRunning: this.harness.isRunning,
+				};
+			},
+			getSessionName: () => this.session.getName(),
+			setSessionName: (name) => this.session.setName(name),
+		};
 	}
 }
 
@@ -470,12 +476,4 @@ function isReasoningLevel(value: unknown): value is ReasoningLevel {
 		value === "high" ||
 		value === "xhigh"
 	);
-}
-
-function isTemplateDirective(input: string, name: string): boolean {
-	if (!input.startsWith(`/${name}`)) {
-		return false;
-	}
-	const nextCharacter = input[name.length + 1];
-	return nextCharacter === undefined || /\s/.test(nextCharacter);
 }

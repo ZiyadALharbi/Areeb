@@ -632,28 +632,142 @@ describe("CodingSession persistence", () => {
 });
 
 describe("CodingSession commands and queues", () => {
-	test("handles only exact, trimmed, case-sensitive slash commands", async () => {
+	test("delegates exact commands and leaves unknown slash input for prompting", async () => {
 		const session = await createMemorySession();
 		const coding = await CodingSession.load(
 			config(session, new FakeProvider([]), { tools: [] }),
 		);
 
-		expect(coding.handleCommand(" normal text ")).toEqual({ handled: false });
-		expect(coding.handleCommand("  /help  ")).toEqual({
-			handled: true,
-			message: "Available commands:\n/help\n/exit",
+		expect(await coding.handleCommand(" normal text ")).toEqual({
+			handled: false,
 		});
-		expect(coding.handleCommand("/exit")).toEqual({
+		const help = await coding.handleCommand("  /help  ");
+		expect(help).toMatchObject({
 			handled: true,
-			exitRequested: true,
+			outcome: { kind: "message", level: "info" },
 		});
-		expect(coding.handleCommand("/Help")).toEqual({
+		if (!help.handled || help.outcome.kind !== "message") {
+			throw new Error("Expected help message");
+		}
+		expect(help.outcome.text).toContain("/help");
+		expect(help.outcome.text).toContain("/theme [theme]");
+		expect(await coding.handleCommand("/quit")).toEqual({
 			handled: true,
-			message: "Unknown command: /Help",
+			outcome: { kind: "quit" },
 		});
-		expect(coding.handleCommand("/skill:missing")).toEqual({ handled: false });
+		expect(await coding.handleCommand("/exit")).toEqual({
+			handled: true,
+			outcome: { kind: "quit" },
+		});
+		expect(await coding.handleCommand("/new")).toEqual({
+			handled: true,
+			outcome: {
+				kind: "unavailable",
+				missingCapability: "session-controller",
+			},
+		});
+		for (const input of [
+			"/Help",
+			"/skill:missing",
+			"/unknown",
+			"/tmp",
+			"/Users/me/file.png",
+		]) {
+			expect(await coding.handleCommand(input)).toEqual({ handled: false });
+		}
 		expect(coding.steer("steer").count).toBe(1);
 		expect(coding.followUp("follow up").count).toBe(2);
+	});
+
+	test("shows session information and persists valid session names", async () => {
+		const session = await createMemorySession("/workspace/project");
+		const coding = await CodingSession.load(
+			config(session, new FakeProvider([]), { tools: [] }),
+		);
+		const metadata = await session.getMetadata();
+
+		expect(await coding.handleCommand("/name")).toEqual({
+			handled: true,
+			outcome: {
+				kind: "message",
+				level: "info",
+				text: "Session name: (unnamed)",
+			},
+		});
+		expect(await coding.handleCommand("/name   Registry work  ")).toEqual({
+			handled: true,
+			outcome: {
+				kind: "message",
+				level: "info",
+				text: "Session name set to: Registry work",
+			},
+		});
+		expect(await session.getName()).toBe("Registry work");
+		expect(await coding.handleCommand("/name invalid\nname")).toEqual({
+			handled: true,
+			outcome: {
+				kind: "message",
+				level: "error",
+				text: "Usage: /name [text] (name must be a single line)",
+			},
+		});
+
+		const result = await coding.handleCommand("/session");
+		if (!result.handled || result.outcome.kind !== "message") {
+			throw new Error("Expected session information");
+		}
+		expect(result.outcome.text).toBe(`Session ID: ${metadata.id}
+Name: Registry work
+Working directory: /workspace/project
+Provider: fake
+Model: default-model
+Reasoning: low
+Messages: 0
+Running: no`);
+	});
+
+	test("persists command names across reopen and propagates command failures", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "areeb-command-name-"));
+		try {
+			const firstRepository = new JsonlSessionRepository(directory);
+			const firstHandle = await firstRepository.create({ cwd: "/workspace" });
+			const first = await CodingSession.load(
+				config(firstHandle, new FakeProvider([]), { tools: [] }),
+			);
+			await first.handleCommand("/name Persistent name");
+
+			const secondRepository = new JsonlSessionRepository(directory);
+			const metadata = (await secondRepository.list())[0];
+			if (!metadata) {
+				throw new Error("Expected stored session metadata");
+			}
+			expect(await (await secondRepository.open(metadata)).getName()).toBe(
+				"Persistent name",
+			);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+
+		const session = await createMemorySession();
+		const failingSession = new Proxy(session, {
+			get(target, property) {
+				if (property === "setName") {
+					return async () => {
+						throw new Error("name storage failed");
+					};
+				}
+				const value = Reflect.get(target, property, target);
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
+		const provider = new FakeProvider([]);
+		const coding = await CodingSession.load(
+			config(failingSession, provider, { tools: [] }),
+		);
+		await expect(coding.handleCommand("/name Failed")).rejects.toThrow(
+			"name storage failed",
+		);
+		expect(provider.calls).toHaveLength(0);
 	});
 
 	test("loads immutable resource snapshots with project trust disabled by default", async () => {
@@ -852,12 +966,14 @@ describe("CodingSession commands and queues", () => {
 				textScript("template done", 2),
 				textScript("skill done", 4),
 				textScript("raw done", 6),
+				textScript("unknown done", 8),
+				textScript("path done", 10),
 			]);
 			const session = await createMemorySession(cwd);
 			const coding = await CodingSession.load(
 				config(session, provider, { tools: [], resourcePaths: paths }),
 			);
-			expect(coding.handleCommand("/explain src/app.ts")).toEqual({
+			expect(await coding.handleCommand("/explain src/app.ts")).toEqual({
 				handled: false,
 			});
 
@@ -881,6 +997,20 @@ describe("CodingSession commands and queues", () => {
 			await coding.prompt(user("/explain raw.ts", 5)).result();
 			expect(provider.calls[2]?.context.messages.map(messageText).at(-1)).toBe(
 				"/explain raw.ts",
+			);
+			expect(await coding.handleCommand("/unknown value")).toEqual({
+				handled: false,
+			});
+			await coding.prompt("/unknown value").result();
+			expect(provider.calls[3]?.context.messages.map(messageText).at(-1)).toBe(
+				"/unknown value",
+			);
+			expect(await coding.handleCommand("/tmp/example.ts")).toEqual({
+				handled: false,
+			});
+			await coding.prompt("/tmp/example.ts").result();
+			expect(provider.calls[4]?.context.messages.map(messageText).at(-1)).toBe(
+				"/tmp/example.ts",
 			);
 
 			expect(messageText(coding.steer("/explain queued.ts").steering[0])).toBe(
