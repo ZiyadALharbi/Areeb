@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JsonlSessionRepository } from "../../../src/agent/session/jsonl/repository.ts";
@@ -108,6 +108,45 @@ test("JSONL repository discovers and opens sessions in a new instance", async ()
 	});
 });
 
+test("JSONL repository finds sessions by exact UUID", async () => {
+	await withRepositoryDirectory(async (directory) => {
+		const repository = new JsonlSessionRepository(directory, {
+			clock: () => 100,
+		});
+		await repository.create({ id: SESSION_A_ID, cwd: "/workspace" });
+
+		expect(await repository.find(SESSION_A_ID)).toMatchObject({
+			id: SESSION_A_ID,
+			path: join(directory, `${SESSION_A_ID}.jsonl`),
+		});
+		expect(await repository.find(SESSION_B_ID)).toBeUndefined();
+		await expect(repository.find("not-a-uuid")).rejects.toMatchObject({
+			code: "invalid_payload",
+		});
+	});
+});
+
+test("JSONL repository rejects a header and filename ID mismatch on find", async () => {
+	await withRepositoryDirectory(async (directory) => {
+		const repository = new JsonlSessionRepository(directory, {
+			clock: () => 100,
+		});
+		await repository.create({ id: SESSION_A_ID, cwd: "/workspace" });
+		const source = await readFile(
+			join(directory, `${SESSION_A_ID}.jsonl`),
+			"utf8",
+		);
+		const mismatchedPath = join(directory, `${SESSION_B_ID}.jsonl`);
+		await writeFile(mismatchedPath, source);
+
+		await expect(repository.find(SESSION_B_ID)).rejects.toMatchObject({
+			code: "invalid_format",
+			path: mismatchedPath,
+			line: 1,
+		});
+	});
+});
+
 test("repeated JSONL opens share one serialized writer", async () => {
 	await withRepositoryDirectory(async (directory) => {
 		let timestamp = 100;
@@ -121,6 +160,7 @@ test("repeated JSONL opens share one serialized writer", async () => {
 		});
 		await created.appendCustomEntry("note", { index: 1 });
 		const metadata = await created.getMetadata();
+		expect(await repository.find(SESSION_A_ID)).toEqual(metadata);
 
 		const [first, second] = await Promise.all([
 			repository.open(metadata),

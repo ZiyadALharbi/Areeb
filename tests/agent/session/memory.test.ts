@@ -74,6 +74,20 @@ describe("MemorySessionRepository", () => {
 		).rejects.toMatchObject({ code: "not_found" });
 	});
 
+	test("finds sessions by exact UUID", async () => {
+		const repository = new MemorySessionRepository({ clock: () => 100 });
+		await repository.create({ id: SESSION_ID, cwd: "/workspace" });
+
+		expect(await repository.find(SESSION_ID)).toMatchObject({
+			id: SESSION_ID,
+			cwd: "/workspace",
+		});
+		expect(await repository.find(SECOND_SESSION_ID)).toBeUndefined();
+		await expect(repository.find("not-a-uuid")).rejects.toMatchObject({
+			code: "invalid_payload",
+		});
+	});
+
 	test("serializes concurrent appends with increasing sequences", async () => {
 		let timestamp = 100;
 		const repository = new MemorySessionRepository({

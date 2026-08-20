@@ -404,6 +404,7 @@ export interface SessionRepository<
 	TListOptions extends SessionListOptions = SessionListOptions,
 > {
 	create(options: TCreateOptions): Promise<SessionHandle<TMetadata>>;
+	find(id: string): Promise<TMetadata | undefined>;
 
 	/**
 	 * Opens metadata returned by list().

@@ -116,6 +116,21 @@ export class JsonlSessionRepository
 		}
 	}
 
+	async find(id: string): Promise<JsonlSessionMetadata | undefined> {
+		assertUuid(id, "session id");
+
+		try {
+			const storage = await this.getStorage(id);
+			return storage.getMetadata();
+		} catch (error) {
+			if (errorCode(error) === "not_found") {
+				return undefined;
+			}
+
+			throw error;
+		}
+	}
+
 	async open(
 		metadata: JsonlSessionMetadata,
 	): Promise<SessionHandle<JsonlSessionMetadata>> {
