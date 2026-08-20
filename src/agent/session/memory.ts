@@ -215,6 +215,11 @@ export class MemorySessionRepository implements SessionRepository {
 		return new Session(storage, this.entryIdGenerator);
 	}
 
+	async find(id: string): Promise<SessionMetadata | undefined> {
+		assertUuid(id, "session id");
+		return this.sessions.get(id)?.getMetadata();
+	}
+
 	async open(metadata: SessionMetadata): Promise<SessionHandle> {
 		assertJsonValue(metadata, "session metadata");
 		assertUuid(metadata.id, "session id");

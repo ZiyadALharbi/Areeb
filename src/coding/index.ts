@@ -27,6 +27,16 @@ export {
 } from "./resources.ts";
 export type { CodingSessionConfig, CommandResult } from "./session.ts";
 export { CodingSession } from "./session.ts";
+export type {
+	CodingSessionDiscoveryOptions,
+	CodingSessionManagerOptions,
+	CodingSessionRecord,
+} from "./session-manager.ts";
+export {
+	CodingSessionManager,
+	findCodingSession,
+	listCodingSessions,
+} from "./session-manager.ts";
 export type { Skill, SkillLayout, SkillSource } from "./skills.ts";
 export {
 	buildSkillIndex,

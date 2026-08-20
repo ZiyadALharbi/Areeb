@@ -558,6 +558,51 @@ describe("CodingSession persistence", () => {
 		}
 	});
 
+	test("persists interrupted tool-call repair exactly once across JSONL reopens", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "areeb-coding-repair-"));
+		try {
+			const firstRepository = new JsonlSessionRepository(directory);
+			const firstHandle = await firstRepository.create({ cwd: "/workspace" });
+			await seedRuntime(firstHandle);
+			await firstHandle.appendMessage(
+				assistant([toolCall("interrupted")], "tool_call"),
+			);
+
+			const secondRepository = new JsonlSessionRepository(directory);
+			const metadata = (await secondRepository.list())[0];
+			if (metadata === undefined) {
+				throw new Error("Expected stored session metadata");
+			}
+			await CodingSession.load(
+				config(await secondRepository.open(metadata), new FakeProvider([]), {
+					tools: [],
+				}),
+			);
+
+			const thirdRepository = new JsonlSessionRepository(directory);
+			const reopenedMetadata = (await thirdRepository.list())[0];
+			if (reopenedMetadata === undefined) {
+				throw new Error("Expected repaired session metadata");
+			}
+			const thirdHandle = await thirdRepository.open(reopenedMetadata);
+			await CodingSession.load(
+				config(thirdHandle, new FakeProvider([]), { tools: [] }),
+			);
+			const repairs = (
+				await thirdHandle.findEntries({ type: "message" })
+			).filter(
+				(entry) =>
+					entry.type === "message" &&
+					entry.message.role === "tool_result" &&
+					entry.message.toolCallId === "interrupted",
+			);
+
+			expect(repairs).toHaveLength(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	test("propagates persistence failures and requires a reload", async () => {
 		const session = await createMemorySession();
 		const failingSession = new Proxy(session, {
