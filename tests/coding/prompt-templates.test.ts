@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createDefaultCommandRegistry } from "../../src/coding/commands.ts";
 import {
 	expandPromptTemplateInvocation,
 	loadPromptTemplates,
@@ -47,12 +48,29 @@ describe("prompt template loading", () => {
 		});
 	});
 
-	test("rejects reserved names and lets later sources replace earlier ones", async () => {
+	test("rejects executable command names and lets search terms remain available", async () => {
 		const directory = await createTempDirectory();
-		await writeFile(join(directory, "help.md"), "Cannot replace help.");
-		await expect(loadPromptTemplates(directory)).rejects.toThrow("is reserved");
+		const registry = createDefaultCommandRegistry();
+		const helpPath = join(directory, "help.md");
+		await writeFile(helpPath, "Cannot replace help.");
+		await expect(
+			loadPromptTemplates(directory, {
+				reservedNames: registry.executableNames(),
+			}),
+		).rejects.toThrow(`${helpPath}: Prompt template name "help" conflicts`);
 
-		await rm(join(directory, "help.md"));
+		await rm(helpPath);
+		await writeFile(
+			join(directory, "clear.md"),
+			"Search terms do not reserve.",
+		);
+		expect(
+			await loadPromptTemplates(directory, {
+				reservedNames: registry.executableNames(),
+			}),
+		).toMatchObject([{ name: "clear" }]);
+
+		await rm(join(directory, "clear.md"));
 		const other = await createTempDirectory();
 		await writeFile(join(directory, "review.md"), "First.");
 		await writeFile(join(other, "review.md"), "Second.");

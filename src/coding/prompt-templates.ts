@@ -9,7 +9,6 @@ import {
 
 const PROMPT_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MAX_PROMPT_NAME_LENGTH = 64;
-const RESERVED_PROMPT_NAMES = new Set(["help", "exit"]);
 const PLACEHOLDER_PATTERN = /\{\{\s*([A-Za-z][A-Za-z0-9_-]*)\s*\}\}/g;
 
 export interface PromptTemplate {
@@ -20,11 +19,17 @@ export interface PromptTemplate {
 	readonly filePath: string;
 }
 
+export interface LoadPromptTemplatesOptions {
+	readonly reservedNames?: readonly string[];
+}
+
 export async function loadPromptTemplates(
 	directories: string | readonly string[],
+	options: LoadPromptTemplatesOptions = {},
 ): Promise<PromptTemplate[]> {
 	const byName = new Map<string, PromptTemplate>();
 	const canonicalFiles = new Set<string>();
+	const reservedNames = new Set(options.reservedNames ?? []);
 
 	for (const directory of typeof directories === "string"
 		? [directories]
@@ -36,7 +41,7 @@ export async function loadPromptTemplates(
 				continue;
 			}
 			canonicalFiles.add(canonicalPath);
-			const template = await loadPromptTemplate(filePath);
+			const template = await loadPromptTemplate(filePath, reservedNames);
 			const duplicate = sourceByName.get(template.name);
 			if (duplicate) {
 				throw new ResourceError(
@@ -146,12 +151,15 @@ async function discoverPromptFiles(directory: string): Promise<string[]> {
 	return files;
 }
 
-async function loadPromptTemplate(filePath: string): Promise<PromptTemplate> {
+async function loadPromptTemplate(
+	filePath: string,
+	reservedNames: ReadonlySet<string>,
+): Promise<PromptTemplate> {
 	const name = basename(filePath, ".md");
 	validatePromptName(name, filePath);
-	if (RESERVED_PROMPT_NAMES.has(name)) {
+	if (reservedNames.has(name)) {
 		throw new ResourceError(
-			`Prompt template name "${name}" is reserved`,
+			`Prompt template name "${name}" conflicts with a registered slash command`,
 			filePath,
 		);
 	}
