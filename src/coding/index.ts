@@ -38,6 +38,37 @@ export {
 	renderPromptTemplate,
 } from "./prompt-templates.ts";
 export type {
+	LoadProviderSettingsOptions,
+	OpenAICompatibleProviderConfig,
+	ProviderAuthStatus,
+	ProviderEnvironment,
+	ProviderFactory,
+	ProviderModelCatalogEntry,
+	ProviderModelReference,
+	ProviderRuntime,
+	ProviderRuntimeOptions,
+	ProviderSelection,
+	ProviderSelectionOptions,
+	ProviderSettings,
+	SetupOpenAICompatibleProviderOptions,
+} from "./provider-config.ts";
+export {
+	configuredProviderModels,
+	createProviderRuntime,
+	DEFAULT_OPENAI_MODEL,
+	DEFAULT_PROVIDER_MAX_RETRIES,
+	DEFAULT_PROVIDER_MAX_RETRY_DELAY_SECONDS,
+	getProviderAuthStatus,
+	loadProviderSettings,
+	PROVIDER_SETTINGS_VERSION,
+	ProviderConfigError,
+	parseProviderSettings,
+	resolveProviderSelection,
+	setupOpenAICompatibleProvider,
+	usableFavoriteModels,
+	usableProviderModels,
+} from "./provider-config.ts";
+export type {
 	ParsedFrontmatter,
 	ResourceDiagnostic,
 	ResourceDiagnosticCode,
