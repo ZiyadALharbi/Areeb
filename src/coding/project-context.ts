@@ -16,6 +16,9 @@ export interface ProjectContextFile {
 export interface LoadProjectContextOptions {
 	readonly cwd: string;
 	readonly userRoot: string;
+	readonly agentsRoot: string;
+	readonly projectRoot: string;
+	readonly projectAgentsRoot: string;
 	readonly trustProjectResources?: boolean;
 	readonly contextFiles?: readonly ProjectContextFile[];
 }
@@ -26,15 +29,23 @@ export interface LoadProjectContextOptions {
  */
 export async function loadProjectContext(
 	options: LoadProjectContextOptions,
-): Promise<ProjectContextFile[]> {
+): Promise<readonly ProjectContextFile[]> {
 	const selectedPaths: string[] = [];
-	const userInstructions = await selectInstructionFile(options.userRoot);
-	if (userInstructions !== undefined) {
-		selectedPaths.push(userInstructions);
+	for (const directory of [options.agentsRoot, options.userRoot]) {
+		const instructions = await selectInstructionFile(directory);
+		if (instructions !== undefined) {
+			selectedPaths.push(instructions);
+		}
 	}
 
 	if (options.trustProjectResources === true) {
 		for (const directory of await discoverProjectDirectories(options.cwd)) {
+			const instructions = await selectInstructionFile(directory);
+			if (instructions !== undefined) {
+				selectedPaths.push(instructions);
+			}
+		}
+		for (const directory of [options.projectAgentsRoot, options.projectRoot]) {
 			const instructions = await selectInstructionFile(directory);
 			if (instructions !== undefined) {
 				selectedPaths.push(instructions);
@@ -61,7 +72,7 @@ export async function loadProjectContext(
 	for (const file of options.contextFiles ?? []) {
 		context.push(Object.freeze({ ...file }));
 	}
-	return context;
+	return Object.freeze(context);
 }
 
 /** Return the nearest Git root through cwd, or cwd alone outside Git. */

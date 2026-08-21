@@ -39,7 +39,7 @@ type RunInvocation =
 export class AgentHarness {
 	private readonly provider: AgentHarnessConfig["provider"];
 	private readonly model: string;
-	private readonly systemPrompt: string;
+	private currentSystemPrompt: string;
 	private readonly tools: AgentTool[];
 	private readonly messageConverter: AgentHarnessConfig["messageConverter"];
 	private readonly streamOptions: AgentHarnessStreamOptions;
@@ -61,7 +61,7 @@ export class AgentHarness {
 		validateHarnessConfig(config);
 		this.provider = config.provider;
 		this.model = config.model;
-		this.systemPrompt = config.systemPrompt;
+		this.currentSystemPrompt = config.systemPrompt;
 		this.tools = [...(config.tools ?? [])];
 		this.messageConverter = config.messageConverter;
 		this.streamOptions = { ...(config.streamOptions ?? {}) };
@@ -78,6 +78,10 @@ export class AgentHarness {
 
 	get isRunning(): boolean {
 		return this.activeRun !== undefined;
+	}
+
+	get systemPrompt(): string {
+		return this.currentSystemPrompt;
 	}
 
 	get queuedMessages(): QueuedMessages {
@@ -205,6 +209,11 @@ export class AgentHarness {
 		this.transcript = [...messages];
 	}
 
+	replaceSystemPrompt(systemPrompt: string): void {
+		this.ensureIdle("replace the system prompt");
+		this.currentSystemPrompt = systemPrompt;
+	}
+
 	/**
 	 * Repairs only an incomplete assistant tool-call batch at the transcript
 	 * tail. Any gap followed by unrelated history is rejected as malformed.
@@ -296,7 +305,7 @@ export class AgentHarness {
 		this.activeRun = { controller, stream };
 
 		const context: AgentContext = {
-			systemPrompt: this.systemPrompt,
+			systemPrompt: this.currentSystemPrompt,
 			messages: [...this.transcript],
 			tools: [...this.tools],
 			...(this.messageConverter

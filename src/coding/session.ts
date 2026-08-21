@@ -17,30 +17,25 @@ import type { ReasoningLevel } from "../ai/types.ts";
 import {
 	type CommandContext,
 	type CommandRegistry,
+	type CommandResourceReloadResult,
 	type CommandResult,
 	createDefaultCommandRegistry,
 	type SlashCommand,
 } from "./commands.ts";
 import { type AreebPaths, areebPaths } from "./paths.ts";
-import {
-	loadProjectContext,
-	type ProjectContextFile,
-} from "./project-context.ts";
-import { buildSystemPrompt } from "./prompt-builder.ts";
+import type { ProjectContextFile } from "./project-context.ts";
 import {
 	expandPromptTemplateInvocation,
-	loadPromptTemplatesWithDiagnostics,
 	type PromptTemplate,
-	type PromptTemplateSource,
 } from "./prompt-templates.ts";
-import type { ResourceDiagnostic } from "./resources.ts";
 import {
-	discoverProjectAgentSkillDirectories,
-	expandSkillInvocation,
-	loadSkillsWithDiagnostics,
-	type Skill,
-	type SkillSource,
-} from "./skills.ts";
+	assembleSessionResources,
+	buildSessionSystemPrompt,
+	freezeSessionResourceInputs,
+	type SessionResourceInputs,
+	type SessionResourceSnapshot,
+} from "./session-resources.ts";
+import { expandSkillInvocation, type Skill } from "./skills.ts";
 import { createCodingToolDefinitions } from "./tools/index.ts";
 import { type CodingToolDefinition, createAgentTool } from "./types.ts";
 
@@ -82,6 +77,7 @@ export class CodingSession<
 	TMetadata extends SessionMetadata = SessionMetadata,
 > {
 	private persistenceFailure: unknown;
+	private resourceReload: Promise<CommandResourceReloadResult> | undefined;
 
 	private constructor(
 		private readonly session: SessionHandle<TMetadata>,
@@ -90,11 +86,10 @@ export class CodingSession<
 		private readonly sessionProvider: string,
 		private readonly sessionModel: string,
 		private readonly sessionReasoning: ReasoningLevel,
-		private readonly assembledSystemPrompt: string,
+		private assembledSystemPrompt: string,
 		private readonly activeTools: readonly AgentTool[],
-		private readonly loadedSkills: readonly Skill[],
-		private readonly loadedPromptTemplates: readonly PromptTemplate[],
-		private readonly loadedResourceDiagnostics: readonly ResourceDiagnostic[],
+		private readonly resourceInputs: SessionResourceInputs,
+		private resourceSnapshot: SessionResourceSnapshot,
 		private readonly commandRegistry: CommandRegistry,
 	) {}
 
@@ -106,66 +101,38 @@ export class CodingSession<
 		const metadata = await config.session.getMetadata();
 		const resourcePaths =
 			config.resourcePaths ?? areebPaths({ cwd: metadata.cwd });
-		const skillSources: SkillSource[] = [
-			{
-				directory: resourcePaths.userAgentSkills,
-				layout: "agents",
-				precedence: 0,
-			},
-			{
-				directory: resourcePaths.userSkills,
-				layout: "areeb",
-				precedence: 1,
-			},
-		];
-		const promptSources: PromptTemplateSource[] = [
-			{ directory: resourcePaths.userPrompts, precedence: 0 },
-		];
 		const commandRegistry = createDefaultCommandRegistry();
-		if (config.trustProjectResources === true) {
-			let precedence = 2;
-			for (const directory of await discoverProjectAgentSkillDirectories(
-				metadata.cwd,
-				resourcePaths.userAgentSkills,
-			)) {
-				skillSources.push({ directory, layout: "agents", precedence });
-				precedence += 1;
-			}
-			skillSources.push({
-				directory: resourcePaths.projectSkills,
-				layout: "areeb",
-				precedence,
-			});
-			promptSources.push({
-				directory: resourcePaths.projectPrompts,
-				precedence: 1,
-			});
-		}
-		const [skillResult, promptTemplateResult, projectContextFiles] =
-			await Promise.all([
-				loadSkillsWithDiagnostics(skillSources),
-				loadPromptTemplatesWithDiagnostics(promptSources, {
-					reservedNames: commandRegistry.executableNames(),
-				}),
-				loadProjectContext({
-					cwd: metadata.cwd,
-					userRoot: resourcePaths.userRoot,
-					trustProjectResources: config.trustProjectResources,
-					contextFiles: config.contextFiles,
-				}),
-			]);
-		const skills = skillResult.skills;
-		const promptTemplates = promptTemplateResult.promptTemplates;
-		const resourceDiagnostics = Object.freeze([
-			...skillResult.diagnostics,
-			...promptTemplateResult.diagnostics,
-		]);
 		let context = await config.session.buildContext();
 		const availableToolDefinitions =
 			config.tools === undefined
 				? createCodingToolDefinitions(metadata.cwd)
 				: [...config.tools];
 		validateAvailableTools(availableToolDefinitions);
+		const initialActiveToolDefinitions = selectActiveTools(
+			availableToolDefinitions,
+			context.activeToolNames ??
+				availableToolDefinitions.map((tool) => tool.name),
+		);
+		const resourceInputs = freezeSessionResourceInputs({
+			cwd: metadata.cwd,
+			paths: resourcePaths,
+			trustProjectResources: config.trustProjectResources === true,
+			callerContextFiles: config.contextFiles ?? [],
+			activeToolDefinitions: initialActiveToolDefinitions,
+			reservedPromptTemplateNames: commandRegistry.executableNames(),
+			...(config.systemPrompt === undefined
+				? {}
+				: { customPrompt: config.systemPrompt }),
+			...(config.appendSystemPrompt === undefined
+				? {}
+				: { appendSystemPrompt: config.appendSystemPrompt }),
+			extraGuidelines: config.extraGuidelines ?? [],
+		});
+		const resourceSnapshot = await assembleSessionResources(resourceInputs);
+		const systemPrompt = buildSessionSystemPrompt(
+			resourceInputs,
+			resourceSnapshot,
+		);
 
 		const hasReasoningEntry =
 			(
@@ -216,21 +183,11 @@ export class CodingSession<
 			availableToolDefinitions,
 			context.activeToolNames,
 		);
-		const systemPrompt = buildSystemPrompt({
-			cwd: metadata.cwd,
-			tools: activeToolDefinitions,
-			skills,
-			...(config.systemPrompt === undefined
-				? {}
-				: { customPrompt: config.systemPrompt }),
-			...(config.appendSystemPrompt === undefined
-				? {}
-				: { appendSystemPrompt: config.appendSystemPrompt }),
-			...(config.extraGuidelines === undefined
-				? {}
-				: { extraGuidelines: config.extraGuidelines }),
-			contextFiles: projectContextFiles,
-		});
+		if (
+			!sameToolSelection(initialActiveToolDefinitions, activeToolDefinitions)
+		) {
+			throw new Error("Active tool selection changed during session loading");
+		}
 		const tools = activeToolDefinitions.map((definition) =>
 			createAgentTool(definition),
 		);
@@ -272,9 +229,8 @@ export class CodingSession<
 			context.reasoning,
 			systemPrompt,
 			tools,
-			skills,
-			promptTemplates,
-			resourceDiagnostics,
+			resourceInputs,
+			resourceSnapshot,
 			commandRegistry,
 		);
 		codingSession.attachPersistence();
@@ -306,16 +262,26 @@ export class CodingSession<
 	}
 
 	get skills(): readonly Skill[] {
-		return this.loadedSkills.map((skill) => ({ ...skill }));
+		return this.resourceSnapshot.skills.map((skill) => ({ ...skill }));
 	}
 
 	get promptTemplates(): readonly PromptTemplate[] {
-		return this.loadedPromptTemplates.map((template) => ({ ...template }));
+		return this.resourceSnapshot.promptTemplates.map((template) => ({
+			...template,
+		}));
 	}
 
-	get resourceDiagnostics(): readonly ResourceDiagnostic[] {
+	get contextFiles(): readonly ProjectContextFile[] {
 		return Object.freeze(
-			this.loadedResourceDiagnostics.map((diagnostic) =>
+			this.resourceSnapshot.contextFiles.map((file) =>
+				Object.freeze({ ...file }),
+			),
+		);
+	}
+
+	get resourceDiagnostics(): SessionResourceSnapshot["diagnostics"] {
+		return Object.freeze(
+			this.resourceSnapshot.diagnostics.map((diagnostic) =>
 				Object.freeze({ ...diagnostic }),
 			),
 		);
@@ -333,6 +299,7 @@ export class CodingSession<
 		input: string | AgentMessage | readonly AgentMessage[],
 	): AgentRunStream {
 		this.assertPersistenceHealthy();
+		this.assertResourceReloadIdle();
 		return this.harness.prompt(
 			typeof input === "string" ? this.expandPrompt(input) : input,
 		);
@@ -340,7 +307,36 @@ export class CodingSession<
 
 	continue(): AgentRunStream {
 		this.assertPersistenceHealthy();
+		this.assertResourceReloadIdle();
 		return this.harness.continue();
+	}
+
+	reloadResources(): Promise<CommandResourceReloadResult> {
+		this.assertPersistenceHealthy();
+		if (this.harness.isRunning) {
+			return Promise.reject(
+				new Error("Cannot reload resources while the agent is running"),
+			);
+		}
+		if (this.resourceReload !== undefined) {
+			return this.resourceReload;
+		}
+
+		const reload = this.performResourceReload();
+		this.resourceReload = reload;
+		void reload.then(
+			() => {
+				if (this.resourceReload === reload) {
+					this.resourceReload = undefined;
+				}
+			},
+			() => {
+				if (this.resourceReload === reload) {
+					this.resourceReload = undefined;
+				}
+			},
+		);
+		return reload;
 	}
 
 	abort(): void {
@@ -398,10 +394,51 @@ export class CodingSession<
 		}
 	}
 
+	private assertResourceReloadIdle(): void {
+		if (this.resourceReload !== undefined) {
+			throw new Error(
+				"Cannot start an agent run while resources are reloading",
+			);
+		}
+	}
+
+	private async performResourceReload(): Promise<CommandResourceReloadResult> {
+		const candidate = await assembleSessionResources(this.resourceInputs);
+		const candidateSystemPrompt = buildSessionSystemPrompt(
+			this.resourceInputs,
+			candidate,
+		);
+		if (this.harness.isRunning) {
+			throw new Error("Cannot reload resources while the agent is running");
+		}
+
+		const systemPromptChanged =
+			candidateSystemPrompt !== this.assembledSystemPrompt;
+		if (systemPromptChanged) {
+			this.harness.replaceSystemPrompt(candidateSystemPrompt);
+		}
+		this.resourceSnapshot = candidate;
+		this.assembledSystemPrompt = candidateSystemPrompt;
+
+		return Object.freeze({
+			skillCount: candidate.skills.length,
+			promptTemplateCount: candidate.promptTemplates.length,
+			contextFileCount: candidate.contextFiles.length,
+			diagnostics: candidate.diagnostics,
+			systemPromptChanged,
+		});
+	}
+
 	private expandPrompt(input: string): string {
-		const skillExpansion = expandSkillInvocation(input, this.loadedSkills);
+		const skillExpansion = expandSkillInvocation(
+			input,
+			this.resourceSnapshot.skills,
+		);
 		return skillExpansion === input
-			? expandPromptTemplateInvocation(input, this.loadedPromptTemplates)
+			? expandPromptTemplateInvocation(
+					input,
+					this.resourceSnapshot.promptTemplates,
+				)
 			: skillExpansion;
 	}
 
@@ -409,10 +446,14 @@ export class CodingSession<
 		return {
 			hasCapability: () => false,
 			getResourceSummary: () => ({
-				skillCount: this.loadedSkills.length,
-				promptTemplateCount: this.loadedPromptTemplates.length,
+				skillCount: this.resourceSnapshot.skills.length,
+				promptTemplateCount: this.resourceSnapshot.promptTemplates.length,
+				contextFileCount: this.resourceSnapshot.contextFiles.length,
 				diagnostics: this.resourceDiagnostics,
 			}),
+			getContextFiles: () =>
+				this.resourceSnapshot.contextFiles.map((file) => file.path),
+			reloadResources: () => this.reloadResources(),
 			getSessionInfo: async () => {
 				const name = await this.session.getName();
 				return {
@@ -512,6 +553,16 @@ function selectActiveTools(
 	}
 
 	return selected;
+}
+
+function sameToolSelection(
+	left: readonly CodingToolDefinition[],
+	right: readonly CodingToolDefinition[],
+): boolean {
+	return (
+		left.length === right.length &&
+		left.every((tool, index) => tool.name === right[index]?.name)
+	);
 }
 
 function isReasoningLevel(value: unknown): value is ReasoningLevel {

@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	mkdir,
+	mkdtemp,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -19,6 +26,15 @@ async function createTempDirectory(): Promise<string> {
 	return directory;
 }
 
+function contextRoots(directory: string, cwd: string) {
+	return {
+		userRoot: join(directory, "user"),
+		agentsRoot: join(directory, "agents"),
+		projectRoot: join(cwd, ".areeb"),
+		projectAgentsRoot: join(cwd, ".agents"),
+	};
+}
+
 afterEach(async () => {
 	await Promise.all(
 		tempDirectories
@@ -28,17 +44,20 @@ afterEach(async () => {
 });
 
 describe("project context discovery", () => {
-	test("selects one candidate per directory and orders root through caller context", async () => {
+	test("selects one candidate per source in exact specificity order", async () => {
 		const directory = await createTempDirectory();
-		const userRoot = join(directory, "user");
 		const repository = join(directory, "repository");
 		const workspace = join(repository, "packages");
 		const cwd = join(workspace, "app");
+		const roots = contextRoots(directory, cwd);
 		await mkdir(join(repository, ".git"), { recursive: true });
 		await mkdir(join(repository, ".agents"), { recursive: true });
-		await mkdir(cwd, { recursive: true });
-		await mkdir(userRoot, { recursive: true });
-		await writeFile(join(userRoot, "CLAUDE.md"), "user");
+		await mkdir(roots.projectAgentsRoot, { recursive: true });
+		await mkdir(roots.projectRoot, { recursive: true });
+		await mkdir(roots.userRoot, { recursive: true });
+		await mkdir(roots.agentsRoot, { recursive: true });
+		await writeFile(join(roots.agentsRoot, "AGENTS.md"), "global agents");
+		await writeFile(join(roots.userRoot, "CLAUDE.md"), "global areeb");
 		await writeFile(join(repository, "AGENTS.md"), "root agents");
 		await writeFile(join(repository, "CLAUDE.md"), "root claude");
 		await writeFile(
@@ -48,54 +67,74 @@ describe("project context discovery", () => {
 		await writeFile(join(workspace, "AGENTS.md"), "workspace agents");
 		await writeFile(join(cwd, "CLAUDE.md"), "cwd");
 		await writeFile(join(repository, ".agents", "AGENTS.md"), "ignored");
+		await writeFile(
+			join(roots.projectAgentsRoot, "AGENTS.md"),
+			"project agents",
+		);
+		await writeFile(
+			join(roots.projectRoot, "AGENTS.override.md"),
+			"project areeb",
+		);
 
 		const context = await loadProjectContext({
 			cwd,
-			userRoot,
+			...roots,
 			trustProjectResources: true,
 			contextFiles: [{ path: "caller://instructions", content: "caller" }],
 		});
 
 		expect(context).toEqual([
-			{ path: join(userRoot, "CLAUDE.md"), content: "user" },
+			{ path: join(roots.agentsRoot, "AGENTS.md"), content: "global agents" },
+			{ path: join(roots.userRoot, "CLAUDE.md"), content: "global areeb" },
 			{ path: join(repository, "AGENTS.md"), content: "root agents" },
 			{
 				path: join(workspace, "AGENTS.override.md"),
 				content: "workspace override",
 			},
 			{ path: join(cwd, "CLAUDE.md"), content: "cwd" },
+			{
+				path: join(roots.projectAgentsRoot, "AGENTS.md"),
+				content: "project agents",
+			},
+			{
+				path: join(roots.projectRoot, "AGENTS.override.md"),
+				content: "project areeb",
+			},
 			{ path: "caller://instructions", content: "caller" },
 		]);
 	});
 
 	test("does not inspect project instructions until trust is granted", async () => {
 		const directory = await createTempDirectory();
-		const userRoot = join(directory, "user");
 		const cwd = join(directory, "project");
-		await mkdir(userRoot);
+		const roots = contextRoots(directory, cwd);
+		await mkdir(roots.userRoot);
+		await mkdir(roots.agentsRoot);
 		await mkdir(join(cwd, "AGENTS.override.md"), { recursive: true });
-		await writeFile(join(userRoot, "AGENTS.md"), "user");
+		await mkdir(roots.projectAgentsRoot, { recursive: true });
+		await writeFile(join(roots.userRoot, "AGENTS.md"), "user");
+		await mkdir(join(roots.projectAgentsRoot, "AGENTS.md"));
 
 		await expect(
 			loadProjectContext({
 				cwd,
-				userRoot,
+				...roots,
 				contextFiles: [{ path: "explicit", content: "trusted" }],
 			}),
 		).resolves.toEqual([
-			{ path: join(userRoot, "AGENTS.md"), content: "user" },
+			{ path: join(roots.userRoot, "AGENTS.md"), content: "user" },
 			{ path: "explicit", content: "trusted" },
 		]);
 		await expect(
 			loadProjectContext({
 				cwd,
-				userRoot,
+				...roots,
 				trustProjectResources: true,
 			}),
 		).rejects.toThrow("Resource is not a regular file");
 	});
 
-	test("inspects only cwd outside Git and accepts .git files as boundaries", async () => {
+	test("uses the nearest Git file or directory boundary and cwd outside Git", async () => {
 		const directory = await createTempDirectory();
 		const outsideCwd = join(directory, "outside", "nested");
 		await mkdir(outsideCwd, { recursive: true });
@@ -110,14 +149,24 @@ describe("project context discovery", () => {
 			join(repository, "nested"),
 			cwd,
 		]);
+
+		const nestedRepository = join(repository, "nested", "vendor");
+		const nestedCwd = join(nestedRepository, "src");
+		await mkdir(join(nestedRepository, ".git"), { recursive: true });
+		await mkdir(nestedCwd);
+		expect(await discoverProjectDirectories(nestedCwd)).toEqual([
+			nestedRepository,
+			nestedCwd,
+		]);
 	});
 
 	test("deduplicates symlinked instructions by canonical path", async () => {
 		const directory = await createTempDirectory();
-		const userRoot = join(directory, "user");
 		const repository = join(directory, "repository");
 		const cwd = join(repository, "app");
-		await mkdir(userRoot);
+		const roots = contextRoots(directory, cwd);
+		await mkdir(roots.userRoot);
+		await mkdir(roots.agentsRoot);
 		await mkdir(join(repository, ".git"), { recursive: true });
 		await mkdir(cwd);
 		await writeFile(join(repository, "AGENTS.md"), "shared");
@@ -127,7 +176,7 @@ describe("project context discovery", () => {
 		);
 
 		await expect(
-			loadProjectContext({ cwd, userRoot, trustProjectResources: true }),
+			loadProjectContext({ cwd, ...roots, trustProjectResources: true }),
 		).resolves.toEqual([
 			{ path: join(repository, "AGENTS.md"), content: "shared" },
 		]);
@@ -135,21 +184,48 @@ describe("project context discovery", () => {
 
 	test("retains strict size failures for selected instructions", async () => {
 		const directory = await createTempDirectory();
-		const userRoot = join(directory, "user");
-		await mkdir(userRoot);
+		const cwd = join(directory, "project");
+		const roots = contextRoots(directory, cwd);
+		await mkdir(roots.userRoot);
+		await mkdir(roots.agentsRoot);
 		await writeFile(
-			join(userRoot, "AGENTS.override.md"),
+			join(roots.userRoot, "AGENTS.override.md"),
 			"x".repeat(MAX_RESOURCE_BYTES + 1),
 		);
 
 		try {
-			await loadProjectContext({ cwd: join(directory, "project"), userRoot });
+			await loadProjectContext({ cwd, ...roots });
 			throw new Error("Expected project context loading to reject");
 		} catch (error) {
 			expect(error).toBeInstanceOf(ResourceError);
 			expect(error).toMatchObject({
-				filePath: join(userRoot, "AGENTS.override.md"),
+				filePath: join(roots.userRoot, "AGENTS.override.md"),
 			});
+		}
+	});
+
+	test("fails for selected directories and unreadable files", async () => {
+		const directory = await createTempDirectory();
+		const cwd = join(directory, "project");
+		const roots = contextRoots(directory, cwd);
+		await mkdir(roots.userRoot);
+		await mkdir(roots.agentsRoot);
+		await mkdir(join(roots.userRoot, "AGENTS.override.md"));
+
+		await expect(loadProjectContext({ cwd, ...roots })).rejects.toThrow(
+			"Resource is not a regular file",
+		);
+
+		await rm(join(roots.userRoot, "AGENTS.override.md"), { recursive: true });
+		const unreadable = join(roots.userRoot, "AGENTS.md");
+		await writeFile(unreadable, "private");
+		await chmod(unreadable, 0o000);
+		try {
+			await expect(loadProjectContext({ cwd, ...roots })).rejects.toThrow(
+				"Unable to read resource",
+			);
+		} finally {
+			await chmod(unreadable, 0o600);
 		}
 	});
 });

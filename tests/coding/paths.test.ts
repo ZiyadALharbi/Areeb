@@ -44,6 +44,7 @@ describe("areebPaths", () => {
 			agentsRoot,
 			userAgentSkills: join(agentsRoot, "skills"),
 			projectRoot: join(cwd, ".areeb"),
+			projectAgentsRoot: join(cwd, ".agents"),
 			projectSkills: join(cwd, ".areeb", "skills"),
 			projectPrompts: join(cwd, ".areeb", "prompts"),
 			projectAgentSkills: join(cwd, ".agents", "skills"),

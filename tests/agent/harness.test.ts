@@ -249,6 +249,43 @@ class AbortAwareProvider implements ModelProvider {
 	}
 }
 
+class ControlledPromptProvider implements ModelProvider {
+	readonly providerId = "controlled";
+	readonly calls: RecordedProviderCall[] = [];
+	private readonly streams: AssistantMessageEventStream[] = [];
+
+	streamResponse(
+		model: string,
+		context: ModelContext,
+		options?: StreamOptions,
+	): AssistantMessageEventStream {
+		this.calls.push({
+			model,
+			context: {
+				...context,
+				messages: [...context.messages],
+				tools: context.tools ? [...context.tools] : undefined,
+			},
+			options: options ? { ...options } : undefined,
+		});
+		const stream = createAssistantMessageEventStream();
+		this.streams.push(stream);
+		stream.push({ type: "start", partial: partial(assistant([])) });
+		return stream;
+	}
+
+	finish(callIndex: number, text: string): void {
+		const stream = this.streams[callIndex];
+		if (stream === undefined) {
+			throw new Error(`Provider call ${callIndex} is not waiting`);
+		}
+		stream.push({
+			type: "done",
+			message: assistant([{ type: "text", text }], "stop", callIndex + 2),
+		});
+	}
+}
+
 describe("AgentHarness construction and ownership", () => {
 	test("excludes externally owned signals from stable stream options", () => {
 		const externalSignal = new AbortController().signal;
@@ -339,6 +376,58 @@ describe("AgentHarness construction and ownership", () => {
 			reasoning: "low",
 		});
 		expect(provider.calls[0]?.options?.signal).toBeInstanceOf(AbortSignal);
+	});
+
+	test("replaces the system prompt only while idle without changing runtime state", async () => {
+		const provider = new ControlledPromptProvider();
+		const historical = user("Historical", 0);
+		const tool: AgentTool = {
+			name: "work",
+			description: "Work",
+			inputSchema: z.object({}),
+			async execute() {
+				return { content: [] };
+			},
+		};
+		const agent = harness(
+			provider,
+			{ tools: [tool], streamOptions: { reasoning: "high", timeout: 25 } },
+			[historical],
+		);
+
+		expect(agent.systemPrompt).toBe("You are Areeb.");
+		const first = agent.prompt("First");
+		await waitUntil(
+			() => provider.calls.length === 1,
+			"the first provider call",
+		);
+		expect(provider.calls[0]?.context.systemPrompt).toBe("You are Areeb.");
+		expect(() => agent.replaceSystemPrompt("Replacement")).toThrow(
+			"already running",
+		);
+		provider.finish(0, "First response");
+		await first.result();
+
+		agent.steer("Queued");
+		const messagesBeforeReplacement = agent.messages;
+		const queuesBeforeReplacement = agent.queuedMessages;
+		agent.replaceSystemPrompt("Replacement");
+		expect(agent.systemPrompt).toBe("Replacement");
+		expect(agent.messages).toEqual(messagesBeforeReplacement);
+		expect(agent.queuedMessages).toEqual(queuesBeforeReplacement);
+
+		const second = agent.prompt("Second");
+		await waitUntil(
+			() => provider.calls.length === 2,
+			"the second provider call",
+		);
+		expect(provider.calls[1]).toMatchObject({
+			model: "fake-model",
+			context: { systemPrompt: "Replacement", tools: [tool] },
+			options: { reasoning: "high", timeout: 25 },
+		});
+		provider.finish(1, "Second response");
+		await second.result();
 	});
 });
 

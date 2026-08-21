@@ -724,6 +724,7 @@ Model: default-model
 Reasoning: low
 Messages: 0
 Running: no
+Context files: 0
 Resource diagnostics: 0 warnings, 0 info`);
 	});
 
@@ -853,6 +854,9 @@ Resource diagnostics: 0 warnings, 0 info`);
 			}
 			expect(resources.outcome.text).toContain("Skills loaded: 2");
 			expect(resources.outcome.text).toContain("Prompt templates loaded: 1");
+			expect(resources.outcome.text).toContain(
+				"Project context files loaded: 2",
+			);
 			expect(resources.outcome.text).toContain(
 				"Resource diagnostics: 0 warnings, 1 info",
 			);
@@ -984,6 +988,214 @@ Resource diagnostics: 0 warnings, 0 info`);
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}
+	});
+
+	test("reloads create, edit, delete, and no-op changes without replacing session state", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "areeb-session-reload-"));
+		try {
+			const cwd = join(directory, "project");
+			const paths = areebPaths({
+				cwd,
+				userRoot: join(directory, "user"),
+				agentsRoot: join(directory, "agents"),
+			});
+			await mkdir(paths.userRoot, { recursive: true });
+			await mkdir(paths.agentsRoot, { recursive: true });
+			await mkdir(paths.userSkills, { recursive: true });
+			await mkdir(paths.userPrompts, { recursive: true });
+			const contextPath = join(paths.userRoot, "AGENTS.md");
+			await writeFile(contextPath, "Initial global context.");
+			const callerContext = {
+				path: "caller://fixed",
+				content: "Original caller context.",
+			};
+			const provider = new FakeProvider([
+				textScript("before reload", 2),
+				textScript("after reload", 4),
+			]);
+			const session = await createMemorySession(cwd);
+			const coding = await CodingSession.load(
+				config(session, provider, {
+					systemPrompt: undefined,
+					resourcePaths: paths,
+					contextFiles: [callerContext],
+				}),
+			);
+			const metadata = coding.metadata;
+			const toolNames = coding.tools.map((tool) => tool.name);
+
+			await coding.prompt("Before").result();
+			const messagesBeforeReload = coding.messages;
+			const persistedBeforeReload = (await session.buildContext()).messages;
+			await expect(coding.reloadResources()).resolves.toMatchObject({
+				systemPromptChanged: false,
+				contextFileCount: 2,
+			});
+
+			(callerContext as { content: string }).content = "Mutated by caller.";
+			await writeFile(contextPath, "Updated global context.");
+			await writeFile(
+				join(paths.userSkills, "review.md"),
+				"---\ndescription: Review changes.\n---\nReview carefully.",
+			);
+			await writeFile(
+				join(paths.userPrompts, "explain.md"),
+				"Explain {{ arguments }} after reload.",
+			);
+
+			const firstReload = coding.reloadResources();
+			const coalescedReload = coding.reloadResources();
+			expect(firstReload).toBe(coalescedReload);
+			expect(() => coding.prompt("Blocked during reload")).toThrow(
+				"resources are reloading",
+			);
+			await expect(firstReload).resolves.toMatchObject({
+				skillCount: 1,
+				promptTemplateCount: 1,
+				contextFileCount: 2,
+				systemPromptChanged: true,
+			});
+
+			expect(coding.metadata).toEqual(metadata);
+			expect(coding.model).toBe("default-model");
+			expect(coding.reasoning).toBe("low");
+			expect(coding.tools.map((tool) => tool.name)).toEqual(toolNames);
+			expect(coding.messages).toEqual(messagesBeforeReload);
+			expect((await session.buildContext()).messages).toEqual(
+				persistedBeforeReload,
+			);
+			expect(coding.contextFiles).toEqual([
+				{ path: contextPath, content: "Updated global context." },
+				{ path: "caller://fixed", content: "Original caller context." },
+			]);
+			expect(await coding.handleCommand("/context")).toMatchObject({
+				outcome: { text: `${contextPath}\ncaller://fixed` },
+			});
+			expect(coding.systemPrompt).toContain("Updated global context.");
+			expect(coding.systemPrompt).toContain("Original caller context.");
+			expect(coding.systemPrompt).not.toContain("Mutated by caller.");
+
+			await coding.prompt("/explain reload.ts").result();
+			expect(provider.calls[1]?.context.systemPrompt).toBe(coding.systemPrompt);
+			expect(provider.calls[1]?.context.messages.map(messageText).at(-1)).toBe(
+				"Explain reload.ts after reload.",
+			);
+			await expect(coding.reloadResources()).resolves.toMatchObject({
+				systemPromptChanged: false,
+			});
+
+			await rm(contextPath);
+			await expect(coding.reloadResources()).resolves.toMatchObject({
+				contextFileCount: 1,
+				systemPromptChanged: true,
+			});
+			expect(coding.contextFiles.map((file) => file.path)).toEqual([
+				"caller://fixed",
+			]);
+
+			await writeFile(join(paths.agentsRoot, "AGENTS.md"), "Shared context.");
+			await expect(coding.reloadResources()).resolves.toMatchObject({
+				contextFileCount: 2,
+				systemPromptChanged: true,
+			});
+			expect(coding.contextFiles.map((file) => file.path)).toEqual([
+				join(paths.agentsRoot, "AGENTS.md"),
+				"caller://fixed",
+			]);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	test("refreshes diagnostics without a prompt change and rolls back strict failures", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "areeb-reload-rollback-"));
+		try {
+			const cwd = join(directory, "project");
+			const paths = areebPaths({
+				cwd,
+				userRoot: join(directory, "user"),
+				agentsRoot: join(directory, "agents"),
+			});
+			await mkdir(paths.userSkills, { recursive: true });
+			await mkdir(paths.userPrompts, { recursive: true });
+			await mkdir(paths.agentsRoot, { recursive: true });
+			const skillPath = join(paths.userSkills, "review.md");
+			await writeFile(skillPath, "Missing description.");
+			const session = await createMemorySession(cwd);
+			const coding = await CodingSession.load(
+				config(session, new FakeProvider([]), {
+					tools: [],
+					resourcePaths: paths,
+				}),
+			);
+			const originalPrompt = coding.systemPrompt;
+			expect(coding.resourceDiagnostics).toHaveLength(1);
+
+			await writeFile(
+				skillPath,
+				"---\ndescription: Review changes.\n---\nFirst version.",
+			);
+			await writeFile(join(paths.userPrompts, "explain.md"), "Explain this.");
+			await expect(coding.reloadResources()).resolves.toMatchObject({
+				skillCount: 1,
+				promptTemplateCount: 1,
+				diagnostics: [],
+				systemPromptChanged: false,
+			});
+			expect(coding.systemPrompt).toBe(originalPrompt);
+			expect(coding.skills[0]?.content).toBe("First version.");
+
+			await writeFile(
+				skillPath,
+				"---\ndescription: Review changes.\n---\nSecond version.",
+			);
+			await mkdir(join(paths.userRoot, "AGENTS.override.md"), {
+				recursive: true,
+			});
+			const snapshotBeforeFailure = {
+				skills: coding.skills,
+				promptTemplates: coding.promptTemplates,
+				contextFiles: coding.contextFiles,
+				diagnostics: coding.resourceDiagnostics,
+				systemPrompt: coding.systemPrompt,
+			};
+
+			await expect(coding.reloadResources()).rejects.toThrow(
+				"Resource is not a regular file",
+			);
+			expect({
+				skills: coding.skills,
+				promptTemplates: coding.promptTemplates,
+				contextFiles: coding.contextFiles,
+				diagnostics: coding.resourceDiagnostics,
+				systemPrompt: coding.systemPrompt,
+			}).toEqual(snapshotBeforeFailure);
+
+			await rm(join(paths.userRoot, "AGENTS.override.md"), {
+				recursive: true,
+			});
+			await coding.reloadResources();
+			expect(coding.skills[0]?.content).toBe("Second version.");
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	test("rejects reload while the harness is running", async () => {
+		const provider = new ControlledProvider();
+		const session = await createMemorySession();
+		const coding = await CodingSession.load(
+			config(session, provider, { tools: [] }),
+		);
+		const stream = coding.prompt("Run");
+		await waitUntil(() => provider.calls.length === 1, "provider request");
+
+		await expect(coding.reloadResources()).rejects.toThrow("agent is running");
+		await expect(coding.handleCommand("/reload")).rejects.toThrow(
+			"agent is running",
+		);
+		provider.finish();
+		await stream.result();
 	});
 
 	test("expands string prompts and queues before provider execution and persistence", async () => {

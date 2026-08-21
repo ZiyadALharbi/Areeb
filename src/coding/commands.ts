@@ -25,13 +25,20 @@ export interface CommandSessionInfo {
 export interface CommandResourceSummary {
 	readonly skillCount: number;
 	readonly promptTemplateCount: number;
+	readonly contextFileCount: number;
 	readonly diagnostics: readonly ResourceDiagnostic[];
+}
+
+export interface CommandResourceReloadResult extends CommandResourceSummary {
+	readonly systemPromptChanged: boolean;
 }
 
 export interface CommandContext {
 	readonly hasCapability: (capability: CommandCapability) => boolean;
 	readonly getSessionInfo: () => Promise<CommandSessionInfo>;
 	readonly getResourceSummary: () => CommandResourceSummary;
+	readonly getContextFiles: () => readonly string[];
+	readonly reloadResources: () => Promise<CommandResourceReloadResult>;
 	readonly getSessionName: () => Promise<string | undefined>;
 	readonly setSessionName: (name: string) => Promise<void>;
 }
@@ -216,8 +223,28 @@ export function createDefaultCommandRegistry(): CommandRegistry {
 					`Reasoning: ${info.reasoning}`,
 					`Messages: ${info.messageCount}`,
 					`Running: ${info.isRunning ? "yes" : "no"}`,
+					`Context files: ${resourceSummary.contextFileCount}`,
 					`Resource diagnostics: ${formatDiagnosticTotals(resourceSummary.diagnostics)}`,
 				].join("\n"),
+			};
+		},
+	});
+	registry.register({
+		name: "context",
+		description: "Show active project context files",
+		usage: "/context",
+		async handler(context, argumentsText) {
+			if (argumentsText.length > 0) {
+				return usageError("/context");
+			}
+			const files = context.getContextFiles();
+			return {
+				kind: "message",
+				level: "info",
+				text:
+					files.length === 0
+						? "No project context files loaded"
+						: files.join("\n"),
 			};
 		},
 	});
@@ -277,9 +304,21 @@ export function createDefaultCommandRegistry(): CommandRegistry {
 		name: "reload",
 		description: "Reload local resources and project context",
 		usage: "/reload",
-		// Resources are immutable snapshots on CodingSession; rebuilding them safely
-		// requires the application-level session controller used by /new and /resume.
-		requirements: ["session-controller"],
+		async handler(context, argumentsText) {
+			if (argumentsText.length > 0) {
+				return usageError("/reload");
+			}
+			const result = await context.reloadResources();
+			return {
+				kind: "message",
+				level: result.diagnostics.some(
+					(diagnostic) => diagnostic.severity === "warning",
+				)
+					? "warning"
+					: "info",
+				text: formatReloadSummary(result),
+			};
+		},
 	});
 	registry.register({
 		name: "name",
@@ -439,6 +478,7 @@ function formatResourceSummary(summary: CommandResourceSummary): string {
 	const lines = [
 		`Skills loaded: ${summary.skillCount}`,
 		`Prompt templates loaded: ${summary.promptTemplateCount}`,
+		`Project context files loaded: ${summary.contextFileCount}`,
 		`Resource diagnostics: ${formatDiagnosticTotals(summary.diagnostics)}`,
 	];
 	if (warnings.length > 0) {
@@ -454,6 +494,14 @@ function formatResourceSummary(summary: CommandResourceSummary): string {
 		}
 	}
 	return lines.join("\n");
+}
+
+function formatReloadSummary(summary: CommandResourceReloadResult): string {
+	return [
+		"Resources reloaded.",
+		formatResourceSummary(summary),
+		`System prompt changed: ${summary.systemPromptChanged ? "yes" : "no"}`,
+	].join("\n");
 }
 
 function formatDiagnosticTotals(
