@@ -3,6 +3,7 @@ export type {
 	CommandContext,
 	CommandHandler,
 	CommandOutcome,
+	CommandResourceReloadResult,
 	CommandResourceSummary,
 	CommandResult,
 	CommandSessionInfo,

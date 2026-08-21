@@ -12,13 +12,20 @@ function context(
 	resourceSummary: CommandResourceSummary = {
 		skillCount: 0,
 		promptTemplateCount: 0,
+		contextFileCount: 0,
 		diagnostics: [],
 	},
+	contextFiles: readonly string[] = [],
+	systemPromptChanged = false,
 ): CommandContext {
 	let name: string | undefined;
 	return {
 		hasCapability: (capability) => capabilities.includes(capability),
 		getResourceSummary: () => resourceSummary,
+		getContextFiles: () => [...contextFiles],
+		async reloadResources() {
+			return { ...resourceSummary, systemPromptChanged };
+		},
 		async getSessionInfo() {
 			return {
 				id: "00000000-0000-4000-8000-000000000001",
@@ -200,6 +207,7 @@ describe("default slash commands", () => {
 			"compact",
 			"export",
 			"session",
+			"context",
 			"resources",
 			"hotkeys",
 			"resume",
@@ -234,6 +242,15 @@ describe("default slash commands", () => {
 			"/resources — Show loaded resources and discovery diagnostics",
 		);
 		expect(help.outcome.text).toContain(
+			"/context — Show active project context files",
+		);
+		expect(help.outcome.text).toContain(
+			"/reload — Reload local resources and project context",
+		);
+		expect(help.outcome.text).not.toContain(
+			"/reload — Reload local resources and project context [planned:",
+		);
+		expect(help.outcome.text).toContain(
 			"/new — Start a new session [planned: session-controller]",
 		);
 		expect(await registry.dispatch("/quit now", commandContext)).toEqual({
@@ -258,6 +275,7 @@ describe("default slash commands", () => {
 		const commandContext = context([], {
 			skillCount: 2,
 			promptTemplateCount: 1,
+			contextFileCount: 3,
 			diagnostics: [
 				{
 					kind: "skill",
@@ -294,6 +312,7 @@ describe("default slash commands", () => {
 		expect(result.outcome.level).toBe("warning");
 		expect(result.outcome.text).toBe(`Skills loaded: 2
 Prompt templates loaded: 1
+Project context files loaded: 3
 Resource diagnostics: 1 warning, 1 info
 
 Warnings:
@@ -301,5 +320,62 @@ Warnings:
 
 Info:
 - [prompt-template/overridden] review: Prompt template was overridden (path: /user/review.md; winner: /project/review.md)`);
+	});
+
+	test("lists context paths and reloads resources with argument validation", async () => {
+		const registry = createDefaultCommandRegistry();
+		const summary: CommandResourceSummary = {
+			skillCount: 2,
+			promptTemplateCount: 1,
+			contextFileCount: 2,
+			diagnostics: [],
+		};
+		const commandContext = context(
+			[],
+			summary,
+			["/workspace/AGENTS.md", "/workspace/.areeb/AGENTS.md"],
+			true,
+		);
+
+		expect(await registry.dispatch("/context extra", commandContext)).toEqual({
+			handled: true,
+			outcome: {
+				kind: "message",
+				level: "error",
+				text: "Usage: /context",
+			},
+		});
+		expect(await registry.dispatch("/context", commandContext)).toEqual({
+			handled: true,
+			outcome: {
+				kind: "message",
+				level: "info",
+				text: "/workspace/AGENTS.md\n/workspace/.areeb/AGENTS.md",
+			},
+		});
+		expect(await registry.dispatch("/context", context())).toMatchObject({
+			outcome: { text: "No project context files loaded" },
+		});
+		expect(await registry.dispatch("/reload extra", commandContext)).toEqual({
+			handled: true,
+			outcome: {
+				kind: "message",
+				level: "error",
+				text: "Usage: /reload",
+			},
+		});
+		expect(await registry.dispatch("/reload", commandContext)).toEqual({
+			handled: true,
+			outcome: {
+				kind: "message",
+				level: "info",
+				text: `Resources reloaded.
+Skills loaded: 2
+Prompt templates loaded: 1
+Project context files loaded: 2
+Resource diagnostics: 0 warnings, 0 info
+System prompt changed: yes`,
+			},
+		});
 	});
 });

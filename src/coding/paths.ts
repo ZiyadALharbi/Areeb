@@ -11,6 +11,7 @@ export interface AreebPaths {
 	readonly agentsRoot: string;
 	readonly userAgentSkills: string;
 	readonly projectRoot: string;
+	readonly projectAgentsRoot: string;
 	readonly projectSkills: string;
 	readonly projectPrompts: string;
 	readonly projectAgentSkills: string;
@@ -32,6 +33,7 @@ export function areebPaths(options: AreebPathOptions = {}): AreebPaths {
 	const agentsRoot = resolve(options.agentsRoot ?? join(homedir(), ".agents"));
 	const userSessions = join(userRoot, "sessions");
 	const projectRoot = join(cwd, ".areeb");
+	const projectAgentsRoot = join(cwd, ".agents");
 
 	return Object.freeze({
 		userRoot,
@@ -42,9 +44,10 @@ export function areebPaths(options: AreebPathOptions = {}): AreebPaths {
 		agentsRoot,
 		userAgentSkills: join(agentsRoot, "skills"),
 		projectRoot,
+		projectAgentsRoot,
 		projectSkills: join(projectRoot, "skills"),
 		projectPrompts: join(projectRoot, "prompts"),
-		projectAgentSkills: join(cwd, ".agents", "skills"),
+		projectAgentSkills: join(projectAgentsRoot, "skills"),
 		projectSessions: join(
 			userSessions,
 			createHash("sha256").update(cwd).digest("hex"),
