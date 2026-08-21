@@ -1,10 +1,14 @@
 import type { Dirent } from "node:fs";
-import { readdir, realpath, stat } from "node:fs/promises";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { lstat, readdir, realpath, stat } from "node:fs/promises";
+import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { discoverProjectDirectories } from "./project-context.ts";
 import {
 	parseFrontmatter,
+	type ResourceDiagnostic,
 	ResourceError,
+	type ResourceLoadPolicy,
+	type ResourceLoadResult,
+	type ResourceSource,
 	readResourceFile,
 } from "./resources.ts";
 
@@ -22,52 +26,114 @@ export interface Skill {
 
 export type SkillLayout = "areeb" | "agents";
 
-export interface SkillSource {
-	readonly directory: string;
+export interface SkillSource extends ResourceSource {
 	readonly layout: SkillLayout;
 }
 
+export type LoadSkillsResult = ResourceLoadResult<"skills", Skill>;
+
+type SkillSourceInput = string | SkillSource;
+
+interface OrderedSkillSource extends SkillSource {
+	readonly order: number;
+	readonly precedence: number;
+}
+
+interface SkillDiscoveryContext {
+	readonly diagnostics: ResourceDiagnostic[];
+	readonly policy: ResourceLoadPolicy;
+}
+
 export async function loadSkills(
-	sources: string | SkillSource | readonly (string | SkillSource)[],
+	sources: SkillSourceInput | readonly SkillSourceInput[],
 ): Promise<Skill[]> {
+	return [...(await loadSkillsInternal(sources, "strict")).skills];
+}
+
+export async function loadSkillsWithDiagnostics(
+	sources: SkillSourceInput | readonly SkillSourceInput[],
+): Promise<LoadSkillsResult> {
+	return loadSkillsInternal(sources, "diagnostic");
+}
+
+async function loadSkillsInternal(
+	sources: SkillSourceInput | readonly SkillSourceInput[],
+	policy: ResourceLoadPolicy,
+): Promise<LoadSkillsResult> {
 	const byName = new Map<string, Skill>();
 	const canonicalFiles = new Set<string>();
-	const sourceList = (
-		Array.isArray(sources) ? sources : [sources]
-	) as readonly (string | SkillSource)[];
+	const context: SkillDiscoveryContext = { diagnostics: [], policy };
 
-	for (const sourceInput of sourceList) {
-		const source =
-			typeof sourceInput === "string"
-				? { directory: sourceInput, layout: "areeb" as const }
-				: sourceInput;
+	for (const source of orderSkillSources(sources)) {
 		const sourceByName = new Map<string, Skill>();
-		for (const candidate of await discoverSkillFiles(source)) {
-			const canonicalPath = await canonicalSkillPath(candidate.filePath);
+		for (const candidate of await discoverSkillFiles(source, context)) {
+			const canonicalPath = await resolveCanonicalSkill(
+				candidate.filePath,
+				context,
+			);
+			if (canonicalPath === undefined) {
+				continue;
+			}
 			if (canonicalFiles.has(canonicalPath)) {
 				continue;
 			}
 			canonicalFiles.add(canonicalPath);
-			const skill = await loadSkill(candidate.filePath, candidate.derivedName);
+			const skill = await loadSkillCandidate(candidate, context);
+			if (skill === undefined) {
+				continue;
+			}
 			const duplicate = sourceByName.get(skill.name);
 			if (duplicate) {
-				throw new ResourceError(
+				const error = new ResourceError(
 					`Duplicate skill "${skill.name}"; first loaded from ${duplicate.filePath}`,
 					skill.filePath,
 				);
+				if (policy === "strict") {
+					throw error;
+				}
+				context.diagnostics.push(
+					createDiagnostic({
+						kind: "skill",
+						code: "duplicate",
+						severity: "warning",
+						name: skill.name,
+						path: skill.filePath,
+						relatedPath: duplicate.filePath,
+						message: `Duplicate skill "${skill.name}" was skipped`,
+					}),
+				);
+				continue;
 			}
 			sourceByName.set(skill.name, skill);
 		}
 		for (const skill of sourceByName.values()) {
+			const overridden = byName.get(skill.name);
+			if (overridden && policy === "diagnostic") {
+				context.diagnostics.push(
+					createDiagnostic({
+						kind: "skill",
+						code: "overridden",
+						severity: "info",
+						name: skill.name,
+						path: overridden.filePath,
+						relatedPath: skill.filePath,
+						message: `Skill "${skill.name}" was overridden by a higher-precedence source`,
+					}),
+				);
+			}
 			byName.set(skill.name, skill);
 		}
 	}
 
-	return [...byName.values()].sort(
+	const skills = [...byName.values()].sort(
 		(left, right) =>
 			left.name.localeCompare(right.name) ||
 			left.filePath.localeCompare(right.filePath),
 	);
+	return Object.freeze({
+		skills: Object.freeze(skills),
+		diagnostics: Object.freeze(context.diagnostics),
+	});
 }
 
 export function expandSkillInvocation(
@@ -140,6 +206,7 @@ export function isSkillDirective(input: string): boolean {
 interface SkillCandidate {
 	readonly filePath: string;
 	readonly derivedName: string;
+	readonly relativePath: string;
 }
 
 export async function discoverProjectAgentSkillDirectories(
@@ -153,15 +220,23 @@ export async function discoverProjectAgentSkillDirectories(
 }
 
 async function discoverSkillFiles(
-	source: SkillSource,
+	source: OrderedSkillSource,
+	context: SkillDiscoveryContext,
 ): Promise<SkillCandidate[]> {
-	return source.layout === "agents"
-		? discoverAgentSkillFiles(source.directory)
-		: discoverAreebSkillFiles(source.directory);
+	const candidates =
+		source.layout === "agents"
+			? await discoverAgentSkillFiles(source.directory, context)
+			: await discoverAreebSkillFiles(source.directory, context);
+	return candidates.sort(
+		(left, right) =>
+			left.relativePath.localeCompare(right.relativePath) ||
+			left.filePath.localeCompare(right.filePath),
+	);
 }
 
 async function discoverAreebSkillFiles(
 	directory: string,
+	context: SkillDiscoveryContext,
 ): Promise<SkillCandidate[]> {
 	const absoluteDirectory = resolve(directory);
 	let entries: Dirent<string>[];
@@ -171,13 +246,15 @@ async function discoverAreebSkillFiles(
 		if (isMissing(error)) {
 			return [];
 		}
-		throw new ResourceError(
-			"Unable to list skills directory",
-			absoluteDirectory,
-			{
+		reportSkillFailure(
+			context,
+			new ResourceError("Unable to list skills directory", absoluteDirectory, {
 				cause: error,
-			},
+			}),
+			"source-unreadable",
+			absoluteDirectory,
 		);
+		return [];
 	}
 
 	const candidates: SkillCandidate[] = [];
@@ -189,6 +266,8 @@ async function discoverAreebSkillFiles(
 			const metadata = await inspectSkillPath(
 				entryPath,
 				entry.isSymbolicLink(),
+				context,
+				entry.isSymbolicLink(),
 			);
 			if (!metadata?.isFile()) {
 				continue;
@@ -196,6 +275,9 @@ async function discoverAreebSkillFiles(
 			candidates.push({
 				filePath: entryPath,
 				derivedName: basename(entry.name, ".md"),
+				relativePath: normalizeRelativePath(
+					relative(absoluteDirectory, entryPath),
+				),
 			});
 			continue;
 		}
@@ -203,26 +285,42 @@ async function discoverAreebSkillFiles(
 		const entryMetadata = await inspectSkillPath(
 			entryPath,
 			entry.isSymbolicLink(),
+			context,
+			entry.isSymbolicLink(),
 		);
 		if (!(entry.isDirectory() || entryMetadata?.isDirectory())) {
 			continue;
 		}
 
 		const filePath = join(entryPath, "SKILL.md");
-		const metadata = await inspectSkillPath(filePath, true);
+		const metadata = await inspectSkillPath(filePath, true, context, false);
 		if (metadata === undefined) {
 			continue;
 		}
 		if (!metadata.isFile()) {
-			throw new ResourceError("Skill resource is not a file", filePath);
+			reportSkillFailure(
+				context,
+				new ResourceError("Skill resource is not a file", filePath),
+				"validation-failed",
+				filePath,
+				entry.name,
+			);
+			continue;
 		}
-		candidates.push({ filePath, derivedName: entry.name });
+		candidates.push({
+			filePath,
+			derivedName: entry.name,
+			relativePath: normalizeRelativePath(
+				relative(absoluteDirectory, filePath),
+			),
+		});
 	}
 	return candidates;
 }
 
 async function discoverAgentSkillFiles(
 	directory: string,
+	context: SkillDiscoveryContext,
 ): Promise<SkillCandidate[]> {
 	const absoluteDirectory = resolve(directory);
 	let entries: Dirent<string>[];
@@ -232,11 +330,15 @@ async function discoverAgentSkillFiles(
 		if (isMissing(error)) {
 			return [];
 		}
-		throw new ResourceError(
-			"Unable to list skills directory",
+		reportSkillFailure(
+			context,
+			new ResourceError("Unable to list skills directory", absoluteDirectory, {
+				cause: error,
+			}),
+			"source-unreadable",
 			absoluteDirectory,
-			{ cause: error },
 		);
+		return [];
 	}
 
 	const candidates: SkillCandidate[] = [];
@@ -245,9 +347,20 @@ async function discoverAgentSkillFiles(
 		left.name.localeCompare(right.name),
 	)) {
 		const entryPath = join(absoluteDirectory, entry.name);
-		const metadata = await inspectSkillPath(entryPath, entry.isSymbolicLink());
+		const metadata = await inspectSkillPath(
+			entryPath,
+			entry.isSymbolicLink(),
+			context,
+			entry.isSymbolicLink(),
+		);
 		if (entry.isDirectory() || metadata?.isDirectory()) {
-			await walkAgentSkillDirectory(entryPath, visitedDirectories, candidates);
+			await walkAgentSkillDirectory(
+				entryPath,
+				absoluteDirectory,
+				visitedDirectories,
+				candidates,
+				context,
+			);
 		}
 	}
 	return candidates;
@@ -255,10 +368,15 @@ async function discoverAgentSkillFiles(
 
 async function walkAgentSkillDirectory(
 	directory: string,
+	sourceDirectory: string,
 	visitedDirectories: Set<string>,
 	candidates: SkillCandidate[],
+	context: SkillDiscoveryContext,
 ): Promise<void> {
-	const canonicalDirectory = await canonicalSkillPath(directory);
+	const canonicalDirectory = await resolveCanonicalSkill(directory, context);
+	if (canonicalDirectory === undefined) {
+		return;
+	}
 	if (visitedDirectories.has(canonicalDirectory)) {
 		return;
 	}
@@ -268,27 +386,58 @@ async function walkAgentSkillDirectory(
 	try {
 		entries = await readdir(directory, { withFileTypes: true });
 	} catch (error) {
-		throw new ResourceError("Unable to list skills directory", directory, {
-			cause: error,
-		});
+		reportSkillFailure(
+			context,
+			new ResourceError("Unable to list skills directory", directory, {
+				cause: error,
+			}),
+			"read-failed",
+			directory,
+		);
+		return;
 	}
 	entries.sort((left, right) => left.name.localeCompare(right.name));
 
 	if (entries.some((entry) => entry.name === "SKILL.md")) {
 		const filePath = join(directory, "SKILL.md");
-		const metadata = await inspectSkillPath(filePath, false);
-		if (!metadata?.isFile()) {
-			throw new ResourceError("Skill resource is not a file", filePath);
+		const metadata = await inspectSkillPath(filePath, false, context, false);
+		if (metadata === undefined) {
+			return;
 		}
-		candidates.push({ filePath, derivedName: basename(directory) });
+		if (!metadata?.isFile()) {
+			reportSkillFailure(
+				context,
+				new ResourceError("Skill resource is not a file", filePath),
+				"validation-failed",
+				filePath,
+				basename(directory),
+			);
+			return;
+		}
+		candidates.push({
+			filePath,
+			derivedName: basename(directory),
+			relativePath: normalizeRelativePath(relative(sourceDirectory, filePath)),
+		});
 		return;
 	}
 
 	for (const entry of entries) {
 		const entryPath = join(directory, entry.name);
-		const metadata = await inspectSkillPath(entryPath, entry.isSymbolicLink());
+		const metadata = await inspectSkillPath(
+			entryPath,
+			entry.isSymbolicLink(),
+			context,
+			entry.isSymbolicLink(),
+		);
 		if (entry.isDirectory() || metadata?.isDirectory()) {
-			await walkAgentSkillDirectory(entryPath, visitedDirectories, candidates);
+			await walkAgentSkillDirectory(
+				entryPath,
+				sourceDirectory,
+				visitedDirectories,
+				candidates,
+				context,
+			);
 		}
 	}
 }
@@ -296,38 +445,132 @@ async function walkAgentSkillDirectory(
 async function inspectSkillPath(
 	filePath: string,
 	allowMissing: boolean,
+	context: SkillDiscoveryContext,
+	reportMissing: boolean,
 ): Promise<Awaited<ReturnType<typeof stat>> | undefined> {
 	try {
 		return await stat(filePath);
 	} catch (error) {
 		if (allowMissing && isMissing(error)) {
+			if (
+				context.policy === "diagnostic" &&
+				(reportMissing || (await isSymbolicLink(filePath)))
+			) {
+				reportSkillFailure(
+					context,
+					new ResourceError("Unable to inspect skill", filePath, {
+						cause: error,
+					}),
+					"read-failed",
+					filePath,
+				);
+			}
 			return undefined;
 		}
-		throw new ResourceError("Unable to inspect skill", filePath, {
-			cause: error,
-		});
+		reportSkillFailure(
+			context,
+			new ResourceError("Unable to inspect skill", filePath, {
+				cause: error,
+			}),
+			"read-failed",
+			filePath,
+		);
+		return undefined;
 	}
 }
 
-async function canonicalSkillPath(filePath: string): Promise<string> {
+async function isSymbolicLink(filePath: string): Promise<boolean> {
+	try {
+		return (await lstat(filePath)).isSymbolicLink();
+	} catch {
+		return false;
+	}
+}
+
+async function resolveCanonicalSkill(
+	filePath: string,
+	context: SkillDiscoveryContext,
+): Promise<string | undefined> {
 	try {
 		return await realpath(filePath);
 	} catch (error) {
-		throw new ResourceError("Unable to resolve skill path", filePath, {
-			cause: error,
-		});
+		reportSkillFailure(
+			context,
+			new ResourceError("Unable to resolve skill path", filePath, {
+				cause: error,
+			}),
+			"read-failed",
+			filePath,
+		);
+		return undefined;
 	}
 }
 
-async function loadSkill(
-	filePath: string,
-	derivedName: string,
-): Promise<Skill> {
-	validateSkillName(derivedName, filePath);
-	const { attributes, body } = parseFrontmatter(
-		await readResourceFile(filePath),
-		filePath,
-	);
+async function loadSkillCandidate(
+	candidate: SkillCandidate,
+	context: SkillDiscoveryContext,
+): Promise<Skill | undefined> {
+	try {
+		validateSkillName(candidate.derivedName, candidate.filePath);
+	} catch (error) {
+		reportSkillFailure(
+			context,
+			error,
+			"validation-failed",
+			candidate.filePath,
+			candidate.derivedName,
+		);
+		return undefined;
+	}
+
+	let contents: string;
+	try {
+		contents = await readResourceFile(candidate.filePath);
+	} catch (error) {
+		reportSkillFailure(
+			context,
+			error,
+			"read-failed",
+			candidate.filePath,
+			candidate.derivedName,
+		);
+		return undefined;
+	}
+
+	let parsed: ReturnType<typeof parseFrontmatter>;
+	try {
+		parsed = parseFrontmatter(contents, candidate.filePath);
+	} catch (error) {
+		reportSkillFailure(
+			context,
+			error,
+			"parse-failed",
+			candidate.filePath,
+			candidate.derivedName,
+		);
+		return undefined;
+	}
+
+	try {
+		return validateLoadedSkill(candidate, parsed);
+	} catch (error) {
+		reportSkillFailure(
+			context,
+			error,
+			"validation-failed",
+			candidate.filePath,
+			candidate.derivedName,
+		);
+		return undefined;
+	}
+}
+
+function validateLoadedSkill(
+	candidate: SkillCandidate,
+	parsed: ReturnType<typeof parseFrontmatter>,
+): Skill {
+	const { attributes, body } = parsed;
+	const { derivedName, filePath } = candidate;
 	const declaredName = attributes.name;
 	if (declaredName !== undefined && declaredName !== derivedName) {
 		throw new ResourceError(
@@ -358,6 +601,73 @@ async function loadSkill(
 		filePath: absolutePath,
 		baseDir: dirname(absolutePath),
 	});
+}
+
+function orderSkillSources(
+	sources: SkillSourceInput | readonly SkillSourceInput[],
+): OrderedSkillSource[] {
+	const sourceList = (
+		Array.isArray(sources) ? sources : [sources]
+	) as readonly SkillSourceInput[];
+	return sourceList
+		.map((input, order) => {
+			const source =
+				typeof input === "string"
+					? { directory: input, layout: "areeb" as const }
+					: input;
+			return {
+				...source,
+				order,
+				precedence: source.precedence ?? order,
+			};
+		})
+		.sort(
+			(left, right) =>
+				left.precedence - right.precedence || left.order - right.order,
+		);
+}
+
+function reportSkillFailure(
+	context: SkillDiscoveryContext,
+	error: unknown,
+	code: ResourceDiagnostic["code"],
+	path: string,
+	name?: string,
+): void {
+	if (context.policy === "strict") {
+		throw error;
+	}
+	context.diagnostics.push(
+		createDiagnostic({
+			kind: "skill",
+			code,
+			severity: "warning",
+			...(name === undefined ? {} : { name }),
+			path,
+			message: diagnosticMessage(error),
+		}),
+	);
+}
+
+function createDiagnostic(diagnostic: ResourceDiagnostic): ResourceDiagnostic {
+	return Object.freeze({ ...diagnostic });
+}
+
+function diagnosticMessage(error: unknown): string {
+	if (!(error instanceof Error)) {
+		return "Resource discovery failed";
+	}
+	if (error instanceof ResourceError && error.filePath !== undefined) {
+		const prefix = `${error.filePath}: `;
+		if (error.message.startsWith(prefix)) {
+			return error.message.slice(prefix.length);
+		}
+	}
+	return error.message;
+}
+
+function normalizeRelativePath(filePath: string): string {
+	return filePath.replaceAll("\\", "/");
 }
 
 function validateSkillName(name: string, filePath?: string): void {

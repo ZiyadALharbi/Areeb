@@ -2,16 +2,23 @@ import { describe, expect, test } from "bun:test";
 import {
 	type CommandContext,
 	CommandRegistry,
+	type CommandResourceSummary,
 	createDefaultCommandRegistry,
 	type SlashCommand,
 } from "../../src/coding/commands.ts";
 
 function context(
 	capabilities: readonly Parameters<CommandContext["hasCapability"]>[0][] = [],
+	resourceSummary: CommandResourceSummary = {
+		skillCount: 0,
+		promptTemplateCount: 0,
+		diagnostics: [],
+	},
 ): CommandContext {
 	let name: string | undefined;
 	return {
 		hasCapability: (capability) => capabilities.includes(capability),
+		getResourceSummary: () => resourceSummary,
 		async getSessionInfo() {
 			return {
 				id: "00000000-0000-4000-8000-000000000001",
@@ -193,6 +200,7 @@ describe("default slash commands", () => {
 			"compact",
 			"export",
 			"session",
+			"resources",
 			"hotkeys",
 			"resume",
 			"model",
@@ -223,6 +231,9 @@ describe("default slash commands", () => {
 		}
 		expect(help.outcome.text).toContain("/quit (aliases: /exit)");
 		expect(help.outcome.text).toContain(
+			"/resources — Show loaded resources and discovery diagnostics",
+		);
+		expect(help.outcome.text).toContain(
 			"/new — Start a new session [planned: session-controller]",
 		);
 		expect(await registry.dispatch("/quit now", commandContext)).toEqual({
@@ -240,5 +251,55 @@ describe("default slash commands", () => {
 				missingCapability: "compaction",
 			},
 		});
+	});
+
+	test("reports resource totals and grouped deterministic diagnostics", async () => {
+		const registry = createDefaultCommandRegistry();
+		const commandContext = context([], {
+			skillCount: 2,
+			promptTemplateCount: 1,
+			diagnostics: [
+				{
+					kind: "skill",
+					code: "validation-failed",
+					severity: "warning",
+					name: "broken",
+					path: "/skills/broken.md",
+					message: "Skill requires a description",
+				},
+				{
+					kind: "prompt-template",
+					code: "overridden",
+					severity: "info",
+					name: "review",
+					path: "/user/review.md",
+					relatedPath: "/project/review.md",
+					message: "Prompt template was overridden",
+				},
+			],
+		});
+
+		expect(await registry.dispatch("/resources now", commandContext)).toEqual({
+			handled: true,
+			outcome: {
+				kind: "message",
+				level: "error",
+				text: "Usage: /resources",
+			},
+		});
+		const result = await registry.dispatch("/resources", commandContext);
+		if (!result.handled || result.outcome.kind !== "message") {
+			throw new Error("Expected resource message");
+		}
+		expect(result.outcome.level).toBe("warning");
+		expect(result.outcome.text).toBe(`Skills loaded: 2
+Prompt templates loaded: 1
+Resource diagnostics: 1 warning, 1 info
+
+Warnings:
+- [skill/validation-failed] broken: Skill requires a description (path: /skills/broken.md)
+
+Info:
+- [prompt-template/overridden] review: Prompt template was overridden (path: /user/review.md; winner: /project/review.md)`);
 	});
 });

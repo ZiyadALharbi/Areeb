@@ -6,6 +6,7 @@ import { createDefaultCommandRegistry } from "../../src/coding/commands.ts";
 import {
 	expandPromptTemplateInvocation,
 	loadPromptTemplates,
+	loadPromptTemplatesWithDiagnostics,
 	renderPromptTemplate,
 } from "../../src/coding/prompt-templates.ts";
 
@@ -78,6 +79,58 @@ describe("prompt template loading", () => {
 		expect(templates).toHaveLength(1);
 		expect(templates[0]?.content).toBe("Second.");
 		expect(templates[0]?.filePath).toBe(join(other, "review.md"));
+	});
+
+	test("recovers malformed and reserved siblings while reporting overrides", async () => {
+		const directory = await createTempDirectory();
+		const lower = join(directory, "lower");
+		const higher = join(directory, "higher");
+		await mkdir(lower);
+		await mkdir(higher);
+		await writeFile(join(lower, "review.md"), "Lower review.");
+		await writeFile(join(higher, "bad.md"), "---\ninvalid\n---\nBad.");
+		await writeFile(join(higher, "help.md"), "Reserved.");
+		await writeFile(join(higher, "review.md"), "Higher review.");
+
+		const result = await loadPromptTemplatesWithDiagnostics(
+			[
+				{ directory: higher, precedence: 20 },
+				{ directory: lower, precedence: 10 },
+			],
+			{ reservedNames: createDefaultCommandRegistry().executableNames() },
+		);
+		expect(result.promptTemplates).toMatchObject([
+			{ name: "review", content: "Higher review." },
+		]);
+		expect(result.diagnostics).toMatchObject([
+			{
+				kind: "prompt-template",
+				code: "parse-failed",
+				severity: "warning",
+				name: "bad",
+				path: join(higher, "bad.md"),
+			},
+			{
+				kind: "prompt-template",
+				code: "validation-failed",
+				severity: "warning",
+				name: "help",
+				path: join(higher, "help.md"),
+			},
+			{
+				kind: "prompt-template",
+				code: "overridden",
+				severity: "info",
+				name: "review",
+				path: join(lower, "review.md"),
+				relatedPath: join(higher, "review.md"),
+			},
+		]);
+		await expect(
+			loadPromptTemplates(higher, {
+				reservedNames: createDefaultCommandRegistry().executableNames(),
+			}),
+		).rejects.toThrow("Malformed frontmatter entry");
 	});
 });
 

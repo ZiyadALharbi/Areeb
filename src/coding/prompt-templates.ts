@@ -1,9 +1,13 @@
 import type { Dirent } from "node:fs";
 import { readdir, realpath, stat } from "node:fs/promises";
-import { basename, extname, join, resolve } from "node:path";
+import { basename, extname, join, relative, resolve } from "node:path";
 import {
 	parseFrontmatter,
+	type ResourceDiagnostic,
 	ResourceError,
+	type ResourceLoadPolicy,
+	type ResourceLoadResult,
+	type ResourceSource,
 	readResourceFile,
 } from "./resources.ts";
 
@@ -23,44 +27,126 @@ export interface LoadPromptTemplatesOptions {
 	readonly reservedNames?: readonly string[];
 }
 
+export type PromptTemplateSource = ResourceSource;
+
+export type LoadPromptTemplatesResult = ResourceLoadResult<
+	"promptTemplates",
+	PromptTemplate
+>;
+
+type PromptTemplateSourceInput = string | PromptTemplateSource;
+
+interface OrderedPromptTemplateSource extends PromptTemplateSource {
+	readonly order: number;
+	readonly precedence: number;
+}
+
+interface PromptDiscoveryContext {
+	readonly diagnostics: ResourceDiagnostic[];
+	readonly policy: ResourceLoadPolicy;
+	readonly reservedNames: ReadonlySet<string>;
+}
+
 export async function loadPromptTemplates(
-	directories: string | readonly string[],
+	sources: PromptTemplateSourceInput | readonly PromptTemplateSourceInput[],
 	options: LoadPromptTemplatesOptions = {},
 ): Promise<PromptTemplate[]> {
+	return [
+		...(await loadPromptTemplatesInternal(sources, options, "strict"))
+			.promptTemplates,
+	];
+}
+
+export async function loadPromptTemplatesWithDiagnostics(
+	sources: PromptTemplateSourceInput | readonly PromptTemplateSourceInput[],
+	options: LoadPromptTemplatesOptions = {},
+): Promise<LoadPromptTemplatesResult> {
+	return loadPromptTemplatesInternal(sources, options, "diagnostic");
+}
+
+async function loadPromptTemplatesInternal(
+	sources: PromptTemplateSourceInput | readonly PromptTemplateSourceInput[],
+	options: LoadPromptTemplatesOptions,
+	policy: ResourceLoadPolicy,
+): Promise<LoadPromptTemplatesResult> {
 	const byName = new Map<string, PromptTemplate>();
 	const canonicalFiles = new Set<string>();
-	const reservedNames = new Set(options.reservedNames ?? []);
+	const context: PromptDiscoveryContext = {
+		diagnostics: [],
+		policy,
+		reservedNames: new Set(options.reservedNames ?? []),
+	};
 
-	for (const directory of typeof directories === "string"
-		? [directories]
-		: directories) {
+	for (const source of orderPromptSources(sources)) {
 		const sourceByName = new Map<string, PromptTemplate>();
-		for (const filePath of await discoverPromptFiles(directory)) {
-			const canonicalPath = await canonicalPromptPath(filePath);
+		for (const candidate of await discoverPromptFiles(source, context)) {
+			const canonicalPath = await resolveCanonicalPrompt(
+				candidate.filePath,
+				context,
+			);
+			if (canonicalPath === undefined) {
+				continue;
+			}
 			if (canonicalFiles.has(canonicalPath)) {
 				continue;
 			}
 			canonicalFiles.add(canonicalPath);
-			const template = await loadPromptTemplate(filePath, reservedNames);
+			const template = await loadPromptTemplateCandidate(candidate, context);
+			if (template === undefined) {
+				continue;
+			}
 			const duplicate = sourceByName.get(template.name);
 			if (duplicate) {
-				throw new ResourceError(
+				const error = new ResourceError(
 					`Duplicate prompt template "${template.name}"; first loaded from ${duplicate.filePath}`,
 					template.filePath,
 				);
+				if (policy === "strict") {
+					throw error;
+				}
+				context.diagnostics.push(
+					createDiagnostic({
+						kind: "prompt-template",
+						code: "duplicate",
+						severity: "warning",
+						name: template.name,
+						path: template.filePath,
+						relatedPath: duplicate.filePath,
+						message: `Duplicate prompt template "${template.name}" was skipped`,
+					}),
+				);
+				continue;
 			}
 			sourceByName.set(template.name, template);
 		}
 		for (const template of sourceByName.values()) {
+			const overridden = byName.get(template.name);
+			if (overridden && policy === "diagnostic") {
+				context.diagnostics.push(
+					createDiagnostic({
+						kind: "prompt-template",
+						code: "overridden",
+						severity: "info",
+						name: template.name,
+						path: overridden.filePath,
+						relatedPath: template.filePath,
+						message: `Prompt template "${template.name}" was overridden by a higher-precedence source`,
+					}),
+				);
+			}
 			byName.set(template.name, template);
 		}
 	}
 
-	return [...byName.values()].sort(
+	const promptTemplates = [...byName.values()].sort(
 		(left, right) =>
 			left.name.localeCompare(right.name) ||
 			left.filePath.localeCompare(right.filePath),
 	);
+	return Object.freeze({
+		promptTemplates: Object.freeze(promptTemplates),
+		diagnostics: Object.freeze(context.diagnostics),
+	});
 }
 
 export function renderPromptTemplate(
@@ -109,8 +195,17 @@ export function expandPromptTemplateInvocation(
 		: rendered;
 }
 
-async function discoverPromptFiles(directory: string): Promise<string[]> {
-	const absoluteDirectory = resolve(directory);
+interface PromptTemplateCandidate {
+	readonly filePath: string;
+	readonly name: string;
+	readonly relativePath: string;
+}
+
+async function discoverPromptFiles(
+	source: OrderedPromptTemplateSource,
+	context: PromptDiscoveryContext,
+): Promise<PromptTemplateCandidate[]> {
+	const absoluteDirectory = resolve(source.directory);
 	let entries: Dirent<string>[];
 	try {
 		entries = await readdir(absoluteDirectory, { withFileTypes: true });
@@ -118,14 +213,20 @@ async function discoverPromptFiles(directory: string): Promise<string[]> {
 		if (isMissing(error)) {
 			return [];
 		}
-		throw new ResourceError(
-			"Unable to list prompt templates directory",
+		reportPromptFailure(
+			context,
+			new ResourceError(
+				"Unable to list prompt templates directory",
+				absoluteDirectory,
+				{ cause: error },
+			),
+			"source-unreadable",
 			absoluteDirectory,
-			{ cause: error },
 		);
+		return [];
 	}
 
-	const files: string[] = [];
+	const candidates: PromptTemplateCandidate[] = [];
 	for (const entry of entries.sort((left, right) =>
 		left.name.localeCompare(right.name),
 	)) {
@@ -138,38 +239,122 @@ async function discoverPromptFiles(directory: string): Promise<string[]> {
 			metadata = await stat(filePath);
 		} catch (error) {
 			if (entry.isSymbolicLink() && isMissing(error)) {
+				if (context.policy === "diagnostic") {
+					reportPromptFailure(
+						context,
+						new ResourceError("Unable to inspect prompt template", filePath, {
+							cause: error,
+						}),
+						"read-failed",
+						filePath,
+						basename(filePath, ".md"),
+					);
+				}
 				continue;
 			}
-			throw new ResourceError("Unable to inspect prompt template", filePath, {
-				cause: error,
-			});
+			reportPromptFailure(
+				context,
+				new ResourceError("Unable to inspect prompt template", filePath, {
+					cause: error,
+				}),
+				"read-failed",
+				filePath,
+				basename(filePath, ".md"),
+			);
+			continue;
 		}
 		if (metadata.isFile()) {
-			files.push(filePath);
+			candidates.push({
+				filePath,
+				name: basename(filePath, ".md"),
+				relativePath: normalizeRelativePath(
+					relative(absoluteDirectory, filePath),
+				),
+			});
 		}
 	}
-	return files;
+	return candidates.sort(
+		(left, right) =>
+			left.relativePath.localeCompare(right.relativePath) ||
+			left.filePath.localeCompare(right.filePath),
+	);
 }
 
-async function loadPromptTemplate(
-	filePath: string,
-	reservedNames: ReadonlySet<string>,
-): Promise<PromptTemplate> {
-	const name = basename(filePath, ".md");
-	validatePromptName(name, filePath);
-	if (reservedNames.has(name)) {
-		throw new ResourceError(
-			`Prompt template name "${name}" conflicts with a registered slash command`,
-			filePath,
+async function loadPromptTemplateCandidate(
+	candidate: PromptTemplateCandidate,
+	context: PromptDiscoveryContext,
+): Promise<PromptTemplate | undefined> {
+	try {
+		validatePromptName(candidate.name, candidate.filePath);
+		if (context.reservedNames.has(candidate.name)) {
+			throw new ResourceError(
+				`Prompt template name "${candidate.name}" conflicts with a registered slash command`,
+				candidate.filePath,
+			);
+		}
+	} catch (error) {
+		reportPromptFailure(
+			context,
+			error,
+			"validation-failed",
+			candidate.filePath,
+			candidate.name,
 		);
+		return undefined;
 	}
 
-	const { attributes, body } = parseFrontmatter(
-		await readResourceFile(filePath),
-		filePath,
-	);
+	let contents: string;
+	try {
+		contents = await readResourceFile(candidate.filePath);
+	} catch (error) {
+		reportPromptFailure(
+			context,
+			error,
+			"read-failed",
+			candidate.filePath,
+			candidate.name,
+		);
+		return undefined;
+	}
+
+	let parsed: ReturnType<typeof parseFrontmatter>;
+	try {
+		parsed = parseFrontmatter(contents, candidate.filePath);
+	} catch (error) {
+		reportPromptFailure(
+			context,
+			error,
+			"parse-failed",
+			candidate.filePath,
+			candidate.name,
+		);
+		return undefined;
+	}
+
+	try {
+		return validateLoadedPromptTemplate(candidate, parsed);
+	} catch (error) {
+		reportPromptFailure(
+			context,
+			error,
+			"validation-failed",
+			candidate.filePath,
+			candidate.name,
+		);
+		return undefined;
+	}
+}
+
+function validateLoadedPromptTemplate(
+	candidate: PromptTemplateCandidate,
+	parsed: ReturnType<typeof parseFrontmatter>,
+): PromptTemplate {
+	const { attributes, body } = parsed;
 	if (body.trim().length === 0) {
-		throw new ResourceError("Prompt template body cannot be empty", filePath);
+		throw new ResourceError(
+			"Prompt template body cannot be empty",
+			candidate.filePath,
+		);
 	}
 	const description =
 		attributes.description?.trim() ||
@@ -180,18 +365,102 @@ async function loadPromptTemplate(
 	if (!description) {
 		throw new ResourceError(
 			"Prompt template requires content or a description",
-			filePath,
+			candidate.filePath,
 		);
 	}
 
 	const argumentHint = attributes["argument-hint"]?.trim();
 	return Object.freeze({
-		name,
+		name: candidate.name,
 		description,
 		...(argumentHint ? { argumentHint } : {}),
 		content: body,
-		filePath: resolve(filePath),
+		filePath: resolve(candidate.filePath),
 	});
+}
+
+async function resolveCanonicalPrompt(
+	filePath: string,
+	context: PromptDiscoveryContext,
+): Promise<string | undefined> {
+	try {
+		return await realpath(filePath);
+	} catch (error) {
+		reportPromptFailure(
+			context,
+			new ResourceError("Unable to resolve prompt template path", filePath, {
+				cause: error,
+			}),
+			"read-failed",
+			filePath,
+			basename(filePath, ".md"),
+		);
+		return undefined;
+	}
+}
+
+function orderPromptSources(
+	sources: PromptTemplateSourceInput | readonly PromptTemplateSourceInput[],
+): OrderedPromptTemplateSource[] {
+	const sourceList = (
+		Array.isArray(sources) ? sources : [sources]
+	) as readonly PromptTemplateSourceInput[];
+	return sourceList
+		.map((input, order) => {
+			const source = typeof input === "string" ? { directory: input } : input;
+			return {
+				...source,
+				order,
+				precedence: source.precedence ?? order,
+			};
+		})
+		.sort(
+			(left, right) =>
+				left.precedence - right.precedence || left.order - right.order,
+		);
+}
+
+function reportPromptFailure(
+	context: PromptDiscoveryContext,
+	error: unknown,
+	code: ResourceDiagnostic["code"],
+	path: string,
+	name?: string,
+): void {
+	if (context.policy === "strict") {
+		throw error;
+	}
+	context.diagnostics.push(
+		createDiagnostic({
+			kind: "prompt-template",
+			code,
+			severity: "warning",
+			...(name === undefined ? {} : { name }),
+			path,
+			message: diagnosticMessage(error),
+		}),
+	);
+}
+
+function createDiagnostic(diagnostic: ResourceDiagnostic): ResourceDiagnostic {
+	return Object.freeze({ ...diagnostic });
+}
+
+function diagnosticMessage(error: unknown): string {
+	if (!(error instanceof Error)) {
+		return "Resource discovery failed";
+	}
+	if (error instanceof ResourceError && error.filePath !== undefined) {
+		const prefix = `${error.filePath}: `;
+		if (error.message.startsWith(prefix)) {
+			return error.message.slice(prefix.length);
+		}
+	}
+	return error.message;
+}
+
+function normalizeRelativePath(filePath: string): string {
+	return filePath.replaceAll("\\", "/");
 }
 
 function validatePromptName(name: string, filePath: string): void {
@@ -223,18 +492,4 @@ function isMissing(error: unknown): boolean {
 		"code" in error &&
 		error.code === "ENOENT"
 	);
-}
-
-async function canonicalPromptPath(filePath: string): Promise<string> {
-	try {
-		return await realpath(filePath);
-	} catch (error) {
-		throw new ResourceError(
-			"Unable to resolve prompt template path",
-			filePath,
-			{
-				cause: error,
-			},
-		);
-	}
 }

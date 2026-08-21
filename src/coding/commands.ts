@@ -1,4 +1,5 @@
 import type { ReasoningLevel } from "../ai/types.ts";
+import type { ResourceDiagnostic } from "./resources.ts";
 
 const COMMAND_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -21,9 +22,16 @@ export interface CommandSessionInfo {
 	readonly isRunning: boolean;
 }
 
+export interface CommandResourceSummary {
+	readonly skillCount: number;
+	readonly promptTemplateCount: number;
+	readonly diagnostics: readonly ResourceDiagnostic[];
+}
+
 export interface CommandContext {
 	readonly hasCapability: (capability: CommandCapability) => boolean;
 	readonly getSessionInfo: () => Promise<CommandSessionInfo>;
+	readonly getResourceSummary: () => CommandResourceSummary;
 	readonly getSessionName: () => Promise<string | undefined>;
 	readonly setSessionName: (name: string) => Promise<void>;
 }
@@ -195,6 +203,7 @@ export function createDefaultCommandRegistry(): CommandRegistry {
 				return usageError("/session");
 			}
 			const info = await context.getSessionInfo();
+			const resourceSummary = context.getResourceSummary();
 			return {
 				kind: "message",
 				level: "info",
@@ -207,7 +216,28 @@ export function createDefaultCommandRegistry(): CommandRegistry {
 					`Reasoning: ${info.reasoning}`,
 					`Messages: ${info.messageCount}`,
 					`Running: ${info.isRunning ? "yes" : "no"}`,
+					`Resource diagnostics: ${formatDiagnosticTotals(resourceSummary.diagnostics)}`,
 				].join("\n"),
+			};
+		},
+	});
+	registry.register({
+		name: "resources",
+		description: "Show loaded resources and discovery diagnostics",
+		usage: "/resources",
+		async handler(context, argumentsText) {
+			if (argumentsText.length > 0) {
+				return usageError("/resources");
+			}
+			const summary = context.getResourceSummary();
+			return {
+				kind: "message",
+				level: summary.diagnostics.some(
+					(diagnostic) => diagnostic.severity === "warning",
+				)
+					? "warning"
+					: "info",
+				text: formatResourceSummary(summary),
 			};
 		},
 	});
@@ -397,4 +427,59 @@ function formatHelp(
 			return `${command.usage}${aliases} — ${command.description}${availability}`;
 		}),
 	].join("\n");
+}
+
+function formatResourceSummary(summary: CommandResourceSummary): string {
+	const warnings = summary.diagnostics.filter(
+		(diagnostic) => diagnostic.severity === "warning",
+	);
+	const info = summary.diagnostics.filter(
+		(diagnostic) => diagnostic.severity === "info",
+	);
+	const lines = [
+		`Skills loaded: ${summary.skillCount}`,
+		`Prompt templates loaded: ${summary.promptTemplateCount}`,
+		`Resource diagnostics: ${formatDiagnosticTotals(summary.diagnostics)}`,
+	];
+	if (warnings.length > 0) {
+		lines.push("", "Warnings:");
+		for (const diagnostic of warnings) {
+			lines.push(formatResourceDiagnostic(diagnostic));
+		}
+	}
+	if (info.length > 0) {
+		lines.push("", "Info:");
+		for (const diagnostic of info) {
+			lines.push(formatResourceDiagnostic(diagnostic));
+		}
+	}
+	return lines.join("\n");
+}
+
+function formatDiagnosticTotals(
+	diagnostics: readonly ResourceDiagnostic[],
+): string {
+	let warnings = 0;
+	let info = 0;
+	for (const diagnostic of diagnostics) {
+		if (diagnostic.severity === "warning") {
+			warnings += 1;
+		} else {
+			info += 1;
+		}
+	}
+	return `${warnings} warning${warnings === 1 ? "" : "s"}, ${info} info`;
+}
+
+function formatResourceDiagnostic(diagnostic: ResourceDiagnostic): string {
+	const identity = [`[${diagnostic.kind}/${diagnostic.code}]`, diagnostic.name]
+		.filter((value) => value !== undefined)
+		.join(" ");
+	const locations = [
+		diagnostic.path === undefined ? undefined : `path: ${diagnostic.path}`,
+		diagnostic.relatedPath === undefined
+			? undefined
+			: `winner: ${diagnostic.relatedPath}`,
+	].filter((value) => value !== undefined);
+	return `- ${identity}: ${diagnostic.message}${locations.length === 0 ? "" : ` (${locations.join("; ")})`}`;
 }

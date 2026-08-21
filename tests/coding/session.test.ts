@@ -723,7 +723,8 @@ Provider: fake
 Model: default-model
 Reasoning: low
 Messages: 0
-Running: no`);
+Running: no
+Resource diagnostics: 0 warnings, 0 info`);
 	});
 
 	test("persists command names across reopen and propagates command failures", async () => {
@@ -838,6 +839,23 @@ Running: no`);
 			expect(coding.promptTemplates.map((template) => template.name)).toEqual([
 				"shared",
 			]);
+			expect(coding.resourceDiagnostics).toMatchObject([
+				{
+					kind: "skill",
+					code: "overridden",
+					severity: "info",
+					name: "shared",
+				},
+			]);
+			const resources = await coding.handleCommand("/resources");
+			if (!resources.handled || resources.outcome.kind !== "message") {
+				throw new Error("Expected resource summary");
+			}
+			expect(resources.outcome.text).toContain("Skills loaded: 2");
+			expect(resources.outcome.text).toContain("Prompt templates loaded: 1");
+			expect(resources.outcome.text).toContain(
+				"Resource diagnostics: 0 warnings, 1 info",
+			);
 			expect(coding.systemPrompt).toContain("<name>review</name>");
 			expect(coding.systemPrompt).not.toContain("<name>private</name>");
 			expect(coding.systemPrompt).toContain("User context.");
@@ -857,6 +875,11 @@ Running: no`);
 			const exposed = coding.skills;
 			(exposed[0] as { name: string }).name = "changed";
 			expect(coding.skills[0]?.name).toBe("review");
+			const exposedDiagnostics = coding.resourceDiagnostics;
+			expect(() => {
+				(exposedDiagnostics[0] as { message: string }).message = "changed";
+			}).toThrow();
+			expect(coding.resourceDiagnostics[0]?.message).not.toBe("changed");
 
 			const trustedSession = await createMemorySession(cwd);
 			const trusted = await CodingSession.load(
@@ -889,12 +912,17 @@ Running: no`);
 				trusted.promptTemplates.find((template) => template.name === "shared")
 					?.content,
 			).toBe("Project prompt.");
+			expect(
+				trusted.resourceDiagnostics.filter(
+					(diagnostic) => diagnostic.code === "overridden",
+				),
+			).toHaveLength(4);
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}
 	});
 
-	test("does not read malformed project resources while untrusted", async () => {
+	test("gates project discovery, recovers resource failures, and keeps context strict", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "areeb-session-trust-"));
 		try {
 			const cwd = join(directory, "project");
@@ -917,21 +945,37 @@ Running: no`);
 				"Missing required metadata.",
 			);
 			await writeFile(join(paths.projectPrompts, "help.md"), "Reserved.");
-			await mkdir(join(cwd, "AGENTS.override.md"));
 
 			const untrustedSession = await createMemorySession(cwd);
-			await expect(
-				CodingSession.load(
-					config(untrustedSession, new FakeProvider([]), {
-						resourcePaths: paths,
-					}),
-				),
-			).resolves.toBeInstanceOf(CodingSession);
+			const untrusted = await CodingSession.load(
+				config(untrustedSession, new FakeProvider([]), {
+					resourcePaths: paths,
+				}),
+			);
+			expect(untrusted.resourceDiagnostics).toEqual([]);
 
 			const trustedSession = await createMemorySession(cwd);
+			const trusted = await CodingSession.load(
+				config(trustedSession, new FakeProvider([]), {
+					resourcePaths: paths,
+					trustProjectResources: true,
+				}),
+			);
+			expect(trusted.skills).toEqual([]);
+			expect(trusted.promptTemplates).toEqual([]);
+			expect(
+				trusted.resourceDiagnostics.map((diagnostic) => diagnostic.code),
+			).toEqual([
+				"validation-failed",
+				"validation-failed",
+				"validation-failed",
+			]);
+
+			await mkdir(join(cwd, "AGENTS.override.md"));
+			const invalidContextSession = await createMemorySession(cwd);
 			await expect(
 				CodingSession.load(
-					config(trustedSession, new FakeProvider([]), {
+					config(invalidContextSession, new FakeProvider([]), {
 						resourcePaths: paths,
 						trustProjectResources: true,
 					}),
