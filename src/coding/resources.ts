@@ -4,6 +4,40 @@ import { isAbsolute, resolve } from "node:path";
 /** Maximum UTF-8 size of one skill or prompt-template file. */
 export const MAX_RESOURCE_BYTES = 1024 * 1024;
 
+export type ResourceKind = "skill" | "prompt-template";
+
+export type ResourceDiagnosticCode =
+	| "source-unreadable"
+	| "read-failed"
+	| "parse-failed"
+	| "validation-failed"
+	| "duplicate"
+	| "overridden";
+
+export interface ResourceDiagnostic {
+	readonly kind: ResourceKind;
+	readonly code: ResourceDiagnosticCode;
+	readonly severity: "info" | "warning";
+	readonly name?: string;
+	readonly path?: string;
+	readonly relatedPath?: string;
+	readonly message: string;
+}
+
+export type ResourceLoadPolicy = "strict" | "diagnostic";
+
+export interface ResourceSource {
+	readonly directory: string;
+	/** Higher values override lower values. Array order breaks ties. */
+	readonly precedence?: number;
+}
+
+export type ResourceLoadResult<TKey extends string, TResource> = Readonly<
+	Record<TKey, readonly TResource[]> & {
+		readonly diagnostics: readonly ResourceDiagnostic[];
+	}
+>;
+
 export interface ParsedFrontmatter {
 	readonly attributes: Readonly<Record<string, string>>;
 	readonly body: string;

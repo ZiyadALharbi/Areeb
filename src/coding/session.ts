@@ -29,14 +29,17 @@ import {
 import { buildSystemPrompt } from "./prompt-builder.ts";
 import {
 	expandPromptTemplateInvocation,
-	loadPromptTemplates,
+	loadPromptTemplatesWithDiagnostics,
 	type PromptTemplate,
+	type PromptTemplateSource,
 } from "./prompt-templates.ts";
+import type { ResourceDiagnostic } from "./resources.ts";
 import {
 	discoverProjectAgentSkillDirectories,
 	expandSkillInvocation,
-	loadSkills,
+	loadSkillsWithDiagnostics,
 	type Skill,
+	type SkillSource,
 } from "./skills.ts";
 import { createCodingToolDefinitions } from "./tools/index.ts";
 import { type CodingToolDefinition, createAgentTool } from "./types.ts";
@@ -90,6 +93,7 @@ export class CodingSession<
 		private readonly activeTools: readonly AgentTool[],
 		private readonly loadedSkills: readonly Skill[],
 		private readonly loadedPromptTemplates: readonly PromptTemplate[],
+		private readonly loadedResourceDiagnostics: readonly ResourceDiagnostic[],
 		private readonly commandRegistry: CommandRegistry,
 	) {}
 
@@ -101,39 +105,59 @@ export class CodingSession<
 		const metadata = await config.session.getMetadata();
 		const resourcePaths =
 			config.resourcePaths ?? areebPaths({ cwd: metadata.cwd });
-		const skillSources: (
-			| string
-			| {
-					readonly directory: string;
-					readonly layout: "agents";
-			  }
-		)[] = [
-			{ directory: resourcePaths.userAgentSkills, layout: "agents" },
-			resourcePaths.userSkills,
+		const skillSources: SkillSource[] = [
+			{
+				directory: resourcePaths.userAgentSkills,
+				layout: "agents",
+				precedence: 0,
+			},
+			{
+				directory: resourcePaths.userSkills,
+				layout: "areeb",
+				precedence: 1,
+			},
 		];
-		const promptDirectories = [resourcePaths.userPrompts];
+		const promptSources: PromptTemplateSource[] = [
+			{ directory: resourcePaths.userPrompts, precedence: 0 },
+		];
 		const commandRegistry = createDefaultCommandRegistry();
 		if (config.trustProjectResources === true) {
+			let precedence = 2;
 			for (const directory of await discoverProjectAgentSkillDirectories(
 				metadata.cwd,
 				resourcePaths.userAgentSkills,
 			)) {
-				skillSources.push({ directory, layout: "agents" });
+				skillSources.push({ directory, layout: "agents", precedence });
+				precedence += 1;
 			}
-			skillSources.push(resourcePaths.projectSkills);
-			promptDirectories.push(resourcePaths.projectPrompts);
+			skillSources.push({
+				directory: resourcePaths.projectSkills,
+				layout: "areeb",
+				precedence,
+			});
+			promptSources.push({
+				directory: resourcePaths.projectPrompts,
+				precedence: 1,
+			});
 		}
-		const [skills, promptTemplates, projectContextFiles] = await Promise.all([
-			loadSkills(skillSources),
-			loadPromptTemplates(promptDirectories, {
-				reservedNames: commandRegistry.executableNames(),
-			}),
-			loadProjectContext({
-				cwd: metadata.cwd,
-				userRoot: resourcePaths.userRoot,
-				trustProjectResources: config.trustProjectResources,
-				contextFiles: config.contextFiles,
-			}),
+		const [skillResult, promptTemplateResult, projectContextFiles] =
+			await Promise.all([
+				loadSkillsWithDiagnostics(skillSources),
+				loadPromptTemplatesWithDiagnostics(promptSources, {
+					reservedNames: commandRegistry.executableNames(),
+				}),
+				loadProjectContext({
+					cwd: metadata.cwd,
+					userRoot: resourcePaths.userRoot,
+					trustProjectResources: config.trustProjectResources,
+					contextFiles: config.contextFiles,
+				}),
+			]);
+		const skills = skillResult.skills;
+		const promptTemplates = promptTemplateResult.promptTemplates;
+		const resourceDiagnostics = Object.freeze([
+			...skillResult.diagnostics,
+			...promptTemplateResult.diagnostics,
 		]);
 		let context = await config.session.buildContext();
 		const availableToolDefinitions =
@@ -249,6 +273,7 @@ export class CodingSession<
 			tools,
 			skills,
 			promptTemplates,
+			resourceDiagnostics,
 			commandRegistry,
 		);
 		codingSession.attachPersistence();
@@ -285,6 +310,14 @@ export class CodingSession<
 
 	get promptTemplates(): readonly PromptTemplate[] {
 		return this.loadedPromptTemplates.map((template) => ({ ...template }));
+	}
+
+	get resourceDiagnostics(): readonly ResourceDiagnostic[] {
+		return Object.freeze(
+			this.loadedResourceDiagnostics.map((diagnostic) =>
+				Object.freeze({ ...diagnostic }),
+			),
+		);
 	}
 
 	get commands(): readonly SlashCommand[] {
@@ -374,6 +407,11 @@ export class CodingSession<
 	private createCommandContext(): CommandContext {
 		return {
 			hasCapability: () => false,
+			getResourceSummary: () => ({
+				skillCount: this.loadedSkills.length,
+				promptTemplateCount: this.loadedPromptTemplates.length,
+				diagnostics: this.resourceDiagnostics,
+			}),
 			getSessionInfo: async () => {
 				const name = await this.session.getName();
 				return {

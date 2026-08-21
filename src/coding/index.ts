@@ -3,6 +3,7 @@ export type {
 	CommandContext,
 	CommandHandler,
 	CommandOutcome,
+	CommandResourceSummary,
 	CommandResult,
 	CommandSessionInfo,
 	SlashCommand,
@@ -26,14 +27,25 @@ export type { BuildSystemPromptOptions } from "./prompt-builder.ts";
 export { buildSystemPrompt } from "./prompt-builder.ts";
 export type {
 	LoadPromptTemplatesOptions,
+	LoadPromptTemplatesResult,
 	PromptTemplate,
+	PromptTemplateSource,
 } from "./prompt-templates.ts";
 export {
 	expandPromptTemplateInvocation,
 	loadPromptTemplates,
+	loadPromptTemplatesWithDiagnostics,
 	renderPromptTemplate,
 } from "./prompt-templates.ts";
-export type { ParsedFrontmatter } from "./resources.ts";
+export type {
+	ParsedFrontmatter,
+	ResourceDiagnostic,
+	ResourceDiagnosticCode,
+	ResourceKind,
+	ResourceLoadPolicy,
+	ResourceLoadResult,
+	ResourceSource,
+} from "./resources.ts";
 export {
 	MAX_RESOURCE_BYTES,
 	parseFrontmatter,
@@ -53,13 +65,19 @@ export {
 	findCodingSession,
 	listCodingSessions,
 } from "./session-manager.ts";
-export type { Skill, SkillLayout, SkillSource } from "./skills.ts";
+export type {
+	LoadSkillsResult,
+	Skill,
+	SkillLayout,
+	SkillSource,
+} from "./skills.ts";
 export {
 	buildSkillIndex,
 	discoverProjectAgentSkillDirectories,
 	expandSkillInvocation,
 	isSkillDirective,
 	loadSkills,
+	loadSkillsWithDiagnostics,
 } from "./skills.ts";
 export * from "./tools/index.ts";
 export type {

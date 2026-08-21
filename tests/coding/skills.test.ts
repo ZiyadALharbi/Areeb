@@ -7,6 +7,7 @@ import {
 	discoverProjectAgentSkillDirectories,
 	expandSkillInvocation,
 	loadSkills,
+	loadSkillsWithDiagnostics,
 } from "../../src/coding/skills.ts";
 
 const tempDirectories: string[] = [];
@@ -77,6 +78,119 @@ describe("skill loading", () => {
 		await expect(loadSkills(first)).rejects.toThrow("Invalid skill name");
 	});
 
+	test("keeps valid siblings and lower-precedence winners when candidates fail", async () => {
+		const directory = await createTempDirectory();
+		const lower = join(directory, "lower");
+		const higher = join(directory, "higher");
+		await mkdir(lower);
+		await mkdir(higher);
+		await writeFile(
+			join(lower, "review.md"),
+			"---\ndescription: Lower review.\n---\nLower body.",
+		);
+		await writeFile(join(higher, "review.md"), "Missing description.");
+		await writeFile(
+			join(higher, "deploy.md"),
+			"---\ndescription: Deploy safely.\n---\nDeploy body.",
+		);
+
+		const result = await loadSkillsWithDiagnostics([
+			{ directory: higher, layout: "areeb", precedence: 20 },
+			{ directory: lower, layout: "areeb", precedence: 10 },
+		]);
+		expect(result.skills.map((skill) => skill.name)).toEqual([
+			"deploy",
+			"review",
+		]);
+		expect(
+			result.skills.find((skill) => skill.name === "review")?.content,
+		).toBe("Lower body.");
+		expect(result.diagnostics).toMatchObject([
+			{
+				kind: "skill",
+				code: "validation-failed",
+				severity: "warning",
+				name: "review",
+				path: join(higher, "review.md"),
+			},
+		]);
+	});
+
+	test("reports deterministic duplicates and higher-precedence overrides", async () => {
+		const directory = await createTempDirectory();
+		const agents = join(directory, "agents");
+		const higher = join(directory, "higher");
+		for (const parent of ["a", "z"]) {
+			await mkdir(join(agents, parent, "review"), { recursive: true });
+			await writeFile(
+				join(agents, parent, "review", "SKILL.md"),
+				`---\ndescription: ${parent}.\n---\n${parent} body.`,
+			);
+		}
+		await mkdir(higher);
+		await writeFile(
+			join(higher, "review.md"),
+			"---\ndescription: Higher.\n---\nHigher body.",
+		);
+
+		const result = await loadSkillsWithDiagnostics([
+			{ directory: agents, layout: "agents", precedence: 0 },
+			{ directory: higher, layout: "areeb", precedence: 1 },
+		]);
+		expect(result.skills).toMatchObject([
+			{ name: "review", content: "Higher body." },
+		]);
+		expect(result.diagnostics).toEqual([
+			{
+				kind: "skill",
+				code: "duplicate",
+				severity: "warning",
+				name: "review",
+				path: join(agents, "z", "review", "SKILL.md"),
+				relatedPath: join(agents, "a", "review", "SKILL.md"),
+				message: 'Duplicate skill "review" was skipped',
+			},
+			{
+				kind: "skill",
+				code: "overridden",
+				severity: "info",
+				name: "review",
+				path: join(agents, "a", "review", "SKILL.md"),
+				relatedPath: join(higher, "review.md"),
+				message: 'Skill "review" was overridden by a higher-precedence source',
+			},
+		]);
+	});
+
+	test("continues after an unreadable source and preserves strict failures", async () => {
+		const directory = await createTempDirectory();
+		const invalidSource = join(directory, "not-a-directory");
+		const validSource = join(directory, "valid");
+		await writeFile(invalidSource, "file");
+		await mkdir(validSource);
+		await writeFile(
+			join(validSource, "review.md"),
+			"---\ndescription: Review.\n---\nReview body.",
+		);
+
+		const result = await loadSkillsWithDiagnostics([
+			invalidSource,
+			validSource,
+		]);
+		expect(result.skills).toMatchObject([{ name: "review" }]);
+		expect(result.diagnostics).toMatchObject([
+			{
+				kind: "skill",
+				code: "source-unreadable",
+				severity: "warning",
+				path: invalidSource,
+			},
+		]);
+		await expect(loadSkills(invalidSource)).rejects.toThrow(
+			"Unable to list skills directory",
+		);
+	});
+
 	test("recursively loads only .agents SKILL.md layouts and stops at skills", async () => {
 		const directory = await createTempDirectory();
 		const agents = join(directory, "agents");
@@ -131,6 +245,15 @@ describe("skill loading", () => {
 			"linked-file",
 			"shared",
 		]);
+		const diagnosticResult = await loadSkillsWithDiagnostics([
+			{ directory: agents, layout: "agents" },
+			{ directory: agents, layout: "agents" },
+		]);
+		expect(diagnosticResult.skills.map((skill) => skill.name)).toEqual([
+			"linked-file",
+			"shared",
+		]);
+		expect(diagnosticResult.diagnostics).toEqual([]);
 
 		const duplicates = join(directory, "duplicates");
 		await mkdir(join(duplicates, "a", "review"), { recursive: true });
@@ -144,6 +267,33 @@ describe("skill loading", () => {
 		await expect(
 			loadSkills({ directory: duplicates, layout: "agents" }),
 		).rejects.toThrow('Duplicate skill "review"');
+	});
+
+	test("reports broken symlinks without following directory cycles", async () => {
+		const directory = await createTempDirectory();
+		const agents = join(directory, "agents");
+		await mkdir(join(agents, "cycle"), { recursive: true });
+		await mkdir(join(agents, "valid"), { recursive: true });
+		await symlink(join(directory, "missing"), join(agents, "broken"));
+		await symlink(join(agents, "cycle"), join(agents, "cycle", "self"));
+		await writeFile(
+			join(agents, "valid", "SKILL.md"),
+			"---\ndescription: Valid.\n---\nValid body.",
+		);
+
+		const result = await loadSkillsWithDiagnostics({
+			directory: agents,
+			layout: "agents",
+		});
+		expect(result.skills).toMatchObject([{ name: "valid" }]);
+		expect(result.diagnostics).toMatchObject([
+			{
+				kind: "skill",
+				code: "read-failed",
+				severity: "warning",
+				path: join(agents, "broken"),
+			},
+		]);
 	});
 
 	test("discovers project .agents directories from the nearest Git root", async () => {
