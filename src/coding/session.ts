@@ -60,6 +60,7 @@ export interface CodingSessionConfig<
 	readonly contextFiles?: readonly ProjectContextFile[];
 	/** Complete available tool set. Omit for the built-in cwd-bound coding tools. */
 	readonly tools?: readonly CodingToolDefinition[];
+	/** Provider HTTP request timeout in milliseconds. */
 	readonly timeout?: number;
 	readonly maxTurns?: number;
 	readonly messageConverter?: AgentMessageConverter;
@@ -446,6 +447,14 @@ function validateConfig(config: CodingSessionConfig): void {
 	}
 	if (!isReasoningLevel(config.reasoning)) {
 		throw new Error(`Invalid reasoning level: ${String(config.reasoning)}`);
+	}
+	if (
+		config.timeout !== undefined &&
+		(!Number.isFinite(config.timeout) || config.timeout <= 0)
+	) {
+		throw new Error(
+			"CodingSession timeout must be finite and greater than zero",
+		);
 	}
 	if (
 		config.systemPrompt !== undefined &&

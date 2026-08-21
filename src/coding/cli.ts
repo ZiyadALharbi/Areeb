@@ -3,15 +3,19 @@
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { assertUuid } from "../agent/session/session.ts";
-import { openAICompatibleConfigFromEnv } from "../ai/environment.ts";
-import {
-	type OpenAICompatibleConfig,
-	OpenAICompatibleProvider,
-} from "../ai/openai_compatible_provider.ts";
+import type { OpenAICompatibleConfig } from "../ai/openai_compatible_provider.ts";
 import type { ModelProvider } from "../ai/provider_protocol.ts";
 import { runPrintMode } from "./modes/print-mode.ts";
 import { isPrintOutputMode, type PrintOutputMode } from "./modes/types.ts";
 import { areebPaths } from "./paths.ts";
+import {
+	configuredProviderModels,
+	createProviderRuntime,
+	getProviderAuthStatus,
+	loadProviderSettings,
+	resolveProviderSelection,
+	setupOpenAICompatibleProvider,
+} from "./provider-config.ts";
 import { CodingSession } from "./session.ts";
 import {
 	CodingSessionManager,
@@ -21,18 +25,22 @@ import {
 } from "./session-manager.ts";
 
 export const USAGE = `Usage:
-  areeb -p <prompt> [--model <model>] [--output <mode>] [--resume <session-id>] [--trust-project]
+  areeb -p <prompt> [--provider <provider>] [--model <model>] [--output <mode>] [--resume <session-id>] [--trust-project]
   areeb sessions
+  areeb providers
+  areeb setup --provider <provider> [--base-url <url>] [--models <model,...>] [--default-model <model>] [--api-key-env <name>] [--timeout-seconds <seconds>] [--max-retries <count>] [--max-retry-delay-seconds <seconds>] [--set-default]
 
 Options:
   -p, --prompt <prompt>       Run one prompt in print mode
       --resume <session-id>  Resume an indexed session by exact UUID
-      --model <model>        Override OPENAI_MODEL for a new session
+      --provider <provider>  Select an exact configured provider
+      --model <model>        Select an exact configured model
       --output <mode>        Output mode: text, json, or transcript (default: text)
       --trust-project        Load project-controlled resources and instructions
   -h, --help                 Show this help
 
-Environment: OPENAI_API_KEY, OPENAI_MODEL, and optional OPENAI_BASE_URL
+Provider settings: ~/.areeb/providers.json
+OpenAI environment: OPENAI_API_KEY, OPENAI_MODEL, OPENAI_BASE_URL, OPENAI_TIMEOUT_SECONDS, OPENAI_MAX_RETRIES, OPENAI_MAX_RETRY_DELAY_SECONDS
 Interactive mode is not available yet.`;
 
 type CliEnvironment = Readonly<Record<string, string | undefined>>;
@@ -45,31 +53,77 @@ export interface SessionsCliCommand {
 	readonly kind: "sessions";
 }
 
+export interface ProvidersCliCommand {
+	readonly kind: "providers";
+}
+
+export interface SetupCliCommand {
+	readonly kind: "setup";
+	readonly provider: string;
+	readonly baseUrl?: string;
+	readonly apiKeyEnv?: string;
+	readonly models?: readonly string[];
+	readonly defaultModel?: string;
+	readonly timeoutSeconds?: number;
+	readonly maxRetries?: number;
+	readonly maxRetryDelaySeconds?: number;
+	readonly setDefault: boolean;
+}
+
 export interface PromptCliCommand {
 	readonly kind: "prompt";
 	readonly prompt: string;
+	readonly provider?: string;
 	readonly model?: string;
-	readonly requestedModel?: string;
 	readonly resumeId?: string;
 	readonly output: PrintOutputMode;
 	readonly trustProjectResources: boolean;
 }
 
-export type CliCommand = HelpCliCommand | SessionsCliCommand | PromptCliCommand;
+export type CliCommand =
+	| HelpCliCommand
+	| SessionsCliCommand
+	| ProvidersCliCommand
+	| SetupCliCommand
+	| PromptCliCommand;
 
-/** Parse help, session-listing, and one-shot prompt command variants. */
-export function parseCli(
-	args: string[],
-	env: CliEnvironment = process.env,
-): CliCommand {
+interface ParsedCliValues {
+	readonly prompt?: string;
+	readonly resume?: string;
+	readonly provider?: string;
+	readonly model?: string;
+	readonly output?: string;
+	readonly "trust-project"?: boolean;
+	readonly "base-url"?: string;
+	readonly "api-key-env"?: string;
+	readonly models?: string;
+	readonly "default-model"?: string;
+	readonly "timeout-seconds"?: string;
+	readonly "max-retries"?: string;
+	readonly "max-retry-delay-seconds"?: string;
+	readonly "set-default"?: boolean;
+	readonly help?: boolean;
+}
+
+/** Parse CLI syntax without consulting environment or durable settings. */
+export function parseCli(args: string[]): CliCommand {
 	const { values, positionals } = parseArgs({
 		args,
 		options: {
 			prompt: { type: "string", short: "p" },
 			resume: { type: "string" },
+			provider: { type: "string" },
 			model: { type: "string" },
 			output: { type: "string" },
 			"trust-project": { type: "boolean" },
+			"base-url": { type: "string" },
+			"api-key-env": { type: "string" },
+			models: { type: "string" },
+			"default-model": { type: "string" },
+			"timeout-seconds": { type: "string" },
+			"max-retries": { type: "string" },
+			"max-retry-delay-seconds": { type: "string" },
+			"set-default": { type: "boolean" },
 			help: { type: "boolean", short: "h" },
 		},
 		allowPositionals: true,
@@ -80,17 +134,30 @@ export function parseCli(
 		return { kind: "help" };
 	}
 
-	if (positionals[0] === "sessions") {
+	const subcommand = positionals[0];
+	if (
+		subcommand === "sessions" ||
+		subcommand === "providers" ||
+		subcommand === "setup"
+	) {
 		if (positionals.length > 1) {
 			throw new Error(`Unexpected argument: ${positionals[1]}`);
 		}
-		assertSessionsHasNoOptions(values);
-		return { kind: "sessions" };
+		if (subcommand === "sessions" || subcommand === "providers") {
+			assertOnlyOptions(values, [], subcommand);
+			return { kind: subcommand };
+		}
+		return parseSetupCommand(values);
 	}
 
 	if (positionals.length > 0) {
 		throw new Error(`Unexpected argument: ${positionals[0]}`);
 	}
+	assertOnlyOptions(
+		values,
+		["prompt", "resume", "provider", "model", "output", "trust-project"],
+		"prompt mode",
+	);
 	if (values.prompt === undefined) {
 		throw new Error(
 			'Interactive mode is not available yet. Use -p "your prompt".',
@@ -109,34 +176,18 @@ export function parseCli(
 			`Invalid output mode: ${output}. Expected text, json, or transcript.`,
 		);
 	}
-
-	const requestedModel = values.model?.trim();
-	if (values.model !== undefined && !requestedModel) {
-		throw new Error("Model cannot be empty");
-	}
-	const model = requestedModel ?? (env.OPENAI_MODEL?.trim() || undefined);
-	if (values.resume === undefined && model === undefined) {
-		throw new Error("Missing model. Use --model or set OPENAI_MODEL.");
-	}
+	const provider = optionalNonempty(values.provider, "Provider");
+	const model = optionalNonempty(values.model, "Model");
 
 	return {
 		kind: "prompt",
 		prompt: values.prompt,
+		...(provider === undefined ? {} : { provider }),
 		...(model === undefined ? {} : { model }),
-		...(requestedModel === undefined ? {} : { requestedModel }),
 		...(values.resume === undefined ? {} : { resumeId: values.resume }),
 		output,
 		trustProjectResources: values["trust-project"] ?? false,
 	};
-}
-
-interface ParsedCliValues {
-	readonly prompt?: string;
-	readonly resume?: string;
-	readonly model?: string;
-	readonly output?: string;
-	readonly "trust-project"?: boolean;
-	readonly help?: boolean;
 }
 
 interface CliOutput {
@@ -154,7 +205,7 @@ interface CliRuntime {
 	readonly runPrint?: typeof runPrintMode;
 }
 
-/** Execute a parsed CLI command with persistent JSONL sessions. */
+/** Execute a parsed CLI command with durable provider and session settings. */
 export async function runCli(
 	args = Bun.argv.slice(2),
 	runtime: CliRuntime = {},
@@ -164,7 +215,7 @@ export async function runCli(
 
 	try {
 		const env = runtime.env ?? process.env;
-		const command = parseCli(args, env);
+		const command = parseCli(args);
 		if (command.kind === "help") {
 			stdout.write(`${USAGE}\n`);
 			return 0;
@@ -178,6 +229,57 @@ export async function runCli(
 			if (records.length > 0) {
 				stdout.write(`${records.map(formatSessionRecord).join("\n")}\n`);
 			}
+			return 0;
+		}
+		if (command.kind === "providers") {
+			const settings = await loadProviderSettings({
+				...(runtime.userRoot === undefined
+					? {}
+					: { userRoot: runtime.userRoot }),
+				env,
+			});
+			stdout.write(formatProviderCatalog(settings, env));
+			return 0;
+		}
+		if (command.kind === "setup") {
+			const settings = await setupOpenAICompatibleProvider({
+				...(runtime.userRoot === undefined
+					? {}
+					: { userRoot: runtime.userRoot }),
+				env,
+				provider: command.provider,
+				...(command.baseUrl === undefined ? {} : { baseUrl: command.baseUrl }),
+				...(command.apiKeyEnv === undefined
+					? {}
+					: { apiKeyEnv: command.apiKeyEnv }),
+				...(command.models === undefined ? {} : { models: command.models }),
+				...(command.defaultModel === undefined
+					? {}
+					: { defaultModel: command.defaultModel }),
+				...(command.timeoutSeconds === undefined
+					? {}
+					: { timeoutSeconds: command.timeoutSeconds }),
+				...(command.maxRetries === undefined
+					? {}
+					: { maxRetries: command.maxRetries }),
+				...(command.maxRetryDelaySeconds === undefined
+					? {}
+					: {
+							maxRetryDelaySeconds: command.maxRetryDelaySeconds,
+						}),
+				setDefault: command.setDefault,
+			});
+			const provider = settings.providers[command.provider];
+			if (
+				provider !== undefined &&
+				!provider.builtIn &&
+				getProviderAuthStatus(provider, env).startsWith("missing:")
+			) {
+				stderr.write(
+					`areeb: warning: ${provider.apiKeyEnv} is not set for provider "${provider.id}"\n`,
+				);
+			}
+			stdout.write(`Configured provider ${command.provider}.\n`);
 			return 0;
 		}
 
@@ -204,34 +306,31 @@ async function runPromptCommand(
 		if (storedRecord === undefined) {
 			throw new Error(`Unknown session: ${command.resumeId}`);
 		}
-		if (
-			command.requestedModel !== undefined &&
-			storedRecord.model !== null &&
-			command.requestedModel !== storedRecord.model.model
-		) {
+		if (storedRecord.model === null) {
 			throw new Error(
-				`Requested model "${command.requestedModel}" does not match stored model "${storedRecord.model.model}"`,
+				`Resumed session ${command.resumeId} has no stored provider/model selection`,
 			);
 		}
 		cwd = storedRecord.cwd;
 	}
 
-	const model = storedRecord?.model?.model ?? command.model;
-	if (model === undefined) {
-		throw new Error(
-			"Resumed session has no stored model. Use --model or set OPENAI_MODEL.",
-		);
-	}
-	const providerId = storedRecord?.model?.provider ?? "openai";
-	const providerConfig = openAICompatibleConfigFromEnv({ env, providerId });
-	const provider =
-		runtime.createProvider?.(providerConfig) ??
-		new OpenAICompatibleProvider({
-			...providerConfig,
-			compat: {
-				thinkingLevelMap: { off: "none" },
-			},
-		});
+	const settings = await loadProviderSettings({
+		...(runtime.userRoot === undefined ? {} : { userRoot: runtime.userRoot }),
+		env,
+	});
+	const selection = resolveProviderSelection(settings, {
+		...(command.provider === undefined ? {} : { provider: command.provider }),
+		...(command.model === undefined ? {} : { model: command.model }),
+		...(storedRecord?.model === null || storedRecord?.model === undefined
+			? {}
+			: { stored: storedRecord.model }),
+	});
+	const providerRuntime = createProviderRuntime(settings, selection, {
+		env,
+		...(runtime.createProvider === undefined
+			? {}
+			: { createProvider: runtime.createProvider }),
+	});
 	const manager = new CodingSessionManager({
 		cwd,
 		...(runtime.userRoot === undefined ? {} : { userRoot: runtime.userRoot }),
@@ -242,9 +341,12 @@ async function runPromptCommand(
 			: await manager.open(command.resumeId);
 	const coding = await CodingSession.load({
 		session,
-		provider,
-		model,
+		provider: providerRuntime.provider,
+		model: providerRuntime.selection.model,
 		reasoning: "off",
+		...(providerRuntime.timeoutMs === undefined
+			? {}
+			: { timeout: providerRuntime.timeoutMs }),
 		resourcePaths: areebPaths({
 			cwd,
 			...(runtime.userRoot === undefined ? {} : { userRoot: runtime.userRoot }),
@@ -260,18 +362,166 @@ async function runPromptCommand(
 	});
 }
 
-function assertSessionsHasNoOptions(values: ParsedCliValues): void {
-	for (const option of [
-		"prompt",
-		"resume",
-		"model",
-		"output",
-		"trust-project",
-	] as const) {
-		if (values[option] !== undefined) {
-			throw new Error(`Option --${option} is not valid with sessions`);
+function parseSetupCommand(values: ParsedCliValues): SetupCliCommand {
+	assertOnlyOptions(
+		values,
+		[
+			"provider",
+			"base-url",
+			"api-key-env",
+			"models",
+			"default-model",
+			"timeout-seconds",
+			"max-retries",
+			"max-retry-delay-seconds",
+			"set-default",
+		],
+		"setup",
+	);
+	const provider = optionalNonempty(values.provider, "Provider");
+	if (provider === undefined) {
+		throw new Error("Option --provider is required with setup");
+	}
+	const baseUrl = optionalNonempty(values["base-url"], "Base URL");
+	const apiKeyEnv = optionalNonempty(
+		values["api-key-env"],
+		"API key environment variable",
+	);
+	const models = parseModels(values.models);
+	const defaultModel = optionalNonempty(
+		values["default-model"],
+		"Default model",
+	);
+
+	return {
+		kind: "setup",
+		provider,
+		...(baseUrl === undefined ? {} : { baseUrl }),
+		...(apiKeyEnv === undefined ? {} : { apiKeyEnv }),
+		...(models === undefined ? {} : { models }),
+		...(defaultModel === undefined ? {} : { defaultModel }),
+		...(values["timeout-seconds"] === undefined
+			? {}
+			: {
+					timeoutSeconds: parseNumberOption(
+						values["timeout-seconds"],
+						"--timeout-seconds",
+						"positive",
+					),
+				}),
+		...(values["max-retries"] === undefined
+			? {}
+			: {
+					maxRetries: parseNumberOption(
+						values["max-retries"],
+						"--max-retries",
+						"safeInteger",
+					),
+				}),
+		...(values["max-retry-delay-seconds"] === undefined
+			? {}
+			: {
+					maxRetryDelaySeconds: parseNumberOption(
+						values["max-retry-delay-seconds"],
+						"--max-retry-delay-seconds",
+						"nonnegative",
+					),
+				}),
+		setDefault: values["set-default"] ?? false,
+	};
+}
+
+function assertOnlyOptions(
+	values: ParsedCliValues,
+	allowed: readonly (keyof ParsedCliValues)[],
+	command: string,
+): void {
+	const allowedSet = new Set<keyof ParsedCliValues>([...allowed, "help"]);
+	for (const [option, value] of Object.entries(values)) {
+		if (
+			value !== undefined &&
+			!allowedSet.has(option as keyof ParsedCliValues)
+		) {
+			throw new Error(`Option --${option} is not valid with ${command}`);
 		}
 	}
+}
+
+function optionalNonempty(
+	value: string | undefined,
+	label: string,
+): string | undefined {
+	if (value === undefined) {
+		return undefined;
+	}
+	const normalized = value.trim();
+	if (!normalized) {
+		throw new Error(`${label} cannot be empty`);
+	}
+	return normalized;
+}
+
+function parseModels(value: string | undefined): readonly string[] | undefined {
+	if (value === undefined) {
+		return undefined;
+	}
+	const models = value.split(",").map((model) => model.trim());
+	if (models.length === 0 || models.some((model) => model.length === 0)) {
+		throw new Error("Option --models must be a comma-separated list of models");
+	}
+	return models;
+}
+
+function parseNumberOption(
+	value: string,
+	option: string,
+	kind: "positive" | "nonnegative" | "safeInteger",
+): number {
+	if (!value.trim()) {
+		throw new Error(`${option} cannot be empty`);
+	}
+	const parsed = Number(value);
+	const valid =
+		kind === "positive"
+			? Number.isFinite(parsed) && parsed > 0
+			: kind === "nonnegative"
+				? Number.isFinite(parsed) && parsed >= 0
+				: Number.isSafeInteger(parsed) && parsed >= 0;
+	if (!valid) {
+		throw new Error(
+			`${option} must be ${
+				kind === "positive"
+					? "a finite number greater than zero"
+					: kind === "nonnegative"
+						? "a finite nonnegative number"
+						: "a nonnegative safe integer"
+			}`,
+		);
+	}
+	return parsed;
+}
+
+function formatProviderCatalog(
+	settings: Awaited<ReturnType<typeof loadProviderSettings>>,
+	env: CliEnvironment,
+): string {
+	const header = "PROVIDER\tDEFAULT\tMODEL\tENDPOINT\tAUTH";
+	const rows = configuredProviderModels(settings, env).map((entry) => {
+		const defaults = [
+			...(entry.isDefaultProvider ? ["provider"] : []),
+			...(entry.isDefaultModel ? ["model"] : []),
+		].join(",");
+		return [
+			entry.provider,
+			defaults || "-",
+			entry.model,
+			entry.baseUrl,
+			entry.authStatus,
+		]
+			.map(cleanDisplayField)
+			.join("\t");
+	});
+	return `${[header, ...rows].join("\n")}\n`;
 }
 
 function formatSessionRecord(record: CodingSessionRecord): string {
