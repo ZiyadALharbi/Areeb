@@ -8,6 +8,9 @@ export type ChatItem =
 			readonly text: string;
 			readonly toolName: string;
 			readonly toolCallId: string;
+			readonly preview?: string;
+			readonly patch?: string;
+			readonly isError?: boolean;
 	  }
 	| { readonly role: "status"; readonly text: string }
 	| { readonly role: "error"; readonly text: string };

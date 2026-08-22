@@ -39,7 +39,7 @@ export async function runInteractiveMode(
 		terminal: options.terminal ?? new ProcessTerminal(),
 		theme: options.theme ?? AREEB_DARK_THEME,
 		transcript: [],
-		shortcuts: "Esc:interrupt  │  Ctrl+C:quit",
+		shortcuts: "Ctrl+O:tools  │  Esc:interrupt  │  Ctrl+C:quit",
 		state: controller.state,
 	});
 
@@ -59,6 +59,7 @@ export async function runInteractiveMode(
 		app.editor.onSubmit = undefined;
 		removeInputListener?.();
 		removeInputListener = undefined;
+		app.clearCommandPresentation();
 	};
 
 	const settle = (error?: unknown): void => {
@@ -121,7 +122,7 @@ export async function runInteractiveMode(
 		try {
 			const command = await controller.handleCommand(input);
 			if (command.handled) {
-				applyCommandResult(command, input, controller.state, requestExit);
+				applyCommandResult(command, input, app, requestExit);
 				app.refresh(controller.state);
 			} else if (!exitRequested) {
 				await consumePrompt(controller, input, controller.adapter, app);
@@ -167,6 +168,7 @@ export async function runInteractiveMode(
 		controller.state.running = true;
 		delete controller.state.terminalReason;
 		try {
+			app.clearCommandPresentation();
 			app.refresh(controller.state);
 		} catch (error) {
 			submissionActive = false;
@@ -182,7 +184,14 @@ export async function runInteractiveMode(
 			return { consume: true };
 		}
 		if (matchesKey(data, Key.escape)) {
+			if (app.dismissCommandOverlay()) {
+				return { consume: true };
+			}
 			requestAbort();
+			return { consume: true };
+		}
+		if (matchesKey(data, Key.ctrl("o"))) {
+			app.toggleToolPreviews();
 			return { consume: true };
 		}
 		return undefined;
@@ -225,22 +234,19 @@ async function consumePrompt(
 function applyCommandResult(
 	result: Extract<TuiCommandResult, { readonly handled: true }>,
 	input: string,
-	state: TuiState,
+	app: TuiApp,
 	requestExit: () => void,
 ): void {
 	switch (result.outcome.kind) {
 		case "message":
-			state.items.push({
-				role: result.outcome.level === "error" ? "error" : "status",
-				text: result.outcome.text,
-			});
+			app.presentCommand(result.outcome.text, result.outcome.level);
 			return;
 		case "unavailable": {
 			const command = input.trim().split(/\s/, 1)[0] ?? "Command";
-			state.items.push({
-				role: "status",
-				text: `${command} is planned (${result.outcome.missingCapability})`,
-			});
+			app.presentCommand(
+				`${command} is planned (${result.outcome.missingCapability})`,
+				"info",
+			);
 			return;
 		}
 		case "quit":

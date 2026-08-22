@@ -62,6 +62,8 @@ describe("TuiEventAdapter", () => {
 					text: "read",
 					toolName: "read",
 					toolCallId: "call-1",
+					preview: "hidden result",
+					isError: false,
 				},
 			],
 			sessionId: "unknown",
@@ -122,7 +124,7 @@ describe("TuiEventAdapter", () => {
 			true,
 		);
 		expect(adapter.apply({ type: "tool_execution_start", toolCall })).toBe(
-			true,
+			false,
 		);
 		expect(
 			adapter.apply({
@@ -130,7 +132,7 @@ describe("TuiEventAdapter", () => {
 				toolCall,
 				result: toolResult,
 			}),
-		).toBe(false);
+		).toBe(true);
 		expect(adapter.apply({ type: "message_end", message: toolResult })).toBe(
 			false,
 		);
@@ -150,6 +152,88 @@ describe("TuiEventAdapter", () => {
 		adapter.apply({ type: "tool_execution_start", toolCall });
 		adapter.apply({ type: "tool_execution_start", toolCall: second });
 		expect(state.items.map((item) => item.role)).toEqual(["tool", "tool"]);
+	});
+
+	test("restores tool calls without results and enriches matching results", () => {
+		const state = createTuiState();
+		const response = assistant([toolCall]);
+		const adapter = new TuiEventAdapter(state);
+
+		expect(adapter.restore([response])).toBe(true);
+		expect(state.items).toEqual([
+			{
+				role: "tool",
+				text: "read",
+				toolName: "read",
+				toolCallId: "call-1",
+			},
+		]);
+		expect(adapter.restore([response, toolResult])).toBe(true);
+		expect(state.items[0]).toMatchObject({
+			preview: "hidden result",
+			isError: false,
+		});
+	});
+
+	test("stores bounded previews and validated edit patches", () => {
+		const state = createTuiState();
+		const adapter = new TuiEventAdapter(state);
+		const editCall: ToolCall = { ...toolCall, id: "edit-1", name: "edit" };
+		const patch = "@@ -1 +1 @@\n-old\n+new";
+		const result: ToolResultMessage = {
+			role: "tool_result",
+			toolCallId: editCall.id,
+			toolName: editCall.name,
+			content: [
+				{
+					type: "text",
+					text: Array.from(
+						{ length: 30 },
+						(_, index) => `line ${index + 1} ${"x".repeat(300)}`,
+					).join("\n"),
+				},
+			],
+			details: { patch },
+			isError: false,
+			timestamp: 4,
+		};
+
+		adapter.apply({ type: "tool_execution_end", toolCall: editCall, result });
+		const item = state.items[0];
+		expect(item?.role).toBe("tool");
+		if (item?.role !== "tool") {
+			throw new Error("Expected a tool item");
+		}
+		expect(item.patch).toBe(patch);
+		expect(item.preview?.split("\n").length).toBeLessThanOrEqual(16);
+		expect(item.preview).toContain("omitted");
+		expect(
+			new TextEncoder().encode(item.preview).byteLength,
+		).toBeLessThanOrEqual(4 * 1024);
+	});
+
+	test("ignores images and malformed patches while retaining tool failures", () => {
+		const state = createTuiState();
+		const adapter = new TuiEventAdapter(state);
+		const editCall: ToolCall = { ...toolCall, id: "edit-2", name: "edit" };
+		const result: ToolResultMessage = {
+			role: "tool_result",
+			toolCallId: editCall.id,
+			toolName: editCall.name,
+			content: [{ type: "image", data: "ignored", mimeType: "image/png" }],
+			details: { patch: 42 },
+			isError: true,
+			timestamp: 5,
+		};
+
+		adapter.apply({ type: "tool_execution_end", toolCall: editCall, result });
+		expect(state.items[0]).toEqual({
+			role: "tool",
+			text: "edit",
+			toolName: "edit",
+			toolCallId: "edit-2",
+			isError: true,
+		});
 	});
 
 	test("records terminal outcomes without unlocking the controller", () => {
