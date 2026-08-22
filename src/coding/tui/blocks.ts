@@ -11,7 +11,7 @@ const MESSAGE_GLYPH = "│";
 const TOOL_GLYPH = "◆";
 const NORMAL_INSET = 2;
 
-export type MessageBlockKind = "user" | "assistant" | "error";
+export type MessageBlockKind = "user" | "assistant" | "status" | "error";
 
 export class MessageBlock implements Component {
 	constructor(
@@ -28,7 +28,9 @@ export class MessageBlock implements Component {
 			return [];
 		}
 
-		const rail = this.theme[this.kind](MESSAGE_GLYPH);
+		const style =
+			this.kind === "status" ? this.theme.muted : this.theme[this.kind];
+		const rail = style(MESSAGE_GLYPH);
 		const cleanText = stripTerminalSequences(this.text);
 		if (!cleanText) {
 			return [rail];
@@ -44,8 +46,10 @@ export class MessageBlock implements Component {
 			return [rail];
 		}
 
+		const contentStyle =
+			this.kind === "status" ? this.theme.muted : this.theme.primary;
 		return wrapLiteralText(cleanText, contentWidth).map((line) =>
-			line ? `${prefix}${this.theme.primary(line)}` : rail,
+			line ? `${prefix}${contentStyle(line)}` : rail,
 		);
 	}
 }

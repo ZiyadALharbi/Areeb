@@ -1,0 +1,253 @@
+import { describe, expect, test } from "bun:test";
+import type { TuiInputListener } from "@earendil-works/pi-tui";
+import type {
+	AgentEvent,
+	AgentMessage,
+	AgentRunStream,
+} from "../../../src/agent/types.ts";
+import { EventStream } from "../../../src/ai/event-stream.ts";
+import type { UserMessage } from "../../../src/ai/types.ts";
+import type { CommandResult } from "../../../src/coding/commands.ts";
+import type {
+	CreateTuiAppOptions,
+	TuiApp,
+} from "../../../src/coding/tui/app.ts";
+import {
+	type InteractiveSession,
+	runInteractiveMode,
+} from "../../../src/coding/tui/run.ts";
+import type { TuiState } from "../../../src/coding/tui/state.ts";
+
+const restoredUser: UserMessage = {
+	role: "user",
+	content: [{ type: "text", text: "restored" }],
+	timestamp: 1,
+};
+
+class ManualSession implements InteractiveSession {
+	readonly metadata = { cwd: "/project" };
+	readonly model = "fake-model";
+	readonly promptCalls: string[] = [];
+	readonly commandCalls: string[] = [];
+	abortCount = 0;
+	isRunning = false;
+	commandHandler: (input: string) => Promise<CommandResult> = async () => ({
+		handled: false,
+	});
+	private stream: AgentRunStream | undefined;
+	private idle = Promise.resolve();
+	private resolveIdle: (() => void) | undefined;
+
+	constructor(readonly messages: readonly AgentMessage[] = []) {}
+
+	async handleCommand(input: string): Promise<CommandResult> {
+		this.commandCalls.push(input);
+		return this.commandHandler(input);
+	}
+
+	prompt(input: string): AgentRunStream {
+		this.promptCalls.push(input);
+		this.isRunning = true;
+		this.idle = new Promise<void>((resolve) => {
+			this.resolveIdle = resolve;
+		});
+		this.stream = new EventStream<AgentEvent, AgentMessage[]>(
+			() => false,
+			() => [],
+		);
+		return this.stream;
+	}
+
+	emit(event: AgentEvent): void {
+		this.requireStream().push(event);
+	}
+
+	complete(): void {
+		const stream = this.requireStream();
+		this.isRunning = false;
+		this.resolveIdle?.();
+		this.resolveIdle = undefined;
+		stream.end([]);
+	}
+
+	abort(): void {
+		this.abortCount += 1;
+	}
+
+	waitForIdle(): Promise<void> {
+		return this.idle;
+	}
+
+	private requireStream(): AgentRunStream {
+		if (this.stream === undefined) {
+			throw new Error("Prompt has not started");
+		}
+		return this.stream;
+	}
+}
+
+function createAppController(): {
+	readonly createApp: (options: CreateTuiAppOptions) => TuiApp;
+	readonly states: TuiState[];
+	readonly initialStates: TuiState[];
+	readonly editor: {
+		disableSubmit: boolean;
+		onSubmit?: (text: string) => void;
+	};
+	readonly started: () => number;
+	readonly stopped: () => number;
+	readonly listenerCount: () => number;
+	submit(text: string): void;
+	input(data: string): void;
+} {
+	let inputListener: TuiInputListener | undefined;
+	let startCount = 0;
+	let stopCount = 0;
+	const states: TuiState[] = [];
+	const initialStates: TuiState[] = [];
+	const editor: {
+		disableSubmit: boolean;
+		onSubmit?: (text: string) => void;
+	} = { disableSubmit: false };
+	const tui = {
+		start() {
+			startCount += 1;
+		},
+		stop() {
+			stopCount += 1;
+		},
+		addInputListener(listener: TuiInputListener) {
+			inputListener = listener;
+			return () => {
+				if (inputListener === listener) {
+					inputListener = undefined;
+				}
+			};
+		},
+	};
+
+	return {
+		createApp(options) {
+			if (options.state !== undefined) {
+				initialStates.push(structuredClone(options.state));
+			}
+			return {
+				tui,
+				editor,
+				refresh(state?: TuiState) {
+					if (state !== undefined) {
+						states.push(structuredClone(state));
+						editor.disableSubmit = state.running;
+					}
+				},
+			} as unknown as TuiApp;
+		},
+		states,
+		initialStates,
+		editor,
+		started: () => startCount,
+		stopped: () => stopCount,
+		listenerCount: () => (inputListener === undefined ? 0 : 1),
+		submit(text) {
+			editor.onSubmit?.(text);
+		},
+		input(data) {
+			inputListener?.(data);
+		},
+	};
+}
+
+async function waitUntil(condition: () => boolean): Promise<void> {
+	for (let attempt = 0; attempt < 50; attempt += 1) {
+		if (condition()) {
+			return;
+		}
+		await Promise.resolve();
+	}
+	throw new Error("Condition did not settle");
+}
+
+describe("runInteractiveMode", () => {
+	test("restores before input and keeps command output local", async () => {
+		const session = new ManualSession([restoredUser]);
+		session.commandHandler = async (input) =>
+			input === "/quit"
+				? { handled: true, outcome: { kind: "quit" } }
+				: {
+						handled: true,
+						outcome: { kind: "message", level: "info", text: "local help" },
+					};
+		const controller = createAppController();
+		const running = runInteractiveMode(session, {
+			createApp: controller.createApp,
+		});
+
+		expect(controller.initialStates[0]?.items).toEqual([
+			{ role: "user", text: "restored" },
+		]);
+		expect(controller.editor.disableSubmit).toBe(false);
+		controller.submit("/help");
+		controller.submit("ignored while command is pending");
+		await waitUntil(() => controller.states.at(-1)?.running === false);
+		expect(session.commandCalls).toEqual(["/help"]);
+		expect(session.promptCalls).toEqual([]);
+		expect(controller.states.at(-1)?.items.at(-1)).toEqual({
+			role: "status",
+			text: "local help",
+		});
+
+		controller.submit("/quit");
+		expect(await running).toBe(0);
+		expect(controller.started()).toBe(1);
+		expect(controller.stopped()).toBe(1);
+		expect(controller.listenerCount()).toBe(0);
+	});
+
+	test("aborts once and waits for stream settlement before Ctrl+C exits", async () => {
+		const session = new ManualSession();
+		const controller = createAppController();
+		const running = runInteractiveMode(session, {
+			createApp: controller.createApp,
+		});
+
+		controller.submit("hello");
+		await waitUntil(() => session.promptCalls.length === 1);
+		controller.input("\u001b");
+		controller.input("\u001b");
+		controller.input("\u0003");
+		expect(session.abortCount).toBe(1);
+		expect(controller.stopped()).toBe(0);
+
+		session.emit({ type: "agent_start" });
+		session.emit({ type: "agent_end", messages: [], reason: "aborted" });
+		session.complete();
+		expect(await running).toBe(0);
+		expect(controller.states.at(-1)?.items.at(-1)).toEqual({
+			role: "status",
+			text: "Interrupted",
+		});
+		expect(controller.stopped()).toBe(1);
+		expect(controller.listenerCount()).toBe(0);
+	});
+
+	test("stops and rejects when the stream has no terminal event", async () => {
+		const session = new ManualSession();
+		const controller = createAppController();
+		const running = runInteractiveMode(session, {
+			createApp: controller.createApp,
+		});
+
+		controller.submit("hello");
+		await waitUntil(() => session.promptCalls.length === 1);
+		session.complete();
+		await expect(running).rejects.toThrow(
+			"Agent stream ended without a terminal event",
+		);
+		expect(controller.states.at(-1)?.items.at(-1)).toEqual({
+			role: "error",
+			text: "Agent stream ended without a terminal event",
+		});
+		expect(controller.stopped()).toBe(1);
+		expect(controller.listenerCount()).toBe(0);
+	});
+});

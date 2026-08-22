@@ -12,11 +12,15 @@ describe("TUI transcript blocks", () => {
 	test("renders transparent, label-free rows at normal widths", () => {
 		const user = new MessageBlock("user", "hello", theme);
 		const assistant = new MessageBlock("assistant", "welcome", theme);
+		const status = new MessageBlock("status", "waiting", theme);
 		const tool = new CollapsedToolBlock("bash", theme);
 
 		expect(user.render(40).map(stripTerminalSequences)).toEqual(["│  hello"]);
 		expect(assistant.render(40).map(stripTerminalSequences)).toEqual([
 			"│  welcome",
+		]);
+		expect(status.render(40).map(stripTerminalSequences)).toEqual([
+			"│  waiting",
 		]);
 		expect(tool.render(40).map(stripTerminalSequences)).toEqual(["◆  bash"]);
 	});
