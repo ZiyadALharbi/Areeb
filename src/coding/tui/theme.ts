@@ -3,6 +3,7 @@ import type { EditorTheme, MarkdownTheme } from "@earendil-works/pi-tui";
 export type TextStyle = (text: string) => string;
 
 export interface TuiTheme {
+	readonly name: string;
 	readonly background: string;
 	readonly primary: TextStyle;
 	readonly muted: TextStyle;
@@ -50,6 +51,7 @@ const strikethrough = decoration(9, 29);
 const underline = decoration(4, 24);
 
 export const AREEB_DARK_THEME: TuiTheme = {
+	name: "areeb-dark",
 	background: "#141414",
 	primary,
 	muted,

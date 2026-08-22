@@ -40,8 +40,12 @@ function user(text: string): UserMessage {
 
 class StubSession implements TuiControllerSession {
 	readonly promptCalls: string[] = [];
+	readonly commands = [];
+	readonly skills: { readonly name: string }[] = [];
+	readonly promptTemplates: { readonly name: string }[] = [];
 	abortCount = 0;
 	isRunning = false;
+	lastServices: CodingSessionHostServices | undefined;
 
 	constructor(
 		readonly metadata: { readonly id: string; readonly cwd: string },
@@ -65,6 +69,7 @@ class StubSession implements TuiControllerSession {
 		input: string,
 		services: CodingSessionHostServices = {},
 	): Promise<CommandResult> {
+		this.lastServices = services;
 		const trimmed = input.trim();
 		if (trimmed === "/help") {
 			return {
@@ -194,6 +199,29 @@ async function createFixture(): Promise<{
 }
 
 describe("TuiController", () => {
+	test("merges session-controller and TUI services and exposes live completion sources", async () => {
+		const { controller, initial } = await createFixture();
+		initial.skills.push({ name: "review" });
+		initial.promptTemplates.push({ name: "explain" });
+		const tui = {
+			getThemeName: () => "areeb-dark",
+			getHotkeys: () => [{ keys: "Ctrl+P", description: "Commands" }],
+		};
+
+		await controller.handleCommand("/help", tui);
+		expect(initial.lastServices?.sessionController).toBeDefined();
+		expect(initial.lastServices?.tui).toBe(tui);
+		expect(controller.completionCatalog).toMatchObject({
+			skillNames: ["review"],
+			templateNames: ["explain"],
+			availableCapabilities: ["session-controller", "tui"],
+			cwd: "/project",
+		});
+
+		initial.skills.push({ name: "test" });
+		expect(controller.completionCatalog.skillNames).toEqual(["review", "test"]);
+	});
+
 	test("requires consecutive /new confirmation and clears it on another submission", async () => {
 		const { controller, initial } = await createFixture();
 
@@ -305,6 +333,7 @@ describe("TuiController", () => {
 			"model-b",
 			"high",
 		);
+		replacement.skills.push({ name: "replacement-skill" });
 		candidates.set(SECOND_ID, replacement);
 
 		expect(await controller.resumeSession(SECOND_ID)).toEqual({ kind: "none" });
@@ -315,6 +344,9 @@ describe("TuiController", () => {
 			cwd: manager.cwd,
 			items: [{ role: "user", text: "restored transcript" }],
 		});
+		expect(controller.completionCatalog.skillNames).toEqual([
+			"replacement-skill",
+		]);
 		controller.prompt("next prompt");
 		expect(replacement.promptCalls).toEqual(["next prompt"]);
 		expect(initial.promptCalls).toEqual([]);

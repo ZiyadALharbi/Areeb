@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import type { TuiInputListener } from "@earendil-works/pi-tui";
+import type {
+	TuiInputListener,
+	TuiInputListenerResult,
+} from "@earendil-works/pi-tui";
 import type {
 	AgentEvent,
 	AgentMessage,
@@ -7,6 +10,8 @@ import type {
 } from "../../../src/agent/types.ts";
 import { EventStream } from "../../../src/ai/event-stream.ts";
 import type { UserMessage } from "../../../src/ai/types.ts";
+import { createDefaultCommandRegistry } from "../../../src/coding/commands.ts";
+import type { CodingSessionTuiService } from "../../../src/coding/session.ts";
 import { TuiEventAdapter } from "../../../src/coding/tui/adapter.ts";
 import type {
 	CommandNoticeLevel,
@@ -35,6 +40,13 @@ class ManualSession implements InteractiveController {
 		cwd: "/project",
 	};
 	readonly model = "fake-model";
+	readonly completionCatalog = {
+		commands: createDefaultCommandRegistry().list(),
+		skillNames: ["review"],
+		templateNames: ["explain"],
+		availableCapabilities: ["session-controller", "tui"] as const,
+		cwd: this.metadata.cwd,
+	};
 	state = createTuiState({
 		sessionId: this.metadata.id,
 		model: this.model,
@@ -48,6 +60,7 @@ class ManualSession implements InteractiveController {
 	commandHandler: (input: string) => Promise<TuiCommandResult> = async () => ({
 		handled: false,
 	});
+	lastTuiService: CodingSessionTuiService | undefined;
 	private stream: AgentRunStream | undefined;
 	private idle = Promise.resolve();
 	private resolveIdle: (() => void) | undefined;
@@ -56,8 +69,12 @@ class ManualSession implements InteractiveController {
 		this.adapter.restore(messages);
 	}
 
-	async handleCommand(input: string): Promise<TuiCommandResult> {
+	async handleCommand(
+		input: string,
+		tuiService?: CodingSessionTuiService,
+	): Promise<TuiCommandResult> {
 		this.commandCalls.push(input);
+		this.lastTuiService = tuiService;
 		return this.commandHandler(input);
 	}
 
@@ -119,8 +136,11 @@ function createAppController(): {
 	readonly listenerCount: () => number;
 	readonly dismissedOverlays: () => number;
 	readonly toolToggles: () => number;
+	readonly paletteOpens: () => number;
+	readonly completionAccepts: () => number;
+	setInlineCompletion(open: boolean, changes?: boolean): void;
 	submit(text: string): void;
-	input(data: string): void;
+	input(data: string): TuiInputListenerResult | undefined;
 } {
 	let inputListener: TuiInputListener | undefined;
 	let startCount = 0;
@@ -134,6 +154,11 @@ function createAppController(): {
 	let overlayOpen = false;
 	let dismissedOverlayCount = 0;
 	let toolToggleCount = 0;
+	let paletteOpen = false;
+	let paletteOpenCount = 0;
+	let inlineCompletionOpen = false;
+	let inlineCompletionChanges = false;
+	let completionAcceptCount = 0;
 	const editor: {
 		disableSubmit: boolean;
 		onSubmit?: (text: string) => void;
@@ -184,6 +209,33 @@ function createAppController(): {
 					dismissedOverlayCount += 1;
 					return true;
 				},
+				openCommandPalette() {
+					paletteOpen = true;
+					paletteOpenCount += 1;
+					return true;
+				},
+				dismissCommandPalette() {
+					if (!paletteOpen) {
+						return false;
+					}
+					paletteOpen = false;
+					return true;
+				},
+				dismissInlineCompletion() {
+					if (!inlineCompletionOpen) {
+						return false;
+					}
+					inlineCompletionOpen = false;
+					return true;
+				},
+				acceptInlineCompletion() {
+					completionAcceptCount += 1;
+					if (!inlineCompletionOpen) {
+						return false;
+					}
+					inlineCompletionOpen = false;
+					return inlineCompletionChanges;
+				},
 				toggleToolPreviews() {
 					toolToggleCount += 1;
 				},
@@ -198,11 +250,17 @@ function createAppController(): {
 		listenerCount: () => (inputListener === undefined ? 0 : 1),
 		dismissedOverlays: () => dismissedOverlayCount,
 		toolToggles: () => toolToggleCount,
+		paletteOpens: () => paletteOpenCount,
+		completionAccepts: () => completionAcceptCount,
+		setInlineCompletion(open, changes = false) {
+			inlineCompletionOpen = open;
+			inlineCompletionChanges = changes;
+		},
 		submit(text) {
 			editor.onSubmit?.(text);
 		},
 		input(data) {
-			inputListener?.(data);
+			return inputListener?.(data);
 		},
 	};
 }
@@ -240,6 +298,12 @@ describe("runInteractiveMode", () => {
 		controller.submit("ignored while command is pending");
 		await waitUntil(() => controller.states.at(-1)?.running === false);
 		expect(session.commandCalls).toEqual(["/help"]);
+		expect(session.lastTuiService?.getThemeName()).toBe("areeb-dark");
+		expect(
+			session.lastTuiService
+				?.getHotkeys()
+				.some((hotkey) => hotkey.keys === "Ctrl+P"),
+		).toBe(true);
 		expect(session.promptCalls).toEqual([]);
 		expect(controller.states.at(-1)?.items).toEqual([
 			{ role: "user", text: "restored" },
@@ -279,6 +343,32 @@ describe("runInteractiveMode", () => {
 		expect(session.abortCount).toBe(0);
 		app.input("\u000f");
 		expect(app.toolToggles()).toBe(1);
+
+		app.submit("/quit");
+		expect(await running).toBe(0);
+	});
+
+	test("opens the shared palette and consumes Enter only when completion changes", async () => {
+		const session = new ManualSession();
+		session.commandHandler = async () => ({
+			handled: true,
+			outcome: { kind: "quit" },
+		});
+		const app = createAppController();
+		const running = runInteractiveMode(session, { createApp: app.createApp });
+
+		expect(app.input("\u0010")).toEqual({ consume: true });
+		expect(app.paletteOpens()).toBe(1);
+		expect(app.input("\u001b")).toEqual({ consume: true });
+		expect(session.abortCount).toBe(0);
+
+		app.setInlineCompletion(true, true);
+		expect(app.input("\r")).toEqual({ consume: true });
+		expect(app.completionAccepts()).toBe(1);
+		expect(session.commandCalls).toEqual([]);
+		app.setInlineCompletion(true, false);
+		expect(app.input("\r")).toBeUndefined();
+		expect(app.completionAccepts()).toBe(2);
 
 		app.submit("/quit");
 		expect(await running).toBe(0);

@@ -5,13 +5,16 @@ import type {
 	CommandOutcome,
 	CommandResult,
 	CommandSessionListItem,
+	SlashCommand,
 } from "../commands.ts";
 import type {
 	CodingSessionControllerService,
 	CodingSessionHostServices,
+	CodingSessionTuiService,
 } from "../session.ts";
 import type { CodingSessionRecord } from "../session-manager.ts";
 import { TuiEventAdapter } from "./adapter.ts";
+import type { CompletionCatalog } from "./autocomplete.ts";
 import { createTuiState, type TuiState } from "./state.ts";
 
 type AppliedCommandOutcome = Exclude<
@@ -30,6 +33,9 @@ export interface TuiControllerSession {
 	readonly model: string;
 	readonly reasoning: ReasoningLevel;
 	readonly isRunning: boolean;
+	readonly commands: readonly SlashCommand[];
+	readonly skills: readonly { readonly name: string }[];
+	readonly promptTemplates: readonly { readonly name: string }[];
 	prompt(input: string): AgentRunStream;
 	handleCommand(
 		input: string,
@@ -119,6 +125,18 @@ export class TuiController {
 		return this.active.session.isRunning;
 	}
 
+	get completionCatalog(): CompletionCatalog {
+		return {
+			commands: this.active.session.commands,
+			skillNames: this.active.session.skills.map((skill) => skill.name),
+			templateNames: this.active.session.promptTemplates.map(
+				(template) => template.name,
+			),
+			availableCapabilities: ["session-controller", "tui"],
+			cwd: this.active.session.metadata.cwd,
+		};
+	}
+
 	prompt(input: string): AgentRunStream {
 		this.newSessionPending = false;
 		return this.active.session.prompt(input);
@@ -132,9 +150,13 @@ export class TuiController {
 		return this.active.session.waitForIdle();
 	}
 
-	async handleCommand(input: string): Promise<TuiCommandResult> {
+	async handleCommand(
+		input: string,
+		tuiService?: CodingSessionTuiService,
+	): Promise<TuiCommandResult> {
 		const services: CodingSessionHostServices = {
 			sessionController: this.sessionControllerService,
+			...(tuiService === undefined ? {} : { tui: tuiService }),
 		};
 		const result = await this.active.session.handleCommand(input, services);
 		if (!result.handled) {

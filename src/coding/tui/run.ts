@@ -5,8 +5,11 @@ import {
 	type Terminal,
 } from "@earendil-works/pi-tui";
 import type { AgentMessage, AgentRunStream } from "../../agent/types.ts";
+import type { CommandHotkey } from "../commands.ts";
+import type { CodingSessionTuiService } from "../session.ts";
 import type { TuiEventAdapter } from "./adapter.ts";
 import { type CreateTuiAppOptions, createTuiApp, type TuiApp } from "./app.ts";
+import type { CompletionCatalog } from "./autocomplete.ts";
 import type { TuiCommandResult } from "./controller.ts";
 import type { TuiState } from "./state.ts";
 import { AREEB_DARK_THEME, type TuiTheme } from "./theme.ts";
@@ -18,11 +21,43 @@ export interface InteractiveController {
 	readonly state: TuiState;
 	readonly adapter: TuiEventAdapter;
 	readonly isRunning: boolean;
+	readonly completionCatalog: CompletionCatalog;
 	prompt(input: string): AgentRunStream;
-	handleCommand(input: string): Promise<TuiCommandResult>;
+	handleCommand(
+		input: string,
+		tuiService?: CodingSessionTuiService,
+	): Promise<TuiCommandResult>;
 	abort(): void;
 	waitForIdle(): Promise<void>;
 }
+
+interface InteractiveHotkey extends CommandHotkey {
+	readonly footerLabel?: string;
+}
+
+export const INTERACTIVE_HOTKEYS: readonly InteractiveHotkey[] = Object.freeze([
+	{ keys: "Enter", description: "Submit input" },
+	{ keys: "Alt+Enter", description: "Insert a newline" },
+	{ keys: "Tab / Enter", description: "Apply the selected completion" },
+	{ keys: "Up / Down", description: "Move through completions" },
+	{
+		keys: "Esc",
+		description: "Close the active menu or interrupt the run",
+		footerLabel: "interrupt",
+	},
+	{ keys: "Ctrl+C", description: "Quit", footerLabel: "quit" },
+	{
+		keys: "Ctrl+P",
+		description: "Open the command palette",
+		footerLabel: "commands",
+	},
+	{ keys: "/", description: "Open slash command completion" },
+	{
+		keys: "Ctrl+O",
+		description: "Toggle tool previews",
+		footerLabel: "tools",
+	},
+]);
 
 export interface InteractiveRunOptions {
 	readonly terminal?: Terminal;
@@ -35,11 +70,21 @@ export async function runInteractiveMode(
 	controller: InteractiveController,
 	options: InteractiveRunOptions = {},
 ): Promise<number> {
+	const theme = options.theme ?? AREEB_DARK_THEME;
+	const tuiService: CodingSessionTuiService = {
+		getThemeName: () => theme.name,
+		getHotkeys: () => INTERACTIVE_HOTKEYS,
+	};
 	const app = (options.createApp ?? createTuiApp)({
 		terminal: options.terminal ?? new ProcessTerminal(),
-		theme: options.theme ?? AREEB_DARK_THEME,
+		theme,
 		transcript: [],
-		shortcuts: "Ctrl+O:tools  │  Esc:interrupt  │  Ctrl+C:quit",
+		shortcuts: INTERACTIVE_HOTKEYS.flatMap((hotkey) =>
+			hotkey.footerLabel === undefined
+				? []
+				: [`${hotkey.keys}:${hotkey.footerLabel}`],
+		).join("  │  "),
+		getCompletionCatalog: () => controller.completionCatalog,
 		state: controller.state,
 	});
 
@@ -59,6 +104,8 @@ export async function runInteractiveMode(
 		app.editor.onSubmit = undefined;
 		removeInputListener?.();
 		removeInputListener = undefined;
+		app.dismissCommandPalette();
+		app.dismissInlineCompletion();
 		app.clearCommandPresentation();
 	};
 
@@ -120,7 +167,7 @@ export async function runInteractiveMode(
 	const runSubmission = async (input: string): Promise<void> => {
 		let failure: unknown;
 		try {
-			const command = await controller.handleCommand(input);
+			const command = await controller.handleCommand(input, tuiService);
 			if (command.handled) {
 				applyCommandResult(command, input, app, requestExit);
 				app.refresh(controller.state);
@@ -184,6 +231,12 @@ export async function runInteractiveMode(
 			return { consume: true };
 		}
 		if (matchesKey(data, Key.escape)) {
+			if (app.dismissCommandPalette()) {
+				return { consume: true };
+			}
+			if (app.dismissInlineCompletion()) {
+				return { consume: true };
+			}
 			if (app.dismissCommandOverlay()) {
 				return { consume: true };
 			}
@@ -192,6 +245,15 @@ export async function runInteractiveMode(
 		}
 		if (matchesKey(data, Key.ctrl("o"))) {
 			app.toggleToolPreviews();
+			return { consume: true };
+		}
+		if (matchesKey(data, Key.ctrl("p"))) {
+			if (!submissionActive && !controller.isRunning) {
+				app.openCommandPalette();
+			}
+			return { consume: true };
+		}
+		if (matchesKey(data, Key.enter) && app.acceptInlineCompletion()) {
 			return { consume: true };
 		}
 		return undefined;
