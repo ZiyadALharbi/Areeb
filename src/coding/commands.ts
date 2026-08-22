@@ -1,3 +1,5 @@
+import { assertUuid } from "../agent/session/session.ts";
+import type { SessionModel } from "../agent/session/types.ts";
 import type { ReasoningLevel } from "../ai/types.ts";
 import type { ResourceDiagnostic } from "./resources.ts";
 
@@ -33,8 +35,15 @@ export interface CommandResourceReloadResult extends CommandResourceSummary {
 	readonly systemPromptChanged: boolean;
 }
 
+export interface CommandSessionListItem {
+	readonly id: string;
+	readonly title: string;
+	readonly model: SessionModel | null;
+}
+
 export interface CommandContext {
 	readonly hasCapability: (capability: CommandCapability) => boolean;
+	readonly listSessions: () => Promise<readonly CommandSessionListItem[]>;
 	readonly getSessionInfo: () => Promise<CommandSessionInfo>;
 	readonly getResourceSummary: () => CommandResourceSummary;
 	readonly getContextFiles: () => readonly string[];
@@ -51,6 +60,8 @@ export type CommandOutcome =
 	  }
 	| { readonly kind: "quit" }
 	| { readonly kind: "none" }
+	| { readonly kind: "new-session" }
+	| { readonly kind: "resume"; readonly sessionId: string }
 	| {
 			readonly kind: "unavailable";
 			readonly missingCapability: CommandCapability;
@@ -181,9 +192,12 @@ export function createDefaultCommandRegistry(): CommandRegistry {
 		description: "Start a new session",
 		usage: "/new",
 		searchTerms: ["clear"],
-		// Session replacement belongs to an application controller that can reject
-		// busy transitions and keep the current session intact if rebuilding fails.
 		requirements: ["session-controller"],
+		async handler(_context, argumentsText) {
+			return argumentsText.length > 0
+				? usageError("/new")
+				: { kind: "new-session" };
+		},
 	});
 	registry.register({
 		name: "compact",
@@ -280,9 +294,38 @@ export function createDefaultCommandRegistry(): CommandRegistry {
 		name: "resume",
 		description: "Resume a previous session",
 		usage: "/resume [session-id]",
-		// Resuming must atomically swap CodingSession through the same controller as
-		// /new; exact UUID lookup already exists but does not own runtime replacement.
 		requirements: ["session-controller"],
+		async handler(context, argumentsText) {
+			if (argumentsText.length === 0) {
+				try {
+					const sessions = await context.listSessions();
+					return {
+						kind: "message",
+						level: "info",
+						text:
+							sessions.length === 0
+								? "No sessions found"
+								: sessions.map(formatSessionListItem).join("\n"),
+					};
+				} catch (error) {
+					return {
+						kind: "message",
+						level: "error",
+						text: `Failed to list sessions: ${errorMessage(error)}`,
+					};
+				}
+			}
+
+			if (/\s/.test(argumentsText)) {
+				return usageError("/resume [session-id]");
+			}
+			try {
+				assertUuid(argumentsText, "session id");
+			} catch {
+				return usageError("/resume [session-id]");
+			}
+			return { kind: "resume", sessionId: argumentsText };
+		},
 	});
 	registry.register({
 		name: "model",
@@ -530,4 +573,22 @@ function formatResourceDiagnostic(diagnostic: ResourceDiagnostic): string {
 			: `winner: ${diagnostic.relatedPath}`,
 	].filter((value) => value !== undefined);
 	return `- ${identity}: ${diagnostic.message}${locations.length === 0 ? "" : ` (${locations.join("; ")})`}`;
+}
+
+function formatSessionListItem(session: CommandSessionListItem): string {
+	return [
+		cleanDisplayField(session.id),
+		cleanDisplayField(session.title),
+		session.model === null
+			? "-"
+			: `${cleanDisplayField(session.model.provider)}/${cleanDisplayField(session.model.model)}`,
+	].join("\t");
+}
+
+function cleanDisplayField(value: string): string {
+	return value.replace(/[\t\r\n]+/g, " ");
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }

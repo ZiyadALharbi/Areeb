@@ -339,6 +339,7 @@ describe("CLI interactive mode", () => {
 
 			let interactiveRuns = 0;
 			let printRuns = 0;
+			let providerCreations = 0;
 			const common = {
 				cwd: launchCwd,
 				userRoot,
@@ -347,17 +348,29 @@ describe("CLI interactive mode", () => {
 				stdin: { isTTY: true },
 				stdout: new BufferOutput(true),
 				stderr: new BufferOutput(),
-				createProvider: () => new FakeProvider([], { providerId: "openai" }),
+				createProvider: () => {
+					providerCreations += 1;
+					return new FakeProvider([], { providerId: "openai" });
+				},
 			};
 
 			expect(
 				await runCli(["--resume", RESUME_ID], {
 					...common,
-					async runInteractive(session) {
+					async runInteractive(controller) {
 						interactiveRuns += 1;
-						expect(session.metadata.cwd).toBe(storedCwd);
-						expect(session.model).toBe("stored-model");
-						expect(session.messages).toEqual([]);
+						expect(controller.metadata.cwd).toBe(storedCwd);
+						expect(controller.model).toBe("stored-model");
+						expect(controller.messages).toEqual([]);
+						expect(await controller.handleCommand("/new")).toMatchObject({
+							outcome: { kind: "message", level: "warning" },
+						});
+						expect(await controller.handleCommand("/new")).toEqual({
+							handled: true,
+							outcome: { kind: "none" },
+						});
+						expect(controller.metadata.cwd).toBe(storedCwd);
+						expect(controller.model).toBe("stored-model");
 						return 0;
 					},
 					async runPrint() {
@@ -383,6 +396,7 @@ describe("CLI interactive mode", () => {
 				interactiveRuns: 1,
 				printRuns: 1,
 			});
+			expect(providerCreations).toBe(3);
 
 			const failureOutput = new BufferOutput();
 			expect(

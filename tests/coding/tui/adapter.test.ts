@@ -64,6 +64,9 @@ describe("TuiEventAdapter", () => {
 					toolCallId: "call-1",
 				},
 			],
+			sessionId: "unknown",
+			model: "unknown model",
+			cwd: ".",
 			running: false,
 		});
 	});

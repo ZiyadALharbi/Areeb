@@ -3,6 +3,7 @@ import {
 	type CommandContext,
 	CommandRegistry,
 	type CommandResourceSummary,
+	type CommandSessionListItem,
 	createDefaultCommandRegistry,
 	type SlashCommand,
 } from "../../src/coding/commands.ts";
@@ -17,10 +18,17 @@ function context(
 	},
 	contextFiles: readonly string[] = [],
 	systemPromptChanged = false,
+	sessions: readonly CommandSessionListItem[] | Error = [],
 ): CommandContext {
 	let name: string | undefined;
 	return {
 		hasCapability: (capability) => capabilities.includes(capability),
+		async listSessions() {
+			if (sessions instanceof Error) {
+				throw sessions;
+			}
+			return sessions;
+		},
 		getResourceSummary: () => resourceSummary,
 		getContextFiles: () => [...contextFiles],
 		async reloadResources() {
@@ -266,6 +274,84 @@ describe("default slash commands", () => {
 			outcome: {
 				kind: "unavailable",
 				missingCapability: "compaction",
+			},
+		});
+	});
+
+	test("returns session-controller outcomes and validates resume identifiers", async () => {
+		const registry = createDefaultCommandRegistry();
+		const id = "00000000-0000-4000-8000-000000000001";
+		const commandContext = context(["session-controller"]);
+
+		expect(await registry.dispatch("/new", commandContext)).toEqual({
+			handled: true,
+			outcome: { kind: "new-session" },
+		});
+		expect(await registry.dispatch("/new now", commandContext)).toEqual({
+			handled: true,
+			outcome: { kind: "message", level: "error", text: "Usage: /new" },
+		});
+		expect(await registry.dispatch(`/resume ${id}`, commandContext)).toEqual({
+			handled: true,
+			outcome: { kind: "resume", sessionId: id },
+		});
+		for (const input of ["/resume partial", `/resume ${id} extra`]) {
+			expect(await registry.dispatch(input, commandContext)).toEqual({
+				handled: true,
+				outcome: {
+					kind: "message",
+					level: "error",
+					text: "Usage: /resume [session-id]",
+				},
+			});
+		}
+	});
+
+	test("lists project sessions as sanitized text and recovers listing failures", async () => {
+		const registry = createDefaultCommandRegistry();
+		const sessions: readonly CommandSessionListItem[] = [
+			{
+				id: "00000000-0000-4000-8000-000000000002",
+				title: "Newest\ttitle",
+				model: { provider: "fake", model: "model-a" },
+			},
+			{
+				id: "00000000-0000-4000-8000-000000000001",
+				title: "Older\nname",
+				model: null,
+			},
+		];
+		const listed = await registry.dispatch(
+			"/resume",
+			context(["session-controller"], undefined, [], false, sessions),
+		);
+		expect(listed).toEqual({
+			handled: true,
+			outcome: {
+				kind: "message",
+				level: "info",
+				text: `${sessions[0]?.id}\tNewest title\tfake/model-a\n${sessions[1]?.id}\tOlder name\t-`,
+			},
+		});
+		expect(
+			await registry.dispatch("/resume", context(["session-controller"])),
+		).toMatchObject({ outcome: { text: "No sessions found" } });
+		expect(
+			await registry.dispatch(
+				"/resume",
+				context(
+					["session-controller"],
+					undefined,
+					[],
+					false,
+					new Error("storage failed"),
+				),
+			),
+		).toMatchObject({
+			outcome: {
+				kind: "message",
+				level: "error",
+				text: "Failed to list sessions: storage failed",
 			},
 		});
 	});
