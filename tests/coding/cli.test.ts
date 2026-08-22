@@ -15,6 +15,7 @@ const RESUME_ID = "00000000-0000-4000-8000-000000000001";
 
 class BufferOutput {
 	value = "";
+	constructor(readonly isTTY?: boolean) {}
 
 	write(content: string): void {
 		this.value += content;
@@ -59,6 +60,16 @@ describe("CLI parsing", () => {
 			resumeId: RESUME_ID,
 			output: "text",
 			trustProjectResources: true,
+		});
+		expect(parseCli([])).toEqual({
+			kind: "interactive",
+			trustProjectResources: false,
+		});
+		expect(parseCli(["--resume", RESUME_ID, "--provider", "fake"])).toEqual({
+			kind: "interactive",
+			resumeId: RESUME_ID,
+			provider: "fake",
+			trustProjectResources: false,
 		});
 	});
 
@@ -110,8 +121,8 @@ describe("CLI parsing", () => {
 			"resume session id must be a full UUID",
 		);
 		expect(() => parseCli(["-p", "hello", "--resume"])).toThrow();
-		expect(() => parseCli(["--resume", RESUME_ID])).toThrow(
-			"Interactive mode is not available yet",
+		expect(() => parseCli(["--output", "json"])).toThrow(
+			"Option --output requires -p",
 		);
 		expect(() => parseCli(["sessions", "extra"])).toThrow(
 			"Unexpected argument: extra",
@@ -274,6 +285,116 @@ describe("CLI session persistence", () => {
 				}),
 			).toBe(1);
 			expect(unknownError.value).toBe(`areeb: Unknown session: ${unknownId}\n`);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("CLI interactive mode", () => {
+	test("rejects non-TTY invocation before provider bootstrap", async () => {
+		const stderr = new BufferOutput();
+		let providerCreated = false;
+
+		expect(
+			await runCli([], {
+				stdin: { isTTY: false },
+				stdout: new BufferOutput(true),
+				stderr,
+				createProvider() {
+					providerCreated = true;
+					return new FakeProvider([]);
+				},
+			}),
+		).toBe(1);
+		expect(stderr.value).toContain(
+			"Interactive mode requires a TTY. Use -p for print mode.",
+		);
+		expect(providerCreated).toBe(false);
+	});
+
+	test("dispatches sibling runners and propagates interactive failures", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "areeb-cli-interactive-"));
+		try {
+			const userRoot = join(directory, "user");
+			const storedCwd = join(directory, "stored-project");
+			const launchCwd = join(directory, "launch-project");
+			await setupOpenAICompatibleProvider({
+				userRoot,
+				env: { OPENAI_API_KEY: "test-key" },
+				provider: "openai",
+				models: ["stored-model"],
+				defaultModel: "stored-model",
+			});
+			const stored = await new CodingSessionManager({
+				cwd: storedCwd,
+				userRoot,
+				repositoryOptions: { sessionIdGenerator: () => RESUME_ID },
+			}).create();
+			await stored.appendEntry({
+				type: "model_change",
+				provider: "openai",
+				model: "stored-model",
+			});
+
+			let interactiveRuns = 0;
+			let printRuns = 0;
+			const common = {
+				cwd: launchCwd,
+				userRoot,
+				agentsRoot: join(directory, "agents"),
+				env: { OPENAI_API_KEY: "test-key" },
+				stdin: { isTTY: true },
+				stdout: new BufferOutput(true),
+				stderr: new BufferOutput(),
+				createProvider: () => new FakeProvider([], { providerId: "openai" }),
+			};
+
+			expect(
+				await runCli(["--resume", RESUME_ID], {
+					...common,
+					async runInteractive(session) {
+						interactiveRuns += 1;
+						expect(session.metadata.cwd).toBe(storedCwd);
+						expect(session.model).toBe("stored-model");
+						expect(session.messages).toEqual([]);
+						return 0;
+					},
+					async runPrint() {
+						throw new Error("print runner should not run");
+					},
+				}),
+			).toBe(0);
+
+			expect(
+				await runCli(["-p", "hello"], {
+					...common,
+					async runInteractive() {
+						throw new Error("interactive runner should not run");
+					},
+					async runPrint(_session, prompt) {
+						printRuns += 1;
+						expect(prompt).toBe("hello");
+						return 0;
+					},
+				}),
+			).toBe(0);
+			expect({ interactiveRuns, printRuns }).toEqual({
+				interactiveRuns: 1,
+				printRuns: 1,
+			});
+
+			const failureOutput = new BufferOutput();
+			expect(
+				await runCli([], {
+					...common,
+					stderr: failureOutput,
+					async runInteractive() {
+						throw new Error("interactive runner failed");
+					},
+				}),
+			).toBe(1);
+			expect(failureOutput.value).toBe("areeb: interactive runner failed\n");
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}

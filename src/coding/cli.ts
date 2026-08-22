@@ -23,8 +23,10 @@ import {
 	findCodingSession,
 	listCodingSessions,
 } from "./session-manager.ts";
+import { runInteractiveMode } from "./tui/run.ts";
 
 export const USAGE = `Usage:
+  areeb [--provider <provider>] [--model <model>] [--resume <session-id>] [--trust-project]
   areeb -p <prompt> [--provider <provider>] [--model <model>] [--output <mode>] [--resume <session-id>] [--trust-project]
   areeb sessions
   areeb providers
@@ -40,8 +42,7 @@ Options:
   -h, --help                 Show this help
 
 Provider settings: ~/.areeb/providers.json
-OpenAI environment: OPENAI_API_KEY, OPENAI_MODEL, OPENAI_BASE_URL, OPENAI_TIMEOUT_SECONDS, OPENAI_MAX_RETRIES, OPENAI_MAX_RETRY_DELAY_SECONDS
-Interactive mode is not available yet.`;
+OpenAI environment: OPENAI_API_KEY, OPENAI_MODEL, OPENAI_BASE_URL, OPENAI_TIMEOUT_SECONDS, OPENAI_MAX_RETRIES, OPENAI_MAX_RETRY_DELAY_SECONDS`;
 
 type CliEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -80,12 +81,21 @@ export interface PromptCliCommand {
 	readonly trustProjectResources: boolean;
 }
 
+export interface InteractiveCliCommand {
+	readonly kind: "interactive";
+	readonly provider?: string;
+	readonly model?: string;
+	readonly resumeId?: string;
+	readonly trustProjectResources: boolean;
+}
+
 export type CliCommand =
 	| HelpCliCommand
 	| SessionsCliCommand
 	| ProvidersCliCommand
 	| SetupCliCommand
-	| PromptCliCommand;
+	| PromptCliCommand
+	| InteractiveCliCommand;
 
 interface ParsedCliValues {
 	readonly prompt?: string;
@@ -156,18 +166,28 @@ export function parseCli(args: string[]): CliCommand {
 	assertOnlyOptions(
 		values,
 		["prompt", "resume", "provider", "model", "output", "trust-project"],
-		"prompt mode",
+		"session mode",
 	);
+	if (values.resume !== undefined) {
+		assertUuid(values.resume, "resume session id");
+	}
+	const provider = optionalNonempty(values.provider, "Provider");
+	const model = optionalNonempty(values.model, "Model");
+	const common = {
+		...(provider === undefined ? {} : { provider }),
+		...(model === undefined ? {} : { model }),
+		...(values.resume === undefined ? {} : { resumeId: values.resume }),
+		trustProjectResources: values["trust-project"] ?? false,
+	};
+
 	if (values.prompt === undefined) {
-		throw new Error(
-			'Interactive mode is not available yet. Use -p "your prompt".',
-		);
+		if (values.output !== undefined) {
+			throw new Error("Option --output requires -p");
+		}
+		return { kind: "interactive", ...common };
 	}
 	if (!values.prompt.trim()) {
 		throw new Error("Prompt cannot be empty");
-	}
-	if (values.resume !== undefined) {
-		assertUuid(values.resume, "resume session id");
 	}
 
 	const output = values.output ?? "text";
@@ -176,22 +196,22 @@ export function parseCli(args: string[]): CliCommand {
 			`Invalid output mode: ${output}. Expected text, json, or transcript.`,
 		);
 	}
-	const provider = optionalNonempty(values.provider, "Provider");
-	const model = optionalNonempty(values.model, "Model");
 
 	return {
 		kind: "prompt",
 		prompt: values.prompt,
-		...(provider === undefined ? {} : { provider }),
-		...(model === undefined ? {} : { model }),
-		...(values.resume === undefined ? {} : { resumeId: values.resume }),
+		...common,
 		output,
-		trustProjectResources: values["trust-project"] ?? false,
 	};
 }
 
 interface CliOutput {
+	readonly isTTY?: boolean;
 	write(content: string): unknown;
+}
+
+interface CliInput {
+	readonly isTTY?: boolean;
 }
 
 interface CliRuntime {
@@ -199,10 +219,12 @@ interface CliRuntime {
 	readonly userRoot?: string;
 	readonly agentsRoot?: string;
 	readonly env?: CliEnvironment;
+	readonly stdin?: CliInput;
 	readonly stdout?: CliOutput;
 	readonly stderr?: CliOutput;
 	readonly createProvider?: (config: OpenAICompatibleConfig) => ModelProvider;
 	readonly runPrint?: typeof runPrintMode;
+	readonly runInteractive?: typeof runInteractiveMode;
 }
 
 /** Execute a parsed CLI command with durable provider and session settings. */
@@ -283,7 +305,16 @@ export async function runCli(
 			return 0;
 		}
 
-		return await runPromptCommand(command, runtime, env);
+		if (command.kind === "interactive") {
+			const stdin = runtime.stdin ?? process.stdin;
+			if (stdin.isTTY !== true || stdout.isTTY !== true) {
+				throw new Error(
+					"Interactive mode requires a TTY. Use -p for print mode.",
+				);
+			}
+		}
+
+		return await runSessionCommand(command, runtime, env);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		stderr.write(`areeb: ${message}\n`);
@@ -291,8 +322,8 @@ export async function runCli(
 	}
 }
 
-async function runPromptCommand(
-	command: PromptCliCommand,
+async function runSessionCommand(
+	command: PromptCliCommand | InteractiveCliCommand,
 	runtime: CliRuntime,
 	env: CliEnvironment,
 ): Promise<number> {
@@ -357,9 +388,12 @@ async function runPromptCommand(
 		trustProjectResources: command.trustProjectResources,
 	});
 
-	return (runtime.runPrint ?? runPrintMode)(coding, command.prompt, {
-		output: command.output,
-	});
+	if (command.kind === "prompt") {
+		return (runtime.runPrint ?? runPrintMode)(coding, command.prompt, {
+			output: command.output,
+		});
+	}
+	return (runtime.runInteractive ?? runInteractiveMode)(coding);
 }
 
 function parseSetupCommand(values: ParsedCliValues): SetupCliCommand {
