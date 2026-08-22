@@ -98,11 +98,10 @@ export class MessageBlock implements Component {
 					return [rail];
 				}
 				return markdownLines.flatMap((line) =>
-					wrapTextWithAnsi(line, contentWidth).map((wrapped) =>
-						stripTerminalSequences(wrapped).trim().length > 0
-							? `${prefix}${truncateToWidth(wrapped, contentWidth, "")}`
-							: rail,
-					),
+					wrapTextWithAnsi(line, contentWidth).map((wrapped) => {
+						const trimmed = trimTerminalLineEnd(wrapped);
+						return visibleWidth(trimmed) > 0 ? `${prefix}${trimmed}` : rail;
+					}),
 				);
 			} catch {
 				// Streaming can temporarily expose malformed Markdown. Literal text is
@@ -201,6 +200,11 @@ function wrapLiteralText(text: string, width: number): string[] {
 		lines.push(...(fittedLines.length > 0 ? fittedLines : [""]));
 	}
 	return lines;
+}
+
+function trimTerminalLineEnd(line: string): string {
+	const width = visibleWidth(stripTerminalSequences(line).trimEnd());
+	return truncateToWidth(line, width, "");
 }
 
 function limitPhysicalLines(lines: string[], width: number): string[] {
