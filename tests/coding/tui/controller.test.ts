@@ -405,7 +405,7 @@ describe("TuiController", () => {
 			await controller.newSession();
 			expect(await controller.newSession()).toEqual({ kind: "none" });
 			expect(controller.metadata.id).toBe(SECOND_ID);
-			await expect(access(firstRecord.path)).resolves.toBeUndefined();
+			await access(firstRecord.path);
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}

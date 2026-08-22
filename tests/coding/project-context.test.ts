@@ -221,9 +221,16 @@ describe("project context discovery", () => {
 		await writeFile(unreadable, "private");
 		await chmod(unreadable, 0o000);
 		try {
-			await expect(loadProjectContext({ cwd, ...roots })).rejects.toThrow(
-				"Unable to read resource",
-			);
+			try {
+				await loadProjectContext({ cwd, ...roots });
+				throw new Error("Expected unreadable project context to reject");
+			} catch (error) {
+				expect(error).toBeInstanceOf(ResourceError);
+				expect(error).toMatchObject({ filePath: unreadable });
+				expect((error as Error).message).toMatch(
+					/Unable to (?:read resource|resolve resource path)/,
+				);
+			}
 		} finally {
 			await chmod(unreadable, 0o600);
 		}
