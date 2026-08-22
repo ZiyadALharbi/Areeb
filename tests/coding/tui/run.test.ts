@@ -9,6 +9,7 @@ import { EventStream } from "../../../src/ai/event-stream.ts";
 import type { UserMessage } from "../../../src/ai/types.ts";
 import { TuiEventAdapter } from "../../../src/coding/tui/adapter.ts";
 import type {
+	CommandNoticeLevel,
 	CreateTuiAppOptions,
 	TuiApp,
 } from "../../../src/coding/tui/app.ts";
@@ -105,6 +106,10 @@ function createAppController(): {
 	readonly createApp: (options: CreateTuiAppOptions) => TuiApp;
 	readonly states: TuiState[];
 	readonly initialStates: TuiState[];
+	readonly presentations: Array<{
+		readonly text: string;
+		readonly level: CommandNoticeLevel;
+	}>;
 	readonly editor: {
 		disableSubmit: boolean;
 		onSubmit?: (text: string) => void;
@@ -112,6 +117,8 @@ function createAppController(): {
 	readonly started: () => number;
 	readonly stopped: () => number;
 	readonly listenerCount: () => number;
+	readonly dismissedOverlays: () => number;
+	readonly toolToggles: () => number;
 	submit(text: string): void;
 	input(data: string): void;
 } {
@@ -120,6 +127,13 @@ function createAppController(): {
 	let stopCount = 0;
 	const states: TuiState[] = [];
 	const initialStates: TuiState[] = [];
+	const presentations: Array<{
+		readonly text: string;
+		readonly level: CommandNoticeLevel;
+	}> = [];
+	let overlayOpen = false;
+	let dismissedOverlayCount = 0;
+	let toolToggleCount = 0;
 	const editor: {
 		disableSubmit: boolean;
 		onSubmit?: (text: string) => void;
@@ -155,14 +169,35 @@ function createAppController(): {
 						editor.disableSubmit = state.running;
 					}
 				},
+				presentCommand(text: string, level: CommandNoticeLevel) {
+					presentations.push({ text, level });
+					overlayOpen = text.includes("\n");
+				},
+				clearCommandPresentation() {
+					overlayOpen = false;
+				},
+				dismissCommandOverlay() {
+					if (!overlayOpen) {
+						return false;
+					}
+					overlayOpen = false;
+					dismissedOverlayCount += 1;
+					return true;
+				},
+				toggleToolPreviews() {
+					toolToggleCount += 1;
+				},
 			} as unknown as TuiApp;
 		},
 		states,
 		initialStates,
+		presentations,
 		editor,
 		started: () => startCount,
 		stopped: () => stopCount,
 		listenerCount: () => (inputListener === undefined ? 0 : 1),
+		dismissedOverlays: () => dismissedOverlayCount,
+		toolToggles: () => toolToggleCount,
 		submit(text) {
 			editor.onSubmit?.(text);
 		},
@@ -206,16 +241,47 @@ describe("runInteractiveMode", () => {
 		await waitUntil(() => controller.states.at(-1)?.running === false);
 		expect(session.commandCalls).toEqual(["/help"]);
 		expect(session.promptCalls).toEqual([]);
-		expect(controller.states.at(-1)?.items.at(-1)).toEqual({
-			role: "status",
-			text: "local help",
-		});
+		expect(controller.states.at(-1)?.items).toEqual([
+			{ role: "user", text: "restored" },
+		]);
+		expect(controller.presentations).toEqual([
+			{ text: "local help", level: "info" },
+		]);
 
 		controller.submit("/quit");
 		expect(await running).toBe(0);
 		expect(controller.started()).toBe(1);
 		expect(controller.stopped()).toBe(1);
 		expect(controller.listenerCount()).toBe(0);
+	});
+
+	test("dismisses command overlays before aborting and toggles tool previews", async () => {
+		const session = new ManualSession();
+		session.commandHandler = async (input) =>
+			input === "/quit"
+				? { handled: true, outcome: { kind: "quit" } }
+				: {
+						handled: true,
+						outcome: {
+							kind: "message",
+							level: "info",
+							text: "Session ID: one\nModel: fake-model",
+						},
+					};
+		const app = createAppController();
+		const running = runInteractiveMode(session, { createApp: app.createApp });
+
+		app.submit("/session");
+		await waitUntil(() => app.presentations.length === 1);
+		expect(session.state.items).toEqual([]);
+		app.input("\u001b");
+		expect(app.dismissedOverlays()).toBe(1);
+		expect(session.abortCount).toBe(0);
+		app.input("\u000f");
+		expect(app.toolToggles()).toBe(1);
+
+		app.submit("/quit");
+		expect(await running).toBe(0);
 	});
 
 	test("refreshes from a replacement controller bundle after a command", async () => {
