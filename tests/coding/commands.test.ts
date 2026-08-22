@@ -52,6 +52,12 @@ function context(
 		async setSessionName(value) {
 			name = value;
 		},
+		getTuiInfo() {
+			return {
+				themeName: "areeb-dark",
+				hotkeys: [{ keys: "Ctrl+P", description: "Open the command palette" }],
+			};
+		},
 	};
 }
 
@@ -305,6 +311,36 @@ describe("default slash commands", () => {
 				},
 			});
 		}
+	});
+
+	test("reports TUI hotkeys and the active theme without switching it", async () => {
+		const registry = createDefaultCommandRegistry();
+		const commandContext = context(["tui"]);
+
+		expect(await registry.dispatch("/hotkeys", commandContext)).toEqual({
+			handled: true,
+			outcome: {
+				kind: "message",
+				level: "info",
+				text: "Keyboard shortcuts:\nCtrl+P — Open the command palette",
+			},
+		});
+		expect(await registry.dispatch("/theme", commandContext)).toEqual({
+			handled: true,
+			outcome: {
+				kind: "message",
+				level: "info",
+				text: "Active theme: areeb-dark",
+			},
+		});
+		expect(await registry.dispatch("/theme light", commandContext)).toEqual({
+			handled: true,
+			outcome: {
+				kind: "message",
+				level: "error",
+				text: "Usage: /theme",
+			},
+		});
 	});
 
 	test("lists project sessions as sanitized text and recovers listing failures", async () => {

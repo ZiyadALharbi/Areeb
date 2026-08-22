@@ -650,7 +650,7 @@ describe("CodingSession commands and queues", () => {
 			throw new Error("Expected help message");
 		}
 		expect(help.outcome.text).toContain("/help");
-		expect(help.outcome.text).toContain("/theme [theme]");
+		expect(help.outcome.text).toContain("/theme");
 		expect(await coding.handleCommand("/quit")).toEqual({
 			handled: true,
 			outcome: { kind: "quit" },
@@ -679,7 +679,7 @@ describe("CodingSession commands and queues", () => {
 		expect(coding.followUp("follow up").count).toBe(2);
 	});
 
-	test("enables only session-controller commands when the TUI service is supplied", async () => {
+	test("enables only session-controller commands when that host service is supplied", async () => {
 		const session = await createMemorySession();
 		const coding = await CodingSession.load(
 			config(session, new FakeProvider([]), { tools: [] }),
@@ -719,6 +719,35 @@ describe("CodingSession commands and queues", () => {
 				kind: "unavailable",
 				missingCapability: "session-controller",
 			},
+		});
+	});
+
+	test("enables TUI commands only with a concrete TUI host service", async () => {
+		const session = await createMemorySession();
+		const coding = await CodingSession.load(
+			config(session, new FakeProvider([]), { tools: [] }),
+		);
+		const services = {
+			tui: {
+				getThemeName: () => "areeb-dark",
+				getHotkeys: () => [
+					{ keys: "Ctrl+P", description: "Open the command palette" },
+				],
+			},
+		};
+
+		expect(await coding.handleCommand("/hotkeys", services)).toMatchObject({
+			outcome: {
+				kind: "message",
+				text: "Keyboard shortcuts:\nCtrl+P — Open the command palette",
+			},
+		});
+		expect(await coding.handleCommand("/theme", services)).toMatchObject({
+			outcome: { kind: "message", text: "Active theme: areeb-dark" },
+		});
+		expect(await coding.handleCommand("/hotkeys")).toEqual({
+			handled: true,
+			outcome: { kind: "unavailable", missingCapability: "tui" },
 		});
 	});
 
@@ -992,6 +1021,7 @@ Resource diagnostics: 0 warnings, 0 info`);
 				"Missing required metadata.",
 			);
 			await writeFile(join(paths.projectPrompts, "help.md"), "Reserved.");
+			await writeFile(join(paths.projectPrompts, "skill.md"), "Reserved.");
 
 			const untrustedSession = await createMemorySession(cwd);
 			const untrusted = await CodingSession.load(
@@ -1013,6 +1043,7 @@ Resource diagnostics: 0 warnings, 0 info`);
 			expect(
 				trusted.resourceDiagnostics.map((diagnostic) => diagnostic.code),
 			).toEqual([
+				"validation-failed",
 				"validation-failed",
 				"validation-failed",
 				"validation-failed",

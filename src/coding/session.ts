@@ -16,6 +16,7 @@ import type { ModelProvider } from "../ai/provider_protocol.ts";
 import type { ReasoningLevel } from "../ai/types.ts";
 import {
 	type CommandContext,
+	type CommandHotkey,
 	type CommandRegistry,
 	type CommandResourceReloadResult,
 	type CommandResult,
@@ -72,8 +73,14 @@ export interface CodingSessionControllerService {
 	listSessions(): Promise<readonly CommandSessionListItem[]>;
 }
 
+export interface CodingSessionTuiService {
+	getThemeName(): string;
+	getHotkeys(): readonly CommandHotkey[];
+}
+
 export interface CodingSessionHostServices {
 	readonly sessionController?: CodingSessionControllerService;
+	readonly tui?: CodingSessionTuiService;
 }
 
 /**
@@ -128,7 +135,10 @@ export class CodingSession<
 			trustProjectResources: config.trustProjectResources === true,
 			callerContextFiles: config.contextFiles ?? [],
 			activeToolDefinitions: initialActiveToolDefinitions,
-			reservedPromptTemplateNames: commandRegistry.executableNames(),
+			reservedPromptTemplateNames: [
+				...commandRegistry.executableNames(),
+				"skill",
+			],
 			...(config.systemPrompt === undefined
 				? {}
 				: { customPrompt: config.systemPrompt }),
@@ -465,9 +475,21 @@ export class CodingSession<
 		services: CodingSessionHostServices,
 	): CommandContext {
 		const sessionController = services.sessionController;
+		const tui = services.tui;
 		return {
-			hasCapability: (capability) =>
-				capability === "session-controller" && sessionController !== undefined,
+			hasCapability: (capability) => {
+				switch (capability) {
+					case "session-controller":
+						return sessionController !== undefined;
+					case "tui":
+						return tui !== undefined;
+					case "compaction":
+					case "session-export":
+					case "model-selection":
+					case "provider-auth":
+						return false;
+				}
+			},
 			listSessions: () => {
 				if (sessionController === undefined) {
 					throw new Error("Session controller is unavailable");
@@ -498,6 +520,15 @@ export class CodingSession<
 			},
 			getSessionName: () => this.session.getName(),
 			setSessionName: (name) => this.session.setName(name),
+			getTuiInfo: () => {
+				if (tui === undefined) {
+					throw new Error("TUI service is unavailable");
+				}
+				return {
+					themeName: tui.getThemeName(),
+					hotkeys: tui.getHotkeys().map((hotkey) => ({ ...hotkey })),
+				};
+			},
 		};
 	}
 }

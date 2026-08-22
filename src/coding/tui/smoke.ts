@@ -27,6 +27,13 @@ export function runTuiSmoke(): void {
 			),
 		],
 		shortcuts: "Esc:quit  │  Ctrl+C:quit",
+		getCompletionCatalog: () => ({
+			commands: [],
+			skillNames: [],
+			templateNames: [],
+			availableCapabilities: ["tui"],
+			cwd: process.cwd(),
+		}),
 	});
 
 	let stopped = false;

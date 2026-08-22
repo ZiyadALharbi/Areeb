@@ -2,12 +2,14 @@ export type {
 	CommandCapability,
 	CommandContext,
 	CommandHandler,
+	CommandHotkey,
 	CommandOutcome,
 	CommandResourceReloadResult,
 	CommandResourceSummary,
 	CommandResult,
 	CommandSessionInfo,
 	CommandSessionListItem,
+	CommandTuiInfo,
 	SlashCommand,
 } from "./commands.ts";
 export {
@@ -90,6 +92,7 @@ export type {
 	CodingSessionConfig,
 	CodingSessionControllerService,
 	CodingSessionHostServices,
+	CodingSessionTuiService,
 } from "./session.ts";
 export { CodingSession } from "./session.ts";
 export type {

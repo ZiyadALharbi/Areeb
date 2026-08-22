@@ -1,8 +1,12 @@
 import {
+	type AutocompleteProvider,
+	CombinedAutocompleteProvider,
 	type Component,
 	Editor,
 	type OverlayHandle,
+	type AutocompleteItem as PiAutocompleteItem,
 	ScrollView,
+	SelectList,
 	stripTerminalSequences,
 	type Terminal,
 	Text,
@@ -10,6 +14,11 @@ import {
 	TuiAltScreen,
 	VStack,
 } from "@earendil-works/pi-tui";
+import {
+	buildCompletionState,
+	type CompletionCatalog,
+	type CompletionItem,
+} from "./autocomplete.ts";
 import { MessageBlock, ToolBlock } from "./blocks.ts";
 import type { ChatItem, TuiState } from "./state.ts";
 import type { TuiTheme } from "./theme.ts";
@@ -25,6 +34,7 @@ export interface CreateTuiAppOptions {
 	readonly theme: TuiTheme;
 	readonly transcript: readonly Component[];
 	readonly shortcuts: string;
+	readonly getCompletionCatalog: () => CompletionCatalog;
 	readonly state?: TuiState;
 }
 
@@ -35,6 +45,10 @@ export interface TuiApp {
 	presentCommand(text: string, level: CommandNoticeLevel): void;
 	clearCommandPresentation(): void;
 	dismissCommandOverlay(): boolean;
+	openCommandPalette(): boolean;
+	dismissCommandPalette(): boolean;
+	dismissInlineCompletion(): boolean;
+	acceptInlineCompletion(): boolean;
 	toggleToolPreviews(): void;
 }
 
@@ -49,6 +63,9 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		scrollbar: "hidden",
 	});
 	const editor = new Editor(tui, options.theme.editor, { paddingX: 1 });
+	editor.setAutocompleteProvider(
+		createAutocompleteProvider(options.getCompletionCatalog),
+	);
 	editor.disableSubmit = options.state?.running ?? true;
 	const status = new VStack();
 	const shortcuts = new TruncatedText(
@@ -80,6 +97,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 	let currentSessionId = currentState?.sessionId;
 	let streamingBlock: MessageBlock | undefined;
 	let commandOverlay: OverlayHandle | undefined;
+	let paletteOverlay: OverlayHandle | undefined;
 	let notice:
 		| { readonly text: string; readonly level: CommandNoticeLevel }
 		| undefined;
@@ -116,6 +134,84 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		commandOverlay.hide();
 		commandOverlay = undefined;
 		tui.setFocus(editor);
+		tui.requestRender();
+		return true;
+	};
+
+	const dismissCommandPalette = (): boolean => {
+		if (paletteOverlay === undefined) {
+			return false;
+		}
+		paletteOverlay.hide();
+		paletteOverlay = undefined;
+		tui.setFocus(editor);
+		tui.requestRender();
+		return true;
+	};
+
+	const dismissInlineCompletion = (): boolean => {
+		if (!editor.isShowingAutocomplete()) {
+			return false;
+		}
+		editor.handleInput("\u001b");
+		tui.requestRender();
+		return true;
+	};
+
+	const acceptInlineCompletion = (): boolean => {
+		if (!editor.isShowingAutocomplete()) {
+			return false;
+		}
+		const before = editor.getText();
+		editor.handleInput("\t");
+		const changed = editor.getText() !== before;
+		if (changed) {
+			tui.requestRender();
+		}
+		return changed;
+	};
+
+	const openCommandPalette = (): boolean => {
+		if (currentState?.running === true) {
+			return false;
+		}
+		if (paletteOverlay !== undefined) {
+			paletteOverlay.focus();
+			return true;
+		}
+		dismissInlineCompletion();
+		dismissCommandOverlay();
+
+		const catalog = options.getCompletionCatalog();
+		const completion = buildCompletionState({
+			...catalog,
+			lines: ["/"],
+			cursorLine: 0,
+			cursorCol: 1,
+		});
+		if (completion === null || completion.items.length === 0) {
+			return false;
+		}
+
+		const list = new SelectList(
+			completion.items.map(toSelectItem),
+			12,
+			options.theme.editor.selectList,
+		);
+		list.onCancel = () => {
+			dismissCommandPalette();
+		};
+		list.onSelect = (item) => {
+			dismissCommandPalette();
+			applyPaletteSelection(editor, item.value);
+			tui.requestRender();
+		};
+		paletteOverlay = tui.showOverlay(list, {
+			width: "80%",
+			maxHeight: "70%",
+			margin: 2,
+		});
+		paletteOverlay.focus();
 		tui.requestRender();
 		return true;
 	};
@@ -182,6 +278,10 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		}
 		currentState = state;
 		currentSessionId = state.sessionId;
+		if (state.running) {
+			dismissCommandPalette();
+			dismissInlineCompletion();
+		}
 		transcript.clear();
 		for (const item of state.items) {
 			let block = blocksByItem.get(item);
@@ -245,8 +345,135 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		presentCommand,
 		clearCommandPresentation,
 		dismissCommandOverlay,
+		openCommandPalette,
+		dismissCommandPalette,
+		dismissInlineCompletion,
+		acceptInlineCompletion,
 		toggleToolPreviews,
 	};
+}
+
+function createAutocompleteProvider(
+	getCatalog: () => CompletionCatalog,
+): AutocompleteProvider {
+	let fileProvider: CombinedAutocompleteProvider | undefined;
+	let fileProviderCwd: string | undefined;
+	const getFileProvider = (cwd: string): CombinedAutocompleteProvider => {
+		if (fileProvider === undefined || fileProviderCwd !== cwd) {
+			fileProvider = new CombinedAutocompleteProvider([], cwd, Bun.which("fd"));
+			fileProviderCwd = cwd;
+		}
+		return fileProvider;
+	};
+
+	return {
+		triggerCharacters: ["@"],
+		async getSuggestions(lines, cursorLine, cursorCol, requestOptions) {
+			const catalog = getCatalog();
+			const completion = buildCompletionState({
+				...catalog,
+				lines,
+				cursorLine,
+				cursorCol,
+			});
+			if (completion !== null) {
+				return completion.items.length === 0
+					? null
+					: {
+							items: completion.items.map(toSelectItem),
+							prefix: completion.query,
+						};
+			}
+			return getFileProvider(catalog.cwd).getSuggestions(
+				[...lines],
+				cursorLine,
+				cursorCol,
+				requestOptions,
+			);
+		},
+		applyCompletion(lines, cursorLine, cursorCol, item, prefix) {
+			const catalog = getCatalog();
+			const completion = buildCompletionState({
+				...catalog,
+				lines,
+				cursorLine,
+				cursorCol,
+			});
+			const selected = completion?.items.find(
+				(candidate) =>
+					candidate.value === item.value && candidate.label === item.label,
+			);
+			if (completion !== null && completion !== undefined && selected) {
+				const nextLines = [...lines];
+				const range = completion.replacement;
+				const line = nextLines[range.line] ?? "";
+				nextLines[range.line] =
+					line.slice(0, range.start) + selected.value + line.slice(range.end);
+				return {
+					lines: nextLines,
+					cursorLine: range.line,
+					cursorCol: range.start + selected.value.length,
+				};
+			}
+			return getFileProvider(catalog.cwd).applyCompletion(
+				[...lines],
+				cursorLine,
+				cursorCol,
+				item,
+				prefix,
+			);
+		},
+		shouldTriggerFileCompletion(lines, cursorLine, cursorCol) {
+			const catalog = getCatalog();
+			return getFileProvider(catalog.cwd).shouldTriggerFileCompletion(
+				[...lines],
+				cursorLine,
+				cursorCol,
+			);
+		},
+	};
+}
+
+function toSelectItem(item: CompletionItem): PiAutocompleteItem {
+	const aliases =
+		item.aliases.length === 0
+			? undefined
+			: `aliases ${item.aliases.map((alias) => `/${alias}`).join(", ")}`;
+	const planned = item.planned
+		? `planned: ${item.missingCapabilities.join(", ")}`
+		: undefined;
+	return {
+		value: item.value,
+		label: item.label,
+		description: [
+			item.usage === item.value ? undefined : item.usage,
+			item.description,
+			item.source,
+			aliases,
+			planned,
+		]
+			.filter((value) => value !== undefined)
+			.join(" · "),
+	};
+}
+
+function applyPaletteSelection(editor: Editor, value: string): void {
+	const cursor = editor.getCursor();
+	const lines = editor.getLines();
+	const line = lines[0] ?? "";
+	const whitespaceIndex = line.search(/\s/);
+	const tokenEnd = whitespaceIndex === -1 ? line.length : whitespaceIndex;
+	if (
+		cursor.line === 0 &&
+		line.startsWith("/") &&
+		cursor.col >= 1 &&
+		cursor.col <= tokenEnd
+	) {
+		lines[0] = `${value}${line.slice(tokenEnd)}`;
+		editor.setText(lines.join("\n"));
+		return;
+	}
+	editor.insertTextAtCursor(value);
 }
 
 function createChatItemBlock(item: ChatItem, theme: TuiTheme): Component {

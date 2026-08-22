@@ -41,6 +41,16 @@ export interface CommandSessionListItem {
 	readonly model: SessionModel | null;
 }
 
+export interface CommandHotkey {
+	readonly keys: string;
+	readonly description: string;
+}
+
+export interface CommandTuiInfo {
+	readonly themeName: string;
+	readonly hotkeys: readonly CommandHotkey[];
+}
+
 export interface CommandContext {
 	readonly hasCapability: (capability: CommandCapability) => boolean;
 	readonly listSessions: () => Promise<readonly CommandSessionListItem[]>;
@@ -50,6 +60,7 @@ export interface CommandContext {
 	readonly reloadResources: () => Promise<CommandResourceReloadResult>;
 	readonly getSessionName: () => Promise<string | undefined>;
 	readonly setSessionName: (name: string) => Promise<void>;
+	readonly getTuiInfo: () => CommandTuiInfo;
 }
 
 export type CommandOutcome =
@@ -286,9 +297,22 @@ export function createDefaultCommandRegistry(): CommandRegistry {
 		name: "hotkeys",
 		description: "Show common keyboard shortcuts",
 		usage: "/hotkeys",
-		// Areeb has no TUI or keybinding layer yet, so reporting shortcuts now would
-		// publish behavior that the application cannot guarantee.
 		requirements: ["tui"],
+		async handler(context, argumentsText) {
+			if (argumentsText.length > 0) {
+				return usageError("/hotkeys");
+			}
+			return {
+				kind: "message",
+				level: "info",
+				text: [
+					"Keyboard shortcuts:",
+					...context
+						.getTuiInfo()
+						.hotkeys.map((hotkey) => `${hotkey.keys} — ${hotkey.description}`),
+				].join("\n"),
+			};
+		},
 	});
 	registry.register({
 		name: "resume",
@@ -388,11 +412,19 @@ export function createDefaultCommandRegistry(): CommandRegistry {
 	});
 	registry.register({
 		name: "theme",
-		description: "Show or set the interface theme",
-		usage: "/theme [theme]",
-		// Theme state belongs to the future TUI layer and must not leak into the
-		// transport-neutral coding session.
+		description: "Show the active interface theme",
+		usage: "/theme",
 		requirements: ["tui"],
+		async handler(context, argumentsText) {
+			if (argumentsText.length > 0) {
+				return usageError("/theme");
+			}
+			return {
+				kind: "message",
+				level: "info",
+				text: `Active theme: ${context.getTuiInfo().themeName}`,
+			};
+		},
 	});
 	return registry;
 }
