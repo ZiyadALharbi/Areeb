@@ -13,6 +13,7 @@
 	},
 	"peerDependencies": {},
 	"dependencies": {
+		"@earendil-works/pi-tui": "^0.84.2",
 		"diff": "8.0.4",
 		"openai": "^7.4.0",
 		"zod": "^4.4.3"
