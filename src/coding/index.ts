@@ -7,6 +7,7 @@ export type {
 	CommandResourceSummary,
 	CommandResult,
 	CommandSessionInfo,
+	CommandSessionListItem,
 	SlashCommand,
 } from "./commands.ts";
 export {
@@ -85,7 +86,11 @@ export {
 	ResourceError,
 	readResourceFile,
 } from "./resources.ts";
-export type { CodingSessionConfig } from "./session.ts";
+export type {
+	CodingSessionConfig,
+	CodingSessionControllerService,
+	CodingSessionHostServices,
+} from "./session.ts";
 export { CodingSession } from "./session.ts";
 export type {
 	CodingSessionDiscoveryOptions,

@@ -679,6 +679,49 @@ describe("CodingSession commands and queues", () => {
 		expect(coding.followUp("follow up").count).toBe(2);
 	});
 
+	test("enables only session-controller commands when the TUI service is supplied", async () => {
+		const session = await createMemorySession();
+		const coding = await CodingSession.load(
+			config(session, new FakeProvider([]), { tools: [] }),
+		);
+		const services = {
+			sessionController: {
+				async listSessions() {
+					return [
+						{
+							id: "00000000-0000-4000-8000-000000000001",
+							title: "Stored session",
+							model: { provider: "fake", model: "stored-model" },
+						},
+					];
+				},
+			},
+		};
+
+		expect(await coding.handleCommand("/new", services)).toEqual({
+			handled: true,
+			outcome: { kind: "new-session" },
+		});
+		expect(await coding.handleCommand("/resume", services)).toMatchObject({
+			handled: true,
+			outcome: {
+				kind: "message",
+				text: "00000000-0000-4000-8000-000000000001\tStored session\tfake/stored-model",
+			},
+		});
+		expect(await coding.handleCommand("/theme", services)).toEqual({
+			handled: true,
+			outcome: { kind: "unavailable", missingCapability: "tui" },
+		});
+		expect(await coding.handleCommand("/new")).toEqual({
+			handled: true,
+			outcome: {
+				kind: "unavailable",
+				missingCapability: "session-controller",
+			},
+		});
+	});
+
 	test("shows session information and persists valid session names", async () => {
 		const session = await createMemorySession("/workspace/project");
 		const coding = await CodingSession.load(

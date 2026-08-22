@@ -19,6 +19,7 @@ import {
 	type CommandRegistry,
 	type CommandResourceReloadResult,
 	type CommandResult,
+	type CommandSessionListItem,
 	createDefaultCommandRegistry,
 	type SlashCommand,
 } from "./commands.ts";
@@ -65,6 +66,14 @@ export interface CodingSessionConfig<
 	readonly resourcePaths?: AreebPaths;
 	/** Project resources are ignored unless the caller explicitly trusts them. */
 	readonly trustProjectResources?: boolean;
+}
+
+export interface CodingSessionControllerService {
+	listSessions(): Promise<readonly CommandSessionListItem[]>;
+}
+
+export interface CodingSessionHostServices {
+	readonly sessionController?: CodingSessionControllerService;
 }
 
 /**
@@ -249,6 +258,10 @@ export class CodingSession<
 		return this.sessionModel;
 	}
 
+	get provider(): string {
+		return this.sessionProvider;
+	}
+
 	get reasoning(): ReasoningLevel {
 		return this.sessionReasoning;
 	}
@@ -365,9 +378,15 @@ export class CodingSession<
 			: this.harness.followUp(input);
 	}
 
-	async handleCommand(input: string): Promise<CommandResult> {
+	async handleCommand(
+		input: string,
+		services: CodingSessionHostServices = {},
+	): Promise<CommandResult> {
 		this.assertPersistenceHealthy();
-		return this.commandRegistry.dispatch(input, this.createCommandContext());
+		return this.commandRegistry.dispatch(
+			input,
+			this.createCommandContext(services),
+		);
 	}
 
 	private attachPersistence(): void {
@@ -442,9 +461,19 @@ export class CodingSession<
 			: skillExpansion;
 	}
 
-	private createCommandContext(): CommandContext {
+	private createCommandContext(
+		services: CodingSessionHostServices,
+	): CommandContext {
+		const sessionController = services.sessionController;
 		return {
-			hasCapability: () => false,
+			hasCapability: (capability) =>
+				capability === "session-controller" && sessionController !== undefined,
+			listSessions: () => {
+				if (sessionController === undefined) {
+					throw new Error("Session controller is unavailable");
+				}
+				return sessionController.listSessions();
+			},
 			getResourceSummary: () => ({
 				skillCount: this.resourceSnapshot.skills.length,
 				promptTemplateCount: this.resourceSnapshot.promptTemplates.length,

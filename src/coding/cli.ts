@@ -3,6 +3,7 @@
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { assertUuid } from "../agent/session/session.ts";
+import type { SessionModel } from "../agent/session/types.ts";
 import type { OpenAICompatibleConfig } from "../ai/openai_compatible_provider.ts";
 import type { ModelProvider } from "../ai/provider_protocol.ts";
 import { runPrintMode } from "./modes/print-mode.ts";
@@ -23,6 +24,7 @@ import {
 	findCodingSession,
 	listCodingSessions,
 } from "./session-manager.ts";
+import { TuiController, type TuiSessionLoader } from "./tui/controller.ts";
 import { runInteractiveMode } from "./tui/run.ts";
 
 export const USAGE = `Usage:
@@ -349,18 +351,12 @@ async function runSessionCommand(
 		...(runtime.userRoot === undefined ? {} : { userRoot: runtime.userRoot }),
 		env,
 	});
-	const selection = resolveProviderSelection(settings, {
+	const initialSelection = resolveProviderSelection(settings, {
 		...(command.provider === undefined ? {} : { provider: command.provider }),
 		...(command.model === undefined ? {} : { model: command.model }),
 		...(storedRecord?.model === null || storedRecord?.model === undefined
 			? {}
 			: { stored: storedRecord.model }),
-	});
-	const providerRuntime = createProviderRuntime(settings, selection, {
-		env,
-		...(runtime.createProvider === undefined
-			? {}
-			: { createProvider: runtime.createProvider }),
 	});
 	const manager = new CodingSessionManager({
 		cwd,
@@ -370,22 +366,28 @@ async function runSessionCommand(
 		command.resumeId === undefined
 			? await manager.create()
 			: await manager.open(command.resumeId);
-	const coding = await CodingSession.load({
-		session,
-		provider: providerRuntime.provider,
-		model: providerRuntime.selection.model,
-		reasoning: "off",
-		...(providerRuntime.timeoutMs === undefined
-			? {}
-			: { timeout: providerRuntime.timeoutMs }),
-		resourcePaths: areebPaths({
+	const loadSession: TuiSessionLoader = async ({
+		handle,
+		selection,
+		reasoning,
+	}) =>
+		loadCodingSession(handle, selection, reasoning, {
+			settings,
+			env,
 			cwd,
 			...(runtime.userRoot === undefined ? {} : { userRoot: runtime.userRoot }),
 			...(runtime.agentsRoot === undefined
 				? {}
 				: { agentsRoot: runtime.agentsRoot }),
-		}),
-		trustProjectResources: command.trustProjectResources,
+			...(runtime.createProvider === undefined
+				? {}
+				: { createProvider: runtime.createProvider }),
+			trustProjectResources: command.trustProjectResources,
+		});
+	const coding = await loadSession({
+		handle: session,
+		selection: initialSelection,
+		reasoning: "off",
 	});
 
 	if (command.kind === "prompt") {
@@ -393,7 +395,50 @@ async function runSessionCommand(
 			output: command.output,
 		});
 	}
-	return (runtime.runInteractive ?? runInteractiveMode)(coding);
+	return (runtime.runInteractive ?? runInteractiveMode)(
+		new TuiController({ session: coding, manager, loadSession }),
+	);
+}
+
+interface CodingSessionLoaderOptions {
+	readonly settings: Awaited<ReturnType<typeof loadProviderSettings>>;
+	readonly env: CliEnvironment;
+	readonly cwd: string;
+	readonly userRoot?: string;
+	readonly agentsRoot?: string;
+	readonly createProvider?: (config: OpenAICompatibleConfig) => ModelProvider;
+	readonly trustProjectResources: boolean;
+}
+
+async function loadCodingSession(
+	session: Parameters<TuiSessionLoader>[0]["handle"],
+	selection: SessionModel,
+	reasoning: Parameters<TuiSessionLoader>[0]["reasoning"],
+	options: CodingSessionLoaderOptions,
+): Promise<CodingSession> {
+	const providerRuntime = createProviderRuntime(options.settings, selection, {
+		env: options.env,
+		...(options.createProvider === undefined
+			? {}
+			: { createProvider: options.createProvider }),
+	});
+	return CodingSession.load({
+		session,
+		provider: providerRuntime.provider,
+		model: providerRuntime.selection.model,
+		reasoning,
+		...(providerRuntime.timeoutMs === undefined
+			? {}
+			: { timeout: providerRuntime.timeoutMs }),
+		resourcePaths: areebPaths({
+			cwd: options.cwd,
+			...(options.userRoot === undefined ? {} : { userRoot: options.userRoot }),
+			...(options.agentsRoot === undefined
+				? {}
+				: { agentsRoot: options.agentsRoot }),
+		}),
+		trustProjectResources: options.trustProjectResources,
+	});
 }
 
 function parseSetupCommand(values: ParsedCliValues): SetupCliCommand {

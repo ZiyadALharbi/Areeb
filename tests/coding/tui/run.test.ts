@@ -7,16 +7,20 @@ import type {
 } from "../../../src/agent/types.ts";
 import { EventStream } from "../../../src/ai/event-stream.ts";
 import type { UserMessage } from "../../../src/ai/types.ts";
-import type { CommandResult } from "../../../src/coding/commands.ts";
+import { TuiEventAdapter } from "../../../src/coding/tui/adapter.ts";
 import type {
 	CreateTuiAppOptions,
 	TuiApp,
 } from "../../../src/coding/tui/app.ts";
+import type { TuiCommandResult } from "../../../src/coding/tui/controller.ts";
 import {
-	type InteractiveSession,
+	type InteractiveController,
 	runInteractiveMode,
 } from "../../../src/coding/tui/run.ts";
-import type { TuiState } from "../../../src/coding/tui/state.ts";
+import {
+	createTuiState,
+	type TuiState,
+} from "../../../src/coding/tui/state.ts";
 
 const restoredUser: UserMessage = {
 	role: "user",
@@ -24,23 +28,34 @@ const restoredUser: UserMessage = {
 	timestamp: 1,
 };
 
-class ManualSession implements InteractiveSession {
-	readonly metadata = { cwd: "/project" };
+class ManualSession implements InteractiveController {
+	readonly metadata = {
+		id: "00000000-0000-4000-8000-000000000001",
+		cwd: "/project",
+	};
 	readonly model = "fake-model";
+	state = createTuiState({
+		sessionId: this.metadata.id,
+		model: this.model,
+		cwd: this.metadata.cwd,
+	});
+	adapter = new TuiEventAdapter(this.state);
 	readonly promptCalls: string[] = [];
 	readonly commandCalls: string[] = [];
 	abortCount = 0;
 	isRunning = false;
-	commandHandler: (input: string) => Promise<CommandResult> = async () => ({
+	commandHandler: (input: string) => Promise<TuiCommandResult> = async () => ({
 		handled: false,
 	});
 	private stream: AgentRunStream | undefined;
 	private idle = Promise.resolve();
 	private resolveIdle: (() => void) | undefined;
 
-	constructor(readonly messages: readonly AgentMessage[] = []) {}
+	constructor(readonly messages: readonly AgentMessage[] = []) {
+		this.adapter.restore(messages);
+	}
 
-	async handleCommand(input: string): Promise<CommandResult> {
+	async handleCommand(input: string): Promise<TuiCommandResult> {
 		this.commandCalls.push(input);
 		return this.commandHandler(input);
 	}
@@ -201,6 +216,40 @@ describe("runInteractiveMode", () => {
 		expect(controller.started()).toBe(1);
 		expect(controller.stopped()).toBe(1);
 		expect(controller.listenerCount()).toBe(0);
+	});
+
+	test("refreshes from a replacement controller bundle after a command", async () => {
+		const session = new ManualSession();
+		session.commandHandler = async (input) => {
+			if (input === "/switch") {
+				session.state = createTuiState({
+					sessionId: "00000000-0000-4000-8000-000000000002",
+					model: "replacement-model",
+					cwd: "/project",
+				});
+				session.adapter = new TuiEventAdapter(session.state);
+				session.adapter.restore([restoredUser]);
+				return { handled: true, outcome: { kind: "none" } };
+			}
+			return { handled: true, outcome: { kind: "quit" } };
+		};
+		const app = createAppController();
+		const running = runInteractiveMode(session, { createApp: app.createApp });
+
+		app.submit("/switch");
+		await waitUntil(
+			() =>
+				app.states.at(-1)?.sessionId ===
+					"00000000-0000-4000-8000-000000000002" &&
+				app.states.at(-1)?.running === false,
+		);
+		expect(app.states.at(-1)).toMatchObject({
+			model: "replacement-model",
+			items: [{ role: "user", text: "restored" }],
+		});
+
+		app.submit("/quit");
+		expect(await running).toBe(0);
 	});
 
 	test("aborts once and waits for stream settlement before Ctrl+C exits", async () => {

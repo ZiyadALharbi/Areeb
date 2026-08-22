@@ -17,8 +17,6 @@ export interface CreateTuiAppOptions {
 	readonly transcript: readonly Component[];
 	readonly shortcuts: string;
 	readonly state?: TuiState;
-	readonly model?: string;
-	readonly cwd?: string;
 }
 
 export interface TuiApp {
@@ -90,7 +88,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		status.addChild(
 			new TruncatedText(
 				options.theme.muted(
-					`${options.model ?? "unknown model"} · ${options.cwd ?? "."} · ${state.running ? "running" : "idle"}`,
+					`${state.model} · ${state.cwd} · ${state.sessionId} · ${state.running ? "running" : "idle"}`,
 				),
 			),
 		);

@@ -15,11 +15,26 @@ export type ChatItem =
 /** Display-only state shared by the event adapter and TUI renderer. */
 export interface TuiState {
 	readonly items: ChatItem[];
+	readonly sessionId: string;
+	readonly model: string;
+	readonly cwd: string;
 	assistantBuffer?: string;
 	running: boolean;
 	terminalReason?: AgentEndReason;
 }
 
-export function createTuiState(): TuiState {
-	return { items: [], running: false };
+export interface TuiSessionDisplay {
+	readonly sessionId: string;
+	readonly model: string;
+	readonly cwd: string;
+}
+
+export function createTuiState(
+	display: TuiSessionDisplay = {
+		sessionId: "unknown",
+		model: "unknown model",
+		cwd: ".",
+	},
+): TuiState {
+	return { items: [], ...display, running: false };
 }

@@ -5,19 +5,21 @@ import {
 	type Terminal,
 } from "@earendil-works/pi-tui";
 import type { AgentMessage, AgentRunStream } from "../../agent/types.ts";
-import type { CommandResult } from "../commands.ts";
-import { TuiEventAdapter } from "./adapter.ts";
+import type { TuiEventAdapter } from "./adapter.ts";
 import { type CreateTuiAppOptions, createTuiApp, type TuiApp } from "./app.ts";
-import { createTuiState, type TuiState } from "./state.ts";
+import type { TuiCommandResult } from "./controller.ts";
+import type { TuiState } from "./state.ts";
 import { AREEB_DARK_THEME, type TuiTheme } from "./theme.ts";
 
-export interface InteractiveSession {
+export interface InteractiveController {
 	readonly messages: readonly AgentMessage[];
-	readonly metadata: { readonly cwd: string };
+	readonly metadata: { readonly id: string; readonly cwd: string };
 	readonly model: string;
+	readonly state: TuiState;
+	readonly adapter: TuiEventAdapter;
 	readonly isRunning: boolean;
 	prompt(input: string): AgentRunStream;
-	handleCommand(input: string): Promise<CommandResult>;
+	handleCommand(input: string): Promise<TuiCommandResult>;
 	abort(): void;
 	waitForIdle(): Promise<void>;
 }
@@ -28,23 +30,17 @@ export interface InteractiveRunOptions {
 	readonly createApp?: (options: CreateTuiAppOptions) => TuiApp;
 }
 
-/** Run one CodingSession until the user quits the fullscreen TUI. */
+/** Run the controller's active session until the user quits the fullscreen TUI. */
 export async function runInteractiveMode(
-	session: InteractiveSession,
+	controller: InteractiveController,
 	options: InteractiveRunOptions = {},
 ): Promise<number> {
-	const state = createTuiState();
-	const adapter = new TuiEventAdapter(state);
-	adapter.restore(session.messages);
-
 	const app = (options.createApp ?? createTuiApp)({
 		terminal: options.terminal ?? new ProcessTerminal(),
 		theme: options.theme ?? AREEB_DARK_THEME,
 		transcript: [],
 		shortcuts: "Esc:interrupt  │  Ctrl+C:quit",
-		state,
-		model: session.model,
-		cwd: session.metadata.cwd,
+		state: controller.state,
 	});
 
 	let submissionActive = false;
@@ -88,6 +84,7 @@ export async function runInteractiveMode(
 		if (settled) {
 			return;
 		}
+		const state = controller.state;
 		state.running = false;
 		state.items.push({ role: "error", text: errorMessage(error) });
 		let failure = error;
@@ -100,11 +97,11 @@ export async function runInteractiveMode(
 	};
 
 	const requestAbort = (): void => {
-		if (abortRequested || !session.isRunning) {
+		if (abortRequested || !controller.isRunning) {
 			return;
 		}
 		abortRequested = true;
-		session.abort();
+		controller.abort();
 	};
 
 	const requestExit = (): void => {
@@ -122,27 +119,27 @@ export async function runInteractiveMode(
 	const runSubmission = async (input: string): Promise<void> => {
 		let failure: unknown;
 		try {
-			const command = await session.handleCommand(input);
+			const command = await controller.handleCommand(input);
 			if (command.handled) {
-				applyCommandResult(command, input, state, requestExit);
-				app.refresh(state);
+				applyCommandResult(command, input, controller.state, requestExit);
+				app.refresh(controller.state);
 			} else if (!exitRequested) {
-				await consumePrompt(session, input, adapter, app, state);
+				await consumePrompt(controller, input, controller.adapter, app);
 			}
 		} catch (error) {
 			failure = error;
 		}
 
 		try {
-			await session.waitForIdle();
+			await controller.waitForIdle();
 		} catch (error) {
 			failure ??= error;
 		}
 
-		state.running = false;
+		controller.state.running = false;
 		submissionActive = false;
 		try {
-			app.refresh(state);
+			app.refresh(controller.state);
 		} catch (error) {
 			failure ??= error;
 		}
@@ -160,17 +157,17 @@ export async function runInteractiveMode(
 			input.trim().length === 0 ||
 			submissionActive ||
 			exitRequested ||
-			session.isRunning
+			controller.isRunning
 		) {
 			return;
 		}
 		// Lock synchronously because command dispatch may yield before prompt starts.
 		submissionActive = true;
 		abortRequested = false;
-		state.running = true;
-		delete state.terminalReason;
+		controller.state.running = true;
+		delete controller.state.terminalReason;
 		try {
-			app.refresh(state);
+			app.refresh(controller.state);
 		} catch (error) {
 			submissionActive = false;
 			fail(error);
@@ -201,13 +198,12 @@ export async function runInteractiveMode(
 }
 
 async function consumePrompt(
-	session: InteractiveSession,
+	controller: InteractiveController,
 	input: string,
 	adapter: TuiEventAdapter,
 	app: TuiApp,
-	state: TuiState,
 ): Promise<void> {
-	const stream = session.prompt(input);
+	const stream = controller.prompt(input);
 	let terminalEvents = 0;
 	for await (const event of stream) {
 		if (event.type === "agent_end") {
@@ -217,7 +213,7 @@ async function consumePrompt(
 			}
 		}
 		if (adapter.apply(event)) {
-			app.refresh(state);
+			app.refresh(controller.state);
 		}
 	}
 	await stream.result();
@@ -227,7 +223,7 @@ async function consumePrompt(
 }
 
 function applyCommandResult(
-	result: Extract<CommandResult, { readonly handled: true }>,
+	result: Extract<TuiCommandResult, { readonly handled: true }>,
 	input: string,
 	state: TuiState,
 	requestExit: () => void,
