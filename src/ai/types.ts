@@ -12,6 +12,8 @@ export interface TextContent {
 export interface ThinkingContent {
 	type: "thinking";
 	thinking: string;
+	/** Provider-owned replay data for stateless reasoning APIs. */
+	signature?: string;
 }
 
 export interface ImageContent {

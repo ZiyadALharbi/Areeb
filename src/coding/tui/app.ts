@@ -17,16 +17,23 @@ import {
 	TuiAltScreen,
 	VStack,
 } from "@earendil-works/pi-tui";
+import type { AuthPrompt, AuthType } from "../../ai/auth.ts";
 import type {
 	CommandModelListItem,
 	CommandSessionListItem,
 } from "../commands.ts";
+import type { ProviderAuthView } from "../provider-runtime.ts";
 import {
 	buildCompletionState,
 	type CompletionCatalog,
 	type CompletionItem,
 } from "./autocomplete.ts";
 import { MessageBlock, ToolBlock } from "./blocks.ts";
+import {
+	AuthDialog,
+	ProviderPicker,
+	type ProviderPickerMode,
+} from "./provider-auth.ts";
 import type { ChatItem, TuiState } from "./state.ts";
 import {
 	createTuiThemeBinding,
@@ -80,6 +87,23 @@ export interface TuiApp {
 	dismissInlineCompletion(): boolean;
 	acceptInlineCompletion(): boolean;
 	toggleToolPreviews(): void;
+	openProviderPicker?(
+		mode: ProviderPickerMode,
+		providers: readonly ProviderAuthView[],
+		onSelect: (provider: ProviderAuthView) => Promise<boolean>,
+	): boolean;
+	beginAuthDialog?(options: {
+		readonly title: string;
+		readonly subtitle: string;
+		readonly authType: AuthType;
+		readonly onCancel: () => void;
+		readonly onCopyUrl?: (url: string) => void;
+	}): void;
+	setAuthUrl?(url: string): void;
+	setAuthStatus?(status: string | undefined): void;
+	requestAuthInput?(prompt: AuthPrompt): Promise<string>;
+	cancelAuthDialog?(): boolean;
+	closeAuthDialog?(): void;
 }
 
 export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
@@ -143,7 +167,15 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 	let streamingBlock: MessageBlock | undefined;
 	let commandOverlay: OverlayHandle | undefined;
 	let selectorOverlay: OverlayHandle | undefined;
-	let selectorKind: "palette" | "session" | "model" | "theme" | undefined;
+	let selectorKind:
+		| "palette"
+		| "session"
+		| "model"
+		| "theme"
+		| "provider"
+		| undefined;
+	let authOverlay: OverlayHandle | undefined;
+	let authDialog: AuthDialog | undefined;
 	let selectorGeneration = 0;
 	let selectionActive = false;
 	let themePickerOrigin: TuiTheme | undefined;
@@ -157,7 +189,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 
 	const renderShortcuts = (): void => {
 		const text =
-			selectorOverlay !== undefined
+			authOverlay !== undefined || selectorOverlay !== undefined
 				? options.shortcuts.menu
 				: currentState?.running === true ||
 						currentState?.inputMode === "running"
@@ -231,7 +263,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 	const dismissPicker = (): boolean => dismissSelector("picker");
 
 	const beginSelector = (
-		kind: "palette" | "session" | "model" | "theme",
+		kind: "palette" | "session" | "model" | "theme" | "provider",
 	): number => {
 		if (selectorKind === "theme" && themePickerOrigin !== undefined) {
 			applyVisualTheme(themePickerOrigin);
@@ -245,6 +277,74 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		tui.setFocus(editor);
 		renderShortcuts();
 		return selectorGeneration;
+	};
+
+	const closeAuthDialog = (): void => {
+		authDialog?.close();
+		authDialog = undefined;
+		authOverlay?.hide();
+		authOverlay = undefined;
+		tui.setFocus(editor);
+		renderShortcuts();
+		tui.requestRender();
+	};
+
+	const cancelAuthDialog = (): boolean => {
+		if (authDialog === undefined) {
+			return false;
+		}
+		const dialog = authDialog;
+		dialog.cancel();
+		closeAuthDialog();
+		return true;
+	};
+
+	const beginAuthDialog = (dialogOptions: {
+		readonly title: string;
+		readonly subtitle: string;
+		readonly authType: AuthType;
+		readonly onCancel: () => void;
+		readonly onCopyUrl?: (url: string) => void;
+	}): void => {
+		dismissCommandPalette();
+		dismissPicker();
+		dismissCommandOverlay();
+		closeAuthDialog();
+		authDialog = new AuthDialog(dialogOptions, theme);
+		authOverlay = tui.showOverlay(authDialog, {
+			width: "80%",
+			maxHeight: "85%",
+			margin: 2,
+		});
+		authOverlay.focus();
+		renderShortcuts();
+		tui.requestRender();
+	};
+
+	const setAuthUrl = (url: string): void => {
+		if (authDialog === undefined) {
+			throw new Error("Auth dialog is not open");
+		}
+		authDialog.setUrl(url);
+		tui.requestRender();
+	};
+
+	const setAuthStatus = (statusText: string | undefined): void => {
+		if (authDialog === undefined) {
+			return;
+		}
+		authDialog.setStatus(statusText);
+		tui.requestRender();
+	};
+
+	const requestAuthInput = (prompt: AuthPrompt): Promise<string> => {
+		if (authDialog === undefined) {
+			return Promise.reject(new Error("Auth dialog is not open"));
+		}
+		const result = authDialog.requestInput(prompt);
+		authOverlay?.focus();
+		tui.requestRender();
+		return result;
 	};
 
 	const dismissInlineCompletion = (): boolean => {
@@ -503,6 +603,58 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		);
 	};
 
+	const openProviderPicker = (
+		mode: ProviderPickerMode,
+		providers: readonly ProviderAuthView[],
+		onSelect: (provider: ProviderAuthView) => Promise<boolean>,
+	): boolean => {
+		if (currentState?.running === true || providers.length === 0) {
+			return false;
+		}
+		dismissInlineCompletion();
+		dismissCommandOverlay();
+		const generation = beginSelector("provider");
+		const picker = new ProviderPicker(providers, mode, theme);
+		picker.onCancel = () => dismissPicker();
+		picker.onSelect = (provider) => {
+			if (selectionActive) {
+				return;
+			}
+			selectionActive = true;
+			void onSelect(provider).then(
+				(close) => {
+					if (generation !== selectorGeneration) {
+						return;
+					}
+					selectionActive = false;
+					if (close) {
+						dismissPicker();
+					} else {
+						selectorOverlay?.focus();
+						tui.requestRender();
+					}
+				},
+				(error) => {
+					if (generation !== selectorGeneration) {
+						return;
+					}
+					selectionActive = false;
+					presentCommand(`Selection failed: ${errorMessage(error)}`, "error");
+					selectorOverlay?.focus();
+				},
+			);
+		};
+		selectorOverlay = tui.showOverlay(picker, {
+			width: "80%",
+			maxHeight: "80%",
+			margin: 2,
+		});
+		selectorOverlay.focus();
+		renderShortcuts();
+		tui.requestRender();
+		return true;
+	};
+
 	const applyVisualTheme = (nextTheme: TuiTheme): void => {
 		theme.setTheme(nextTheme);
 		for (const component of mountedTranscript) {
@@ -713,6 +865,13 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		dismissInlineCompletion,
 		acceptInlineCompletion,
 		toggleToolPreviews,
+		openProviderPicker,
+		beginAuthDialog,
+		setAuthUrl,
+		setAuthStatus,
+		requestAuthInput,
+		cancelAuthDialog,
+		closeAuthDialog,
 	};
 }
 
@@ -819,6 +978,7 @@ function createAutocompleteProvider(
 				cursorCol,
 				sessionIds: latestSessionIds,
 				modelValues: catalog.models.map(canonicalModel),
+				providerIds: catalog.providerIds,
 			});
 			if (completion !== null) {
 				return completion.items.length === 0
@@ -844,6 +1004,7 @@ function createAutocompleteProvider(
 				cursorCol,
 				sessionIds: latestSessionIds,
 				modelValues: catalog.models.map(canonicalModel),
+				providerIds: catalog.providerIds,
 			});
 			const selected = completion?.items.find(
 				(candidate) =>

@@ -13,8 +13,10 @@ import type {
 	AgentRunStream,
 	QueuedMessages,
 } from "../../agent/types.ts";
+import type { AuthInteraction, AuthPrompt, AuthType } from "../../ai/auth.ts";
 import type { CommandHotkey, CommandSessionListItem } from "../commands.ts";
 import { areebPaths } from "../paths.ts";
+import type { ProviderAuthView } from "../provider-runtime.ts";
 import type { ResourceDiagnostic } from "../resources.ts";
 import type { CodingSessionTuiService } from "../session.ts";
 import type { TuiEventAdapter } from "./adapter.ts";
@@ -50,6 +52,7 @@ export interface InteractiveController {
 	readonly queuedMessages: QueuedMessages;
 	readonly resourceDiagnostics: readonly ResourceDiagnostic[];
 	readonly completionCatalog: CompletionCatalog;
+	readonly unavailableReason?: string;
 	prompt(input: string): AgentRunStream;
 	handleCommand(
 		input: string,
@@ -62,6 +65,13 @@ export interface InteractiveController {
 	resumeSession(id: string): Promise<TuiTransitionOutcome>;
 	setModel(provider: string, model: string): Promise<TuiTransitionOutcome>;
 	waitForIdle(): Promise<void>;
+	listAuthProviders?(savedOnly?: boolean): Promise<readonly ProviderAuthView[]>;
+	login?(
+		provider: string,
+		authType: AuthType,
+		interaction: AuthInteraction,
+	): Promise<void>;
+	logout?(provider: string, signal?: AbortSignal): Promise<boolean>;
 }
 
 interface InteractiveHotkey extends CommandHotkey {
@@ -115,6 +125,7 @@ export interface InteractiveRunOptions {
 	readonly theme?: TuiTheme;
 	readonly userRoot?: string;
 	readonly createApp?: (options: CreateTuiAppOptions) => TuiApp;
+	readonly openUrl?: (url: string) => void | Promise<void>;
 }
 
 export interface CopyDeliveryResult {
@@ -209,6 +220,7 @@ export async function runInteractiveMode(
 		app.dismissCommandPalette();
 		app.dismissPicker();
 		app.dismissInlineCompletion();
+		app.closeAuthDialog?.();
 		app.clearCommandPresentation();
 	};
 
@@ -268,22 +280,173 @@ export async function runInteractiveMode(
 		}
 	};
 
+	const performProviderLogin = async (
+		providerId: string,
+		authType: AuthType,
+	): Promise<boolean> => {
+		if (
+			controller.login === undefined ||
+			controller.listAuthProviders === undefined ||
+			app.beginAuthDialog === undefined ||
+			app.requestAuthInput === undefined
+		) {
+			app.presentCommand("Provider authentication is unavailable", "error");
+			return false;
+		}
+		const providers = await controller.listAuthProviders(false);
+		const provider = providers.find((entry) => entry.id === providerId);
+		if (provider === undefined || provider.authType !== authType) {
+			app.presentCommand(`Unknown provider: ${providerId}`, "error");
+			return false;
+		}
+
+		const abortController = new AbortController();
+		app.beginAuthDialog({
+			title: `Login to ${provider.displayName}`,
+			subtitle:
+				authType === "oauth"
+					? "Complete this step to continue setup."
+					: "Enter an API key to connect this provider.",
+			authType,
+			onCancel: () => abortController.abort(),
+			onCopyUrl: (url) => {
+				void copyTuiText(terminal, paths.userLastCopy, url).then((result) =>
+					presentCopyResult(app, result),
+				);
+			},
+		});
+		const interaction: AuthInteraction = {
+			signal: abortController.signal,
+			async notify(notification) {
+				if (notification.type === "auth_url") {
+					app.setAuthUrl?.(notification.url);
+					try {
+						await (options.openUrl ?? openExternalUrl)(notification.url);
+					} catch {
+						// The visible link and manual fallback keep the flow usable.
+					}
+				}
+			},
+			prompt(request: AuthPrompt) {
+				const prompt = app.requestAuthInput?.(request);
+				return prompt ?? Promise.reject(new Error("Auth input is unavailable"));
+			},
+		};
+
+		try {
+			app.setAuthStatus?.("Waiting for login…");
+			await controller.login(provider.id, provider.authType, interaction);
+			app.closeAuthDialog?.();
+			app.presentCommand("Connected. Use /model to switch.", "info");
+			app.refresh(controller.state);
+			return true;
+		} catch (error) {
+			app.closeAuthDialog?.();
+			if (
+				abortController.signal.aborted ||
+				(error instanceof Error && error.name === "AbortError")
+			) {
+				app.presentCommand("Login cancelled", "info");
+				return false;
+			}
+			app.presentCommand(`Login failed: ${errorMessage(error)}`, "error");
+			return false;
+		}
+	};
+
+	const openProviderPicker = async (
+		mode: "login" | "logout",
+	): Promise<void> => {
+		if (
+			controller.listAuthProviders === undefined ||
+			app.openProviderPicker === undefined
+		) {
+			app.presentCommand("Provider authentication is unavailable", "error");
+			return;
+		}
+		const providers = await controller.listAuthProviders(mode === "logout");
+		const listAuthProviders = controller.listAuthProviders;
+		if (providers.length === 0) {
+			app.presentCommand(
+				mode === "logout" ? "No saved credentials" : "No login providers",
+				"info",
+			);
+			return;
+		}
+		app.openProviderPicker(mode, providers, async (provider) => {
+			if (mode === "login") {
+				return performProviderLogin(provider.id, provider.authType);
+			}
+			if (controller.logout === undefined) {
+				app.presentCommand("Provider authentication is unavailable", "error");
+				return false;
+			}
+			const deleted = await controller.logout(provider.id);
+			const current = (await listAuthProviders(false)).find(
+				(entry) => entry.id === provider.id,
+			);
+			app.presentCommand(
+				formatLogoutResult(provider, deleted, current),
+				"info",
+			);
+			app.refresh(controller.state);
+			return true;
+		});
+	};
+
+	const performProviderLogout = async (providerId: string): Promise<void> => {
+		if (
+			controller.logout === undefined ||
+			controller.listAuthProviders === undefined
+		) {
+			app.presentCommand("Provider authentication is unavailable", "error");
+			return;
+		}
+		const provider = (await controller.listAuthProviders(false)).find(
+			(entry) => entry.id === providerId,
+		);
+		if (provider === undefined) {
+			app.presentCommand(`Unknown provider: ${providerId}`, "error");
+			return;
+		}
+		const deleted = await controller.logout(providerId);
+		const current = (await controller.listAuthProviders(false)).find(
+			(entry) => entry.id === providerId,
+		);
+		app.presentCommand(formatLogoutResult(provider, deleted, current), "info");
+		app.refresh(controller.state);
+	};
+
 	const runSubmission = async (input: string): Promise<void> => {
 		let failure: unknown;
 		try {
 			const command = await controller.handleCommand(input, tuiService);
 			if (command.handled) {
-				await applyCommandResult(command, input, app, requestExit, async () => {
-					const text = findLastAssistantText(controller.state);
-					if (text === undefined) {
-						app.presentCommand("No assistant response to copy", "error");
-						return;
-					}
-					presentCopyResult(
-						app,
-						await copyTuiText(terminal, paths.userLastCopy, text),
-					);
-				});
+				await applyCommandResult(
+					command,
+					input,
+					app,
+					requestExit,
+					async () => {
+						const text = findLastAssistantText(controller.state);
+						if (text === undefined) {
+							app.presentCommand("No assistant response to copy", "error");
+							return;
+						}
+						presentCopyResult(
+							app,
+							await copyTuiText(terminal, paths.userLastCopy, text),
+						);
+					},
+					{
+						login: performProviderLogin,
+						openPicker: openProviderPicker,
+						logout: performProviderLogout,
+					},
+				);
+				app.refresh(controller.state);
+			} else if (!exitRequested && controller.unavailableReason !== undefined) {
+				app.presentCommand(controller.unavailableReason, "warning");
 				app.refresh(controller.state);
 			} else if (!exitRequested) {
 				await consumePrompt(controller, input, controller.adapter, app);
@@ -357,10 +520,16 @@ export async function runInteractiveMode(
 
 	removeInputListener = app.tui.addInputListener((data) => {
 		if (matchesKey(data, Key.ctrl("c"))) {
+			if (app.cancelAuthDialog?.()) {
+				return { consume: true };
+			}
 			requestExit();
 			return { consume: true };
 		}
 		if (matchesKey(data, Key.escape)) {
+			if (app.cancelAuthDialog?.()) {
+				return { consume: true };
+			}
 			if (app.dismissPicker()) {
 				return { consume: true };
 			}
@@ -457,6 +626,11 @@ async function applyCommandResult(
 	app: TuiApp,
 	requestExit: () => void,
 	copyLastAssistant: () => Promise<void>,
+	auth: {
+		readonly login: (provider: string, authType: AuthType) => Promise<boolean>;
+		readonly openPicker: (mode: "login" | "logout") => Promise<void>;
+		readonly logout: (provider: string) => Promise<void>;
+	},
 ): Promise<void> {
 	switch (result.outcome.kind) {
 		case "message":
@@ -478,6 +652,18 @@ async function applyCommandResult(
 			return;
 		case "model-picker":
 			app.openModelPicker();
+			return;
+		case "login-picker":
+			await auth.openPicker("login");
+			return;
+		case "login":
+			await auth.login(result.outcome.provider, result.outcome.authType);
+			return;
+		case "logout-picker":
+			await auth.openPicker("logout");
+			return;
+		case "logout":
+			await auth.logout(result.outcome.provider);
 			return;
 		case "theme-picker":
 			app.openThemePicker();
@@ -520,6 +706,10 @@ function applyPickerOutcome(
 		case "theme-picker":
 		case "set-theme":
 		case "copy-last-assistant":
+		case "login-picker":
+		case "login":
+		case "logout-picker":
+		case "logout":
 			return false;
 	}
 }
@@ -651,4 +841,41 @@ function errorMessage(error: unknown): string {
 	} catch {
 		return String(error);
 	}
+}
+
+function formatLogoutResult(
+	provider: ProviderAuthView,
+	deleted: boolean,
+	current: ProviderAuthView | undefined,
+): string {
+	if (
+		deleted &&
+		current?.status === "connected" &&
+		current.source === "environment"
+	) {
+		return `Removed the saved ${provider.displayName} credential; the provider remains connected through the environment`;
+	}
+	return deleted
+		? `Logged out of ${provider.displayName}`
+		: `No saved credential for ${provider.displayName}`;
+}
+
+/** Open a URL with an argument-vector process invocation, never a shell. */
+export function openExternalUrl(url: string): void {
+	const command =
+		process.platform === "darwin"
+			? ["open", url]
+			: process.platform === "win32"
+				? [
+						`${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\rundll32.exe`,
+						"url.dll,FileProtocolHandler",
+						url,
+					]
+				: ["xdg-open", url];
+	const child = Bun.spawn(command, {
+		stdin: "ignore",
+		stdout: "ignore",
+		stderr: "ignore",
+	});
+	void child.exited.catch(() => undefined);
 }

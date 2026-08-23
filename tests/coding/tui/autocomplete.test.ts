@@ -34,6 +34,7 @@ function complete(
 		readonly lines?: readonly string[];
 		readonly sessionIds?: readonly string[];
 		readonly modelValues?: readonly string[];
+		readonly providerIds?: readonly string[];
 	} = {},
 ) {
 	return buildCompletionState({
@@ -46,6 +47,7 @@ function complete(
 		availableCapabilities: ["session-controller", "tui"],
 		sessionIds: options.sessionIds ?? [],
 		modelValues: options.modelValues ?? [],
+		providerIds: options.providerIds ?? [],
 	});
 }
 
@@ -182,5 +184,15 @@ describe("buildCompletionState", () => {
 			start: "/model ".length,
 			end: "/model local/o".length,
 		});
+	});
+
+	test("completes login and logout provider IDs", () => {
+		const providerIds = ["openai-codex", "openai"];
+		const login = complete("/login openai-c", { providerIds });
+		expect(values(login?.items ?? [])).toEqual(["openai-codex"]);
+		expect(login?.items[0]?.source).toBe("provider");
+
+		const logout = complete("/logout open", { providerIds });
+		expect(values(logout?.items ?? [])).toEqual(providerIds);
 	});
 });

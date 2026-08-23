@@ -27,6 +27,40 @@ export type {
 	QueuedMessages,
 	QueueMode,
 } from "./src/agent/types.ts";
+export type {
+	ApiKeyCredential,
+	AuthCredential,
+	AuthInteraction,
+	AuthNotification,
+	AuthPrompt,
+	AuthType,
+	OAuthCredential,
+	ProviderAuth,
+} from "./src/ai/auth.ts";
+export {
+	AuthCancelledError,
+	createAuthAbortError,
+	throwIfAuthAborted,
+} from "./src/ai/auth.ts";
+export type { CodexOAuthOptions } from "./src/ai/codex_oauth.ts";
+export {
+	CODEX_OAUTH_BASE_URL,
+	CODEX_OAUTH_CALLBACK_PORT,
+	CODEX_OAUTH_CLIENT_ID,
+	CODEX_OAUTH_REDIRECT_URI,
+	CODEX_OAUTH_SCOPE,
+	CodexOAuth,
+	extractCodexAccountId,
+	parseManualCode,
+} from "./src/ai/codex_oauth.ts";
+export type {
+	CodexProviderConfig,
+	CodexRequestAuth,
+} from "./src/ai/codex_provider.ts";
+export {
+	CODEX_RESPONSES_BASE_URL,
+	CodexProvider,
+} from "./src/ai/codex_provider.ts";
 export type { OpenAICompatibleEnvOptions } from "./src/ai/environment.ts";
 export {
 	DEFAULT_OPENAI_BASE_URL,

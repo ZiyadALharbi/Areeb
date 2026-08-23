@@ -10,7 +10,8 @@ export type CompletionSource =
 	| "skill"
 	| "template"
 	| "session"
-	| "model";
+	| "model"
+	| "provider";
 
 export interface CompletionItem {
 	readonly value: string;
@@ -45,6 +46,7 @@ export interface BuildCompletionStateOptions {
 	readonly availableCapabilities: readonly CommandCapability[];
 	readonly sessionIds?: readonly string[];
 	readonly modelValues?: readonly string[];
+	readonly providerIds?: readonly string[];
 }
 
 export interface CompletionCatalog {
@@ -55,6 +57,7 @@ export interface CompletionCatalog {
 	readonly cwd: string;
 	readonly listSessions: () => Promise<readonly CommandSessionListItem[]>;
 	readonly models: readonly CommandModelListItem[];
+	readonly providerIds?: readonly string[];
 }
 
 interface RankedItem {
@@ -223,7 +226,9 @@ function buildArgumentCompletion(
 			? options.sessionIds
 			: command === "/model"
 				? options.modelValues
-				: undefined;
+				: command === "/login" || command === "/logout"
+					? options.providerIds
+					: undefined;
 	if (values === undefined) {
 		return null;
 	}
@@ -244,9 +249,18 @@ function buildArgumentCompletion(
 		argumentEnd += 1;
 	}
 
-	const source = command === "/resume" ? "session" : "model";
+	const source =
+		command === "/resume"
+			? "session"
+			: command === "/model"
+				? "model"
+				: "provider";
 	const description =
-		source === "session" ? "Stored session" : "Usable provider model";
+		source === "session"
+			? "Stored session"
+			: source === "model"
+				? "Usable provider model"
+				: "Provider login";
 	const items = [...new Set(values)]
 		.map((value, index) =>
 			rankItem(

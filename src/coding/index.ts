@@ -1,9 +1,23 @@
 export type {
+	CredentialMutation,
+	CredentialStore,
+	FileCredentialStoreOptions,
+	StoredCredentialSummary,
+} from "./auth-store.ts";
+export {
+	AUTH_STORE_VERSION,
+	AuthStoreError,
+	FileCredentialStore,
+	MemoryCredentialStore,
+} from "./auth-store.ts";
+export type {
 	CommandCapability,
 	CommandContext,
 	CommandHandler,
 	CommandHotkey,
+	CommandModelListItem,
 	CommandOutcome,
+	CommandProviderAuthItem,
 	CommandResourceReloadResult,
 	CommandResourceSummary,
 	CommandResult,
@@ -42,6 +56,15 @@ export {
 	renderPromptTemplate,
 } from "./prompt-templates.ts";
 export type {
+	DefaultProviderAuthRegistryOptions,
+	ProviderAuthMetadata,
+	ProviderAuthRegistration,
+} from "./provider-auth.ts";
+export {
+	createDefaultProviderAuthRegistry,
+	ProviderAuthRegistry,
+} from "./provider-auth.ts";
+export type {
 	LoadProviderSettingsOptions,
 	OpenAICompatibleProviderConfig,
 	ProviderAuthStatus,
@@ -73,6 +96,17 @@ export {
 	usableProviderModels,
 } from "./provider-config.ts";
 export type {
+	CreateCredentialRuntimeOptions,
+	ProviderAuthView,
+	ProviderConnectionStatus,
+	ProviderRuntimeServiceOptions,
+	RuntimeModelCatalogEntry,
+} from "./provider-runtime.ts";
+export {
+	ProviderRuntimeService,
+	UnavailableModelProvider,
+} from "./provider-runtime.ts";
+export type {
 	ParsedFrontmatter,
 	ResourceDiagnostic,
 	ResourceDiagnosticCode,
@@ -92,6 +126,8 @@ export type {
 	CodingSessionConfig,
 	CodingSessionControllerService,
 	CodingSessionHostServices,
+	CodingSessionModelService,
+	CodingSessionProviderAuthService,
 	CodingSessionTuiService,
 } from "./session.ts";
 export { CodingSession } from "./session.ts";

@@ -4,19 +4,23 @@ import type {
 	AgentRunStream,
 	QueuedMessages,
 } from "../../agent/types.ts";
+import type { AuthInteraction, AuthType } from "../../ai/auth.ts";
 import type { ReasoningLevel } from "../../ai/types.ts";
 import type {
 	CommandModelListItem,
 	CommandOutcome,
+	CommandProviderAuthItem,
 	CommandResult,
 	CommandSessionListItem,
 	SlashCommand,
 } from "../commands.ts";
+import type { ProviderAuthView } from "../provider-runtime.ts";
 import type { ResourceDiagnostic } from "../resources.ts";
 import type {
 	CodingSessionControllerService,
 	CodingSessionHostServices,
 	CodingSessionModelService,
+	CodingSessionProviderAuthService,
 	CodingSessionTuiService,
 } from "../session.ts";
 import type { CodingSessionRecord } from "../session-manager.ts";
@@ -47,6 +51,7 @@ export interface TuiControllerSession {
 	readonly commands: readonly SlashCommand[];
 	readonly skills: readonly { readonly name: string }[];
 	readonly promptTemplates: readonly { readonly name: string }[];
+	readonly unavailableReason?: string;
 	prompt(input: string): AgentRunStream;
 	handleCommand(
 		input: string,
@@ -85,12 +90,25 @@ export type TuiModelSessionLoader = (
 	request: TuiSessionLoadRequest,
 ) => Promise<TuiPreparedSession>;
 
+export interface TuiProviderAuthController {
+	listMetadata(): readonly CommandProviderAuthItem[];
+	listProviders(savedOnly?: boolean): Promise<readonly ProviderAuthView[]>;
+	login(
+		provider: string,
+		authType: AuthType,
+		interaction: AuthInteraction,
+	): Promise<void>;
+	logout(provider: string, signal?: AbortSignal): Promise<boolean>;
+	listModels(): Promise<readonly CommandModelListItem[]>;
+}
+
 export interface TuiControllerOptions {
 	readonly session: TuiControllerSession;
 	readonly manager: TuiSessionManager;
 	readonly loadSession: TuiSessionLoader;
 	readonly models?: readonly CommandModelListItem[];
 	readonly prepareModelSession?: TuiModelSessionLoader;
+	readonly providerAuth?: TuiProviderAuthController;
 }
 
 interface ActiveBundle {
@@ -108,7 +126,10 @@ export class TuiController {
 	private readonly modelControllerService:
 		| CodingSessionModelService
 		| undefined;
-	private readonly modelCatalog: readonly CommandModelListItem[];
+	private readonly providerAuthService:
+		| CodingSessionProviderAuthService
+		| undefined;
+	private modelCatalog: readonly CommandModelListItem[];
 
 	constructor(private readonly options: TuiControllerOptions) {
 		this.active = buildBundle(options.session);
@@ -124,6 +145,10 @@ export class TuiController {
 			options.prepareModelSession === undefined
 				? undefined
 				: { listModels: () => this.models };
+		this.providerAuthService =
+			options.providerAuth === undefined
+				? undefined
+				: { listProviders: () => options.providerAuth?.listMetadata() ?? [] };
 	}
 
 	get session(): TuiControllerSession {
@@ -170,6 +195,10 @@ export class TuiController {
 		return this.active.session.resourceDiagnostics;
 	}
 
+	get unavailableReason(): string | undefined {
+		return this.active.session.unavailableReason;
+	}
+
 	get models(): readonly CommandModelListItem[] {
 		return this.modelCatalog.map((entry) => ({ ...entry }));
 	}
@@ -186,11 +215,18 @@ export class TuiController {
 				...(this.modelControllerService === undefined
 					? []
 					: (["model-selection"] as const)),
+				...(this.providerAuthService === undefined
+					? []
+					: (["provider-auth"] as const)),
 				"tui",
 			],
 			cwd: this.active.session.metadata.cwd,
 			listSessions: () => this.listSessions(),
 			models: this.models,
+			providerIds:
+				this.options.providerAuth
+					?.listMetadata()
+					.map((provider) => provider.id) ?? [],
 		};
 	}
 
@@ -232,6 +268,9 @@ export class TuiController {
 			...(this.modelControllerService === undefined
 				? {}
 				: { modelController: this.modelControllerService }),
+			...(this.providerAuthService === undefined
+				? {}
+				: { providerAuth: this.providerAuthService }),
 			...(tuiService === undefined ? {} : { tui: tuiService }),
 		};
 		const result = await this.active.session.handleCommand(input, services);
@@ -270,6 +309,12 @@ export class TuiController {
 					handled: true,
 					outcome: this.transitionBlock("switch models") ?? result.outcome,
 				};
+			case "login-picker":
+			case "login":
+			case "logout-picker":
+			case "logout":
+				this.newSessionPending = false;
+				return { handled: true, outcome: result.outcome };
 			case "message":
 			case "theme-picker":
 			case "set-theme":
@@ -279,6 +324,58 @@ export class TuiController {
 			case "unavailable":
 				this.newSessionPending = false;
 				return { handled: true, outcome: result.outcome };
+		}
+	}
+
+	listAuthProviders(savedOnly = false): Promise<readonly ProviderAuthView[]> {
+		if (this.options.providerAuth === undefined) {
+			return Promise.reject(
+				new Error("Provider authentication is unavailable"),
+			);
+		}
+		return this.options.providerAuth.listProviders(savedOnly);
+	}
+
+	async login(
+		provider: string,
+		authType: AuthType,
+		interaction: AuthInteraction,
+	): Promise<void> {
+		const blocked = this.transitionBlock("log in to a provider");
+		if (blocked !== undefined) {
+			throw new Error(
+				blocked.kind === "message" ? blocked.text : "Login blocked",
+			);
+		}
+		if (this.options.providerAuth === undefined) {
+			throw new Error("Provider authentication is unavailable");
+		}
+		this.transitionActive = true;
+		try {
+			await this.options.providerAuth.login(provider, authType, interaction);
+			await this.refreshAuthentication(provider);
+		} finally {
+			this.transitionActive = false;
+		}
+	}
+
+	async logout(provider: string, signal?: AbortSignal): Promise<boolean> {
+		const blocked = this.transitionBlock("log out of a provider");
+		if (blocked !== undefined) {
+			throw new Error(
+				blocked.kind === "message" ? blocked.text : "Logout blocked",
+			);
+		}
+		if (this.options.providerAuth === undefined) {
+			throw new Error("Provider authentication is unavailable");
+		}
+		this.transitionActive = true;
+		try {
+			const deleted = await this.options.providerAuth.logout(provider, signal);
+			await this.refreshAuthentication(provider);
+			return deleted;
+		} finally {
+			this.transitionActive = false;
 		}
 	}
 
@@ -426,6 +523,32 @@ export class TuiController {
 			);
 		}
 		return undefined;
+	}
+
+	private async refreshAuthentication(provider: string): Promise<void> {
+		if (this.options.providerAuth === undefined) {
+			return;
+		}
+		this.modelCatalog = Object.freeze(
+			(await this.options.providerAuth.listModels()).map((entry) =>
+				Object.freeze({ ...entry }),
+			),
+		);
+		if (this.active.session.provider !== provider) {
+			return;
+		}
+		const handle = await this.options.manager.open(
+			this.active.session.metadata.id,
+		);
+		const candidate = await this.options.loadSession({
+			handle,
+			selection: {
+				provider: this.active.session.provider,
+				model: this.active.session.model,
+			},
+			reasoning: this.active.session.reasoning,
+		});
+		this.active = buildBundle(candidate);
 	}
 
 	private async replaceSession(

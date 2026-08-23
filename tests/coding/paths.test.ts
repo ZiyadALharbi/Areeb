@@ -37,6 +37,7 @@ describe("areebPaths", () => {
 			}),
 		).toEqual({
 			userRoot,
+			userAuth: join(userRoot, "auth.json"),
 			userProviders: join(userRoot, "providers.json"),
 			userTuiConfig: join(userRoot, "tui.json"),
 			userLastCopy: join(userRoot, "last-copy.txt"),

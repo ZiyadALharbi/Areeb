@@ -41,6 +41,7 @@ const thinkingContentSchema = z
 	.object({
 		type: z.literal("thinking"),
 		thinking: z.string(),
+		signature: z.string().optional(),
 	})
 	.strict();
 

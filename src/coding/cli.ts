@@ -4,20 +4,21 @@ import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { assertUuid } from "../agent/session/session.ts";
 import type { SessionModel } from "../agent/session/types.ts";
+import type { CodexProviderConfig } from "../ai/codex_provider.ts";
 import type { OpenAICompatibleConfig } from "../ai/openai_compatible_provider.ts";
 import type { ModelProvider } from "../ai/provider_protocol.ts";
+import { FileCredentialStore } from "./auth-store.ts";
 import { runPrintMode } from "./modes/print-mode.ts";
 import { isPrintOutputMode, type PrintOutputMode } from "./modes/types.ts";
 import { areebPaths } from "./paths.ts";
+import { createDefaultProviderAuthRegistry } from "./provider-auth.ts";
 import {
 	configuredProviderModels,
-	createProviderRuntime,
 	getProviderAuthStatus,
 	loadProviderSettings,
-	resolveProviderSelection,
 	setupOpenAICompatibleProvider,
-	usableProviderModels,
 } from "./provider-config.ts";
+import { ProviderRuntimeService } from "./provider-runtime.ts";
 import { CodingSession } from "./session.ts";
 import {
 	CodingSessionManager,
@@ -230,6 +231,7 @@ interface CliRuntime {
 	readonly stdout?: CliOutput;
 	readonly stderr?: CliOutput;
 	readonly createProvider?: (config: OpenAICompatibleConfig) => ModelProvider;
+	readonly createCodexProvider?: (config: CodexProviderConfig) => ModelProvider;
 	readonly runPrint?: typeof runPrintMode;
 	readonly runInteractive?: typeof runInteractiveMode;
 }
@@ -356,7 +358,23 @@ async function runSessionCommand(
 		...(runtime.userRoot === undefined ? {} : { userRoot: runtime.userRoot }),
 		env,
 	});
-	const initialSelection = resolveProviderSelection(settings, {
+	const credentialStore = new FileCredentialStore({
+		...(runtime.userRoot === undefined ? {} : { userRoot: runtime.userRoot }),
+	});
+	const providerRegistry = createDefaultProviderAuthRegistry();
+	const providerRuntime = new ProviderRuntimeService({
+		settings,
+		store: credentialStore,
+		registry: providerRegistry,
+		env,
+		...(runtime.createProvider === undefined
+			? {}
+			: { createProvider: runtime.createProvider }),
+		...(runtime.createCodexProvider === undefined
+			? {}
+			: { createCodexProvider: runtime.createCodexProvider }),
+	});
+	const initialSelection = providerRuntime.resolveSelection({
 		...(command.provider === undefined ? {} : { provider: command.provider }),
 		...(command.model === undefined ? {} : { model: command.model }),
 		...(storedRecord?.model === null || storedRecord?.model === undefined
@@ -377,17 +395,14 @@ async function runSessionCommand(
 		reasoning,
 	}) =>
 		loadCodingSession(handle, selection, reasoning, {
-			settings,
-			env,
+			providerRuntime,
 			cwd,
 			...(runtime.userRoot === undefined ? {} : { userRoot: runtime.userRoot }),
 			...(runtime.agentsRoot === undefined
 				? {}
 				: { agentsRoot: runtime.agentsRoot }),
-			...(runtime.createProvider === undefined
-				? {}
-				: { createProvider: runtime.createProvider }),
 			trustProjectResources: command.trustProjectResources,
+			allowUnavailable: command.kind === "interactive",
 		});
 	const prepareModelSession: TuiModelSessionLoader = async ({
 		handle,
@@ -395,17 +410,14 @@ async function runSessionCommand(
 		reasoning,
 	}) =>
 		prepareCodingSessionModelChange(handle, selection, reasoning, {
-			settings,
-			env,
+			providerRuntime,
 			cwd,
 			...(runtime.userRoot === undefined ? {} : { userRoot: runtime.userRoot }),
 			...(runtime.agentsRoot === undefined
 				? {}
 				: { agentsRoot: runtime.agentsRoot }),
-			...(runtime.createProvider === undefined
-				? {}
-				: { createProvider: runtime.createProvider }),
 			trustProjectResources: command.trustProjectResources,
+			allowUnavailable: false,
 		});
 	const coding = await loadSession({
 		handle: session,
@@ -423,8 +435,23 @@ async function runSessionCommand(
 			session: coding,
 			manager,
 			loadSession,
-			models: usableProviderModels(settings, env),
+			models: (await providerRuntime.usableModels()).map((entry) => ({
+				provider: entry.provider,
+				model: entry.model,
+			})),
 			prepareModelSession,
+			providerAuth: {
+				listMetadata: () => providerRuntime.authMetadata,
+				listProviders: (savedOnly) => providerRuntime.listProviders(savedOnly),
+				login: (provider, authType, interaction) =>
+					providerRuntime.login(provider, authType, interaction),
+				logout: (provider, signal) => providerRuntime.logout(provider, signal),
+				listModels: async () =>
+					(await providerRuntime.usableModels()).map((entry) => ({
+						provider: entry.provider,
+						model: entry.model,
+					})),
+			},
 		}),
 		{
 			...(runtime.userRoot === undefined ? {} : { userRoot: runtime.userRoot }),
@@ -433,13 +460,12 @@ async function runSessionCommand(
 }
 
 interface CodingSessionLoaderOptions {
-	readonly settings: Awaited<ReturnType<typeof loadProviderSettings>>;
-	readonly env: CliEnvironment;
+	readonly providerRuntime: ProviderRuntimeService;
 	readonly cwd: string;
 	readonly userRoot?: string;
 	readonly agentsRoot?: string;
-	readonly createProvider?: (config: OpenAICompatibleConfig) => ModelProvider;
 	readonly trustProjectResources: boolean;
+	readonly allowUnavailable: boolean;
 }
 
 async function loadCodingSession(
@@ -448,12 +474,12 @@ async function loadCodingSession(
 	reasoning: Parameters<TuiSessionLoader>[0]["reasoning"],
 	options: CodingSessionLoaderOptions,
 ): Promise<CodingSession> {
-	const providerRuntime = createProviderRuntime(options.settings, selection, {
-		env: options.env,
-		...(options.createProvider === undefined
-			? {}
-			: { createProvider: options.createProvider }),
-	});
+	const providerRuntime = await options.providerRuntime.createRuntime(
+		selection,
+		{
+			allowUnavailable: options.allowUnavailable,
+		},
+	);
 	return CodingSession.load({
 		session,
 		provider: providerRuntime.provider,
@@ -462,6 +488,9 @@ async function loadCodingSession(
 		...(providerRuntime.timeoutMs === undefined
 			? {}
 			: { timeout: providerRuntime.timeoutMs }),
+		...(providerRuntime.unavailableReason === undefined
+			? {}
+			: { unavailableReason: providerRuntime.unavailableReason }),
 		resourcePaths: areebPaths({
 			cwd: options.cwd,
 			...(options.userRoot === undefined ? {} : { userRoot: options.userRoot }),
@@ -479,12 +508,12 @@ async function prepareCodingSessionModelChange(
 	reasoning: Parameters<TuiSessionLoader>[0]["reasoning"],
 	options: CodingSessionLoaderOptions,
 ) {
-	const providerRuntime = createProviderRuntime(options.settings, selection, {
-		env: options.env,
-		...(options.createProvider === undefined
-			? {}
-			: { createProvider: options.createProvider }),
-	});
+	const providerRuntime = await options.providerRuntime.createRuntime(
+		selection,
+		{
+			allowUnavailable: options.allowUnavailable,
+		},
+	);
 	return CodingSession.prepareModelChange({
 		session,
 		provider: providerRuntime.provider,
@@ -493,6 +522,9 @@ async function prepareCodingSessionModelChange(
 		...(providerRuntime.timeoutMs === undefined
 			? {}
 			: { timeout: providerRuntime.timeoutMs }),
+		...(providerRuntime.unavailableReason === undefined
+			? {}
+			: { unavailableReason: providerRuntime.unavailableReason }),
 		resourcePaths: areebPaths({
 			cwd: options.cwd,
 			...(options.userRoot === undefined ? {} : { userRoot: options.userRoot }),

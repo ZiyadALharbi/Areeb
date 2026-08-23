@@ -19,6 +19,7 @@ import {
 	type CommandContext,
 	type CommandHotkey,
 	type CommandModelListItem,
+	type CommandProviderAuthItem,
 	type CommandRegistry,
 	type CommandResourceReloadResult,
 	type CommandResult,
@@ -61,6 +62,8 @@ export interface CodingSessionConfig<
 	readonly tools?: readonly CodingToolDefinition[];
 	/** Provider HTTP request timeout in milliseconds. */
 	readonly timeout?: number;
+	/** Interactive-only reason that prompt submission is unavailable. */
+	readonly unavailableReason?: string;
 	readonly maxTurns?: number;
 	readonly messageConverter?: AgentMessageConverter;
 	readonly steeringMode?: QueueMode;
@@ -79,6 +82,10 @@ export interface CodingSessionModelService {
 	listModels(): readonly CommandModelListItem[];
 }
 
+export interface CodingSessionProviderAuthService {
+	listProviders(): readonly CommandProviderAuthItem[];
+}
+
 export interface CodingSessionTuiService {
 	getThemeName(): string;
 	getThemeNames(): readonly string[];
@@ -88,6 +95,7 @@ export interface CodingSessionTuiService {
 export interface CodingSessionHostServices {
 	readonly sessionController?: CodingSessionControllerService;
 	readonly modelController?: CodingSessionModelService;
+	readonly providerAuth?: CodingSessionProviderAuthService;
 	readonly tui?: CodingSessionTuiService;
 }
 
@@ -117,6 +125,7 @@ export class CodingSession<
 		private readonly sessionProvider: string,
 		private readonly sessionModel: string,
 		private readonly sessionReasoning: ReasoningLevel,
+		private readonly sessionUnavailableReason: string | undefined,
 		private assembledSystemPrompt: string,
 		private readonly activeTools: readonly AgentTool[],
 		private readonly resourceInputs: SessionResourceInputs,
@@ -333,6 +342,7 @@ export class CodingSession<
 			runtimeModel.provider,
 			runtimeModel.model,
 			context.reasoning,
+			config.unavailableReason,
 			systemPrompt,
 			tools,
 			resourceInputs,
@@ -360,6 +370,10 @@ export class CodingSession<
 
 	get reasoning(): ReasoningLevel {
 		return this.sessionReasoning;
+	}
+
+	get unavailableReason(): string | undefined {
+		return this.sessionUnavailableReason;
 	}
 
 	get systemPrompt(): string {
@@ -572,6 +586,7 @@ export class CodingSession<
 	): CommandContext {
 		const sessionController = services.sessionController;
 		const modelController = services.modelController;
+		const providerAuth = services.providerAuth;
 		const tui = services.tui;
 		return {
 			hasCapability: (capability) => {
@@ -582,9 +597,10 @@ export class CodingSession<
 						return tui !== undefined;
 					case "model-selection":
 						return modelController !== undefined;
+					case "provider-auth":
+						return providerAuth !== undefined;
 					case "compaction":
 					case "session-export":
-					case "provider-auth":
 						return false;
 				}
 			},
@@ -599,6 +615,14 @@ export class CodingSession<
 					throw new Error("Model controller is unavailable");
 				}
 				return modelController.listModels();
+			},
+			listAuthProviders: () => {
+				if (providerAuth === undefined) {
+					throw new Error("Provider auth service is unavailable");
+				}
+				return providerAuth
+					.listProviders()
+					.map((provider) => ({ ...provider }));
 			},
 			getResourceSummary: () => ({
 				skillCount: this.resourceSnapshot.skills.length,

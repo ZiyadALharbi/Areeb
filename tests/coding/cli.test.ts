@@ -313,6 +313,44 @@ describe("CLI interactive mode", () => {
 		expect(providerCreated).toBe(false);
 	});
 
+	test("starts interactive mode without credentials so login remains reachable", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "areeb-cli-first-run-"));
+		try {
+			let providerCreated = false;
+			expect(
+				await runCli([], {
+					cwd: join(directory, "project"),
+					userRoot: join(directory, "user"),
+					agentsRoot: join(directory, "agents"),
+					env: {},
+					stdin: { isTTY: true },
+					stdout: new BufferOutput(true),
+					stderr: new BufferOutput(),
+					createProvider() {
+						providerCreated = true;
+						return new FakeProvider([]);
+					},
+					async runInteractive(controller) {
+						expect(controller.unavailableReason).toContain(
+							"No credentials for openai",
+						);
+						expect(
+							controller.completionCatalog.availableCapabilities,
+						).toContain("provider-auth");
+						expect(await controller.handleCommand("/login")).toEqual({
+							handled: true,
+							outcome: { kind: "login-picker" },
+						});
+						return 0;
+					},
+				}),
+			).toBe(0);
+			expect(providerCreated).toBe(false);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	test("dispatches sibling runners and propagates interactive failures", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "areeb-cli-interactive-"));
 		try {

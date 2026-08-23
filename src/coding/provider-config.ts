@@ -28,6 +28,7 @@ const ENVIRONMENT_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const LOCK_RETRY_DELAY_MS = 25;
 const LOCK_TIMEOUT_MS = 5_000;
 const STALE_LOCK_MS = 30_000;
+const RESERVED_PROVIDER_IDS = new Set(["openai-codex"]);
 
 export type ProviderEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -468,6 +469,13 @@ function composeProviderSettings(
 	for (const providerId of Object.keys(explicitProviders).sort()) {
 		if (providerId === "openai") {
 			continue;
+		}
+		if (RESERVED_PROVIDER_IDS.has(providerId)) {
+			throwConfig(
+				path,
+				`$.providers.${providerId}`,
+				"is reserved for a built-in credential-backed provider",
+			);
 		}
 		const provider = explicitProviders[providerId];
 		if (provider === undefined) {
