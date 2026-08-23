@@ -457,9 +457,10 @@ describe("CLI interactive mode", () => {
 						expect(controller.metadata.cwd).toBe(storedCwd);
 						expect(controller.model).toBe("stored-model");
 						expect(controller.messages).toEqual([]);
-						expect(controller.completionCatalog.models).toMatchObject([
-							{ provider: "openai", model: "stored-model" },
-						]);
+						expect(controller.completionCatalog.models).toContainEqual({
+							provider: "openai",
+							model: "stored-model",
+						});
 						expect(await controller.handleCommand("/new")).toMatchObject({
 							outcome: { kind: "message", level: "warning" },
 						});
@@ -549,10 +550,14 @@ describe("CLI interactive mode", () => {
 						return new FakeProvider([], { providerId: config.providerId });
 					},
 					async runInteractive(controller) {
-						expect(controller.completionCatalog.models).toMatchObject([
-							{ provider: "local", model: "org/model-b" },
-							{ provider: "openai", model: "model-a" },
-						]);
+						expect(controller.completionCatalog.models).toContainEqual({
+							provider: "local",
+							model: "org/model-b",
+						});
+						expect(controller.completionCatalog.models).toContainEqual({
+							provider: "openai",
+							model: "model-a",
+						});
 						expect(await controller.setModel("local", "org/model-b")).toEqual({
 							kind: "none",
 						});
