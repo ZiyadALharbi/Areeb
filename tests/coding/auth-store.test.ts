@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	stat,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -55,6 +62,7 @@ describe("FileCredentialStore", () => {
 
 	test("preserves a malformed file instead of overwriting it", async () => {
 		const { path, store } = await tempStore();
+		await mkdir(join(path, ".."), { recursive: true });
 		await writeFile(path, "not-json\n", { mode: 0o600 });
 
 		await expect(

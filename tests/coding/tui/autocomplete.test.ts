@@ -193,6 +193,6 @@ describe("buildCompletionState", () => {
 		expect(login?.items[0]?.source).toBe("provider");
 
 		const logout = complete("/logout open", { providerIds });
-		expect(values(logout?.items ?? [])).toEqual(providerIds);
+		expect(values(logout?.items ?? [])).toEqual(["openai", "openai-codex"]);
 	});
 });

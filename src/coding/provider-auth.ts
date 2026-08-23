@@ -6,6 +6,57 @@ import type {
 } from "../ai/auth.ts";
 import { CodexOAuth } from "../ai/codex_oauth.ts";
 
+export const OPENAI_CODEX_MODELS = Object.freeze([
+	"gpt-5.3-codex-spark",
+	"gpt-5.4",
+	"gpt-5.4-mini",
+	"gpt-5.5",
+	"gpt-5.6-luna",
+	"gpt-5.6-sol",
+	"gpt-5.6-terra",
+]);
+
+export const OPENAI_API_MODELS = Object.freeze([
+	"gpt-4",
+	"gpt-4-turbo",
+	"gpt-4.1",
+	"gpt-4.1-mini",
+	"gpt-4.1-nano",
+	"gpt-4o",
+	"gpt-4o-2024-05-13",
+	"gpt-4o-2024-08-06",
+	"gpt-4o-2024-11-20",
+	"gpt-4o-mini",
+	"gpt-5",
+	"gpt-5-chat-latest",
+	"gpt-5-mini",
+	"gpt-5-nano",
+	"gpt-5-pro",
+	"gpt-5.1",
+	"gpt-5.2",
+	"gpt-5.2-chat-latest",
+	"gpt-5.2-pro",
+	"gpt-5.3-chat-latest",
+	"gpt-5.3-codex",
+	"gpt-5.3-codex-spark",
+	"gpt-5.4",
+	"gpt-5.4-mini",
+	"gpt-5.4-nano",
+	"gpt-5.4-pro",
+	"gpt-5.5",
+	"gpt-5.5-pro",
+	"gpt-5.6-luna",
+	"gpt-5.6-sol",
+	"gpt-5.6-terra",
+	"gpt-realtime-2.1",
+	"o1",
+	"o1-pro",
+	"o3",
+	"o3-mini",
+	"o3-pro",
+	"o4-mini",
+]);
+
 export interface ProviderAuthRegistration {
 	readonly id: string;
 	readonly displayName: string;
@@ -89,7 +140,7 @@ export function createDefaultProviderAuthRegistry(
 			displayName: "ChatGPT Plus/Pro (Codex Subscription)",
 			authType: "oauth",
 			authLabel: "subscription",
-			models: ["gpt-5.6-sol"],
+			models: OPENAI_CODEX_MODELS,
 			defaultModel: "gpt-5.6-sol",
 			login: (interaction) => codexOAuth.login(interaction),
 			refresh: (credential, signal) => codexOAuth.refresh(credential, signal),
@@ -99,8 +150,8 @@ export function createDefaultProviderAuthRegistry(
 			displayName: "OpenAI",
 			authType: "api_key",
 			authLabel: "api key",
-			models: [],
-			defaultModel: "",
+			models: OPENAI_API_MODELS,
+			defaultModel: "gpt-5.6-sol",
 			async login(interaction) {
 				const key = (
 					await interaction.prompt({

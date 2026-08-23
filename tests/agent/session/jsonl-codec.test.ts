@@ -72,6 +72,32 @@ describe("session JSONL codec", () => {
 			{
 				kind: "entry",
 				entry: {
+					type: "message",
+					id: ENTRY_ID,
+					seq: 1,
+					parentId: null,
+					timestamp: 100,
+					message: {
+						role: "assistant",
+						content: [
+							{
+								type: "thinking",
+								thinking: "reasoning",
+								signature: '{"type":"reasoning","encrypted_content":"opaque"}',
+							},
+						],
+						provider: "openai-codex",
+						model: "gpt-5.6-sol",
+						responseId: "response-1",
+						usage,
+						stopReason: "stop",
+						timestamp: 100,
+					},
+				},
+			},
+			{
+				kind: "entry",
+				entry: {
 					type: "model_change",
 					id: ENTRY_ID,
 					seq: 1,

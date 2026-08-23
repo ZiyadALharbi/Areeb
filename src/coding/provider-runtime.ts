@@ -23,7 +23,6 @@ import {
 	type ProviderSelection,
 	type ProviderSelectionOptions,
 	type ProviderSettings,
-	resolveProviderSelection as resolveConfiguredSelection,
 } from "./provider-config.ts";
 
 const OAUTH_REFRESH_WINDOW_MS = 5 * 60_000;
@@ -76,30 +75,28 @@ export class ProviderRuntimeService {
 	}
 
 	resolveSelection(options: ProviderSelectionOptions = {}): ProviderSelection {
+		assertSelectionMatchesStored(options);
 		const providerId =
 			options.stored?.provider ??
 			options.provider ??
 			this.options.settings.defaultProvider;
+		const configured = this.options.settings.providers[providerId];
 		const registration = this.options.registry.get(providerId);
+		if (configured !== undefined) {
+			const model =
+				options.stored?.model ?? options.model ?? configured.defaultModel;
+			const models = new Set([
+				...configured.models,
+				...(registration?.models ?? []),
+			]);
+			if (!models.has(model)) {
+				throw new Error(
+					`Unknown model "${model}" for provider "${providerId}"`,
+				);
+			}
+			return Object.freeze({ provider: providerId, model });
+		}
 		if (registration?.models.length) {
-			if (
-				options.stored !== undefined &&
-				options.provider !== undefined &&
-				options.provider !== options.stored.provider
-			) {
-				throw new Error(
-					`Requested provider "${options.provider}" does not match stored provider "${options.stored.provider}"`,
-				);
-			}
-			if (
-				options.stored !== undefined &&
-				options.model !== undefined &&
-				options.model !== options.stored.model
-			) {
-				throw new Error(
-					`Requested model "${options.model}" does not match stored model "${options.stored.model}"`,
-				);
-			}
 			const model =
 				options.stored?.model ?? options.model ?? registration.defaultModel;
 			if (!registration.models.includes(model)) {
@@ -109,7 +106,7 @@ export class ProviderRuntimeService {
 			}
 			return Object.freeze({ provider: providerId, model });
 		}
-		return resolveConfiguredSelection(this.options.settings, options);
+		throw new Error(`Unknown provider: ${providerId}`);
 	}
 
 	async listProviders(savedOnly = false): Promise<readonly ProviderAuthView[]> {
@@ -176,7 +173,11 @@ export class ProviderRuntimeService {
 					? environmentApiKey(this.env) !== undefined ||
 						credentials.get(providerId)?.type === "api_key"
 					: !getProviderAuthStatus(provider, this.env).startsWith("missing:");
-			for (const model of [...provider.models].sort()) {
+			const registration = this.options.registry.get(providerId);
+			const models = [
+				...new Set([...provider.models, ...(registration?.models ?? [])]),
+			].sort();
+			for (const model of models) {
 				entries.push(
 					Object.freeze({
 						provider: providerId,
@@ -190,7 +191,10 @@ export class ProviderRuntimeService {
 			}
 		}
 		for (const registration of this.options.registry.list()) {
-			if (registration.models.length === 0) {
+			if (
+				registration.models.length === 0 ||
+				this.options.settings.providers[registration.id] !== undefined
+			) {
 				continue;
 			}
 			const credential = credentials.get(registration.id);
@@ -360,6 +364,27 @@ export class ProviderRuntimeService {
 	}
 }
 
+function assertSelectionMatchesStored(options: ProviderSelectionOptions): void {
+	if (
+		options.stored !== undefined &&
+		options.provider !== undefined &&
+		options.provider !== options.stored.provider
+	) {
+		throw new Error(
+			`Requested provider "${options.provider}" does not match stored provider "${options.stored.provider}"`,
+		);
+	}
+	if (
+		options.stored !== undefined &&
+		options.model !== undefined &&
+		options.model !== options.stored.model
+	) {
+		throw new Error(
+			`Requested model "${options.model}" does not match stored model "${options.stored.model}"`,
+		);
+	}
+}
+
 export class UnavailableModelProvider implements ModelProvider {
 	constructor(
 		readonly providerId: string,
@@ -398,12 +423,10 @@ export class UnavailableModelProvider implements ModelProvider {
 }
 
 async function refreshWithTimeout(
-	refresh: NonNullable<ProviderAuthRegistry["get"]> extends never
-		? never
-		: (
-				credential: OAuthCredential,
-				signal?: AbortSignal,
-			) => Promise<OAuthCredential>,
+	refresh: (
+		credential: OAuthCredential,
+		signal?: AbortSignal,
+	) => Promise<OAuthCredential>,
 	credential: OAuthCredential,
 	signal?: AbortSignal,
 ): Promise<OAuthCredential> {

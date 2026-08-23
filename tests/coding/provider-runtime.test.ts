@@ -43,9 +43,18 @@ describe("ProviderRuntimeService", () => {
 
 		await service.createRuntime({ provider: "openai", model: "gpt-5.6-sol" });
 		expect(configuredKey).toBe("environment-key");
-		expect(await service.usableModels()).toMatchObject([
-			{ provider: "openai", model: "gpt-5.6-sol", usable: true },
-		]);
+		expect(await service.usableModels()).toContainEqual(
+			expect.objectContaining({
+				provider: "openai",
+				model: "gpt-5.6-sol",
+				usable: true,
+			}),
+		);
+		expect(
+			(await service.usableModels()).filter(
+				(entry) => entry.provider === "openai",
+			),
+		).toHaveLength(38);
 		expect(await service.listProviders()).toMatchObject([
 			{ id: "openai-codex", status: "not connected" },
 			{ id: "openai", status: "connected", source: "environment" },

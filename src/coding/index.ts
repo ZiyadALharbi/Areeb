@@ -62,6 +62,8 @@ export type {
 } from "./provider-auth.ts";
 export {
 	createDefaultProviderAuthRegistry,
+	OPENAI_API_MODELS,
+	OPENAI_CODEX_MODELS,
 	ProviderAuthRegistry,
 } from "./provider-auth.ts";
 export type {
