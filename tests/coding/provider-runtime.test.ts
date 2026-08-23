@@ -129,4 +129,31 @@ describe("ProviderRuntimeService", () => {
 			refresh: "rotated",
 		});
 	});
+
+	test("selects a globally connected provider for a new implicit session", async () => {
+		const service = new ProviderRuntimeService({
+			settings: parseProviderSettings(
+				{ version: 1 },
+				{ path: "/tmp/providers.json", env: {} },
+			),
+			store: new MemoryCredentialStore({
+				"openai-codex": {
+					type: "oauth",
+					access: jwt("account"),
+					refresh: "refresh",
+					expires: Date.now() + 60_000,
+				},
+			}),
+			registry: createDefaultProviderAuthRegistry(),
+			env: {},
+		});
+
+		expect(await service.resolveInitialSelection()).toEqual({
+			provider: "openai-codex",
+			model: "gpt-5.6-sol",
+		});
+		expect(
+			await service.resolveInitialSelection({ provider: "openai" }),
+		).toEqual({ provider: "openai", model: "gpt-5.6-sol" });
+	});
 });

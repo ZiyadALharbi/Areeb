@@ -374,7 +374,7 @@ async function runSessionCommand(
 			? {}
 			: { createCodexProvider: runtime.createCodexProvider }),
 	});
-	const initialSelection = providerRuntime.resolveSelection({
+	const initialSelection = await providerRuntime.resolveInitialSelection({
 		...(command.provider === undefined ? {} : { provider: command.provider }),
 		...(command.model === undefined ? {} : { model: command.model }),
 		...(storedRecord?.model === null || storedRecord?.model === undefined

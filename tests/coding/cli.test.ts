@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { AgentMessage } from "../../src/agent/types.ts";
 import { FakeProvider } from "../../src/ai/fake_provider.ts";
 import type { OpenAICompatibleConfig } from "../../src/ai/openai_compatible_provider.ts";
+import { FileCredentialStore } from "../../src/coding/auth-store.ts";
 import { parseCli, runCli } from "../../src/coding/cli.ts";
 import type { PrintModeSession } from "../../src/coding/modes/types.ts";
 import { setupOpenAICompatibleProvider } from "../../src/coding/provider-config.ts";
@@ -12,6 +13,14 @@ import { CodingSessionManager } from "../../src/coding/session-manager.ts";
 import { textScript } from "./modes/helpers.ts";
 
 const RESUME_ID = "00000000-0000-4000-8000-000000000001";
+
+function jwt(accountId: string): string {
+	const encode = (value: unknown): string =>
+		Buffer.from(JSON.stringify(value)).toString("base64url");
+	return `${encode({ alg: "none" })}.${encode({
+		"https://api.openai.com/auth": { chatgpt_account_id: accountId },
+	})}.signature`;
+}
 
 class BufferOutput {
 	value = "";
@@ -346,6 +355,53 @@ describe("CLI interactive mode", () => {
 				}),
 			).toBe(0);
 			expect(providerCreated).toBe(false);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	test("uses global Codex credentials when starting in another directory", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "areeb-cli-global-auth-"));
+		try {
+			const userRoot = join(directory, "user");
+			await new FileCredentialStore({ userRoot }).modify(
+				"openai-codex",
+				() => ({
+					type: "oauth",
+					access: jwt("account"),
+					refresh: "refresh",
+					expires: Date.now() + 60_000,
+				}),
+			);
+
+			let openAiCreated = false;
+			expect(
+				await runCli([], {
+					cwd: join(directory, "unrelated-project"),
+					userRoot,
+					agentsRoot: join(directory, "agents"),
+					env: {},
+					stdin: { isTTY: true },
+					stdout: new BufferOutput(true),
+					stderr: new BufferOutput(),
+					createProvider() {
+						openAiCreated = true;
+						return new FakeProvider([]);
+					},
+					createCodexProvider() {
+						return new FakeProvider([], { providerId: "openai-codex" });
+					},
+					async runInteractive(controller) {
+						expect(controller).toMatchObject({
+							provider: "openai-codex",
+							model: "gpt-5.6-sol",
+						});
+						expect(controller.unavailableReason).toBeUndefined();
+						return 0;
+					},
+				}),
+			).toBe(0);
+			expect(openAiCreated).toBe(false);
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}

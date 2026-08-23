@@ -109,6 +109,55 @@ export class ProviderRuntimeService {
 		throw new Error(`Unknown provider: ${providerId}`);
 	}
 
+	async resolveInitialSelection(
+		options: ProviderSelectionOptions = {},
+	): Promise<ProviderSelection> {
+		const configured = this.resolveSelection(options);
+		if (
+			options.stored !== undefined ||
+			options.provider !== undefined ||
+			options.model !== undefined
+		) {
+			return configured;
+		}
+
+		const usableModels = await this.usableModels();
+		if (
+			usableModels.some(
+				(entry) =>
+					entry.provider === configured.provider &&
+					entry.model === configured.model,
+			)
+		) {
+			return configured;
+		}
+
+		for (const provider of await this.listProviders()) {
+			if (provider.status === "not connected") {
+				continue;
+			}
+			const models = usableModels.filter(
+				(entry) => entry.provider === provider.id,
+			);
+			const model = models.find((entry) => entry.isDefaultModel) ?? models[0];
+			if (model !== undefined) {
+				return Object.freeze({
+					provider: model.provider,
+					model: model.model,
+				});
+			}
+		}
+
+		const fallback =
+			usableModels.find((entry) => entry.isDefaultModel) ?? usableModels[0];
+		return fallback === undefined
+			? configured
+			: Object.freeze({
+					provider: fallback.provider,
+					model: fallback.model,
+				});
+	}
+
 	async listProviders(savedOnly = false): Promise<readonly ProviderAuthView[]> {
 		const stored = new Map(
 			(await this.options.store.list()).map((credential) => [
