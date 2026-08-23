@@ -12,6 +12,7 @@ import type {
 	CommandSessionListItem,
 	SlashCommand,
 } from "../commands.ts";
+import type { ResourceDiagnostic } from "../resources.ts";
 import type {
 	CodingSessionControllerService,
 	CodingSessionHostServices,
@@ -42,6 +43,7 @@ export interface TuiControllerSession {
 	readonly reasoning: ReasoningLevel;
 	readonly isRunning: boolean;
 	readonly queuedMessages: QueuedMessages;
+	readonly resourceDiagnostics: readonly ResourceDiagnostic[];
 	readonly commands: readonly SlashCommand[];
 	readonly skills: readonly { readonly name: string }[];
 	readonly promptTemplates: readonly { readonly name: string }[];
@@ -164,6 +166,10 @@ export class TuiController {
 		return this.active.session.queuedMessages;
 	}
 
+	get resourceDiagnostics(): readonly ResourceDiagnostic[] {
+		return this.active.session.resourceDiagnostics;
+	}
+
 	get models(): readonly CommandModelListItem[] {
 		return this.modelCatalog.map((entry) => ({ ...entry }));
 	}
@@ -265,6 +271,9 @@ export class TuiController {
 					outcome: this.transitionBlock("switch models") ?? result.outcome,
 				};
 			case "message":
+			case "theme-picker":
+			case "set-theme":
+			case "copy-last-assistant":
 			case "quit":
 			case "none":
 			case "unavailable":

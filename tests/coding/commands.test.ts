@@ -58,6 +58,7 @@ function context(
 		getTuiInfo() {
 			return {
 				themeName: "areeb-dark",
+				themeNames: ["areeb-dark", "areeb-light"],
 				hotkeys: [{ keys: "Ctrl+P", description: "Open the command palette" }],
 			};
 		},
@@ -232,6 +233,7 @@ describe("default slash commands", () => {
 			"login",
 			"reload",
 			"name",
+			"copy",
 			"theme",
 		]);
 		expect(commands.find((entry) => entry.name === "quit")?.aliases).toEqual([
@@ -320,7 +322,7 @@ describe("default slash commands", () => {
 		}
 	});
 
-	test("reports TUI hotkeys and the active theme without switching it", async () => {
+	test("reports TUI hotkeys and dispatches theme and copy actions", async () => {
 		const registry = createDefaultCommandRegistry();
 		const commandContext = context(["tui"]);
 
@@ -334,20 +336,31 @@ describe("default slash commands", () => {
 		});
 		expect(await registry.dispatch("/theme", commandContext)).toEqual({
 			handled: true,
-			outcome: {
-				kind: "message",
-				level: "info",
-				text: "Active theme: areeb-dark",
-			},
+			outcome: { kind: "theme-picker" },
+		});
+		expect(
+			await registry.dispatch("/theme areeb-light", commandContext),
+		).toEqual({
+			handled: true,
+			outcome: { kind: "set-theme", theme: "areeb-light" },
 		});
 		expect(await registry.dispatch("/theme light", commandContext)).toEqual({
 			handled: true,
 			outcome: {
 				kind: "message",
 				level: "error",
-				text: "Usage: /theme",
+				text: "Unknown theme: light",
 			},
 		});
+		expect(await registry.dispatch("/copy", commandContext)).toEqual({
+			handled: true,
+			outcome: { kind: "copy-last-assistant" },
+		});
+		expect(await registry.dispatch("/copy path", commandContext)).toMatchObject(
+			{
+				outcome: { text: "Usage: /copy" },
+			},
+		);
 	});
 
 	test("opens semantic pickers and validates canonical model selections", async () => {

@@ -8,6 +8,7 @@ import type {
 	AssistantMessage,
 	ToolCall,
 	ToolResultMessage,
+	Usage,
 	UserMessage,
 } from "../../ai/types.ts";
 import type { ChatItem, TuiState } from "./state.ts";
@@ -25,10 +26,12 @@ export class TuiEventAdapter {
 		let changed =
 			this.state.items.length > 0 ||
 			this.state.assistantBuffer !== undefined ||
+			this.state.lastUsage !== undefined ||
 			this.state.terminalReason !== undefined ||
 			this.state.running;
 		this.state.items.length = 0;
 		delete this.state.assistantBuffer;
+		delete this.state.lastUsage;
 		delete this.state.terminalReason;
 		this.state.running = false;
 		this.projectedMessages.clear();
@@ -103,7 +106,8 @@ export class TuiEventAdapter {
 			}
 		} else if (isAssistantMessage(message)) {
 			const text = visibleAssistantText(message);
-			changed = this.finalizeAssistantMessage(text);
+			changed = this.updateUsage(message.usage);
+			changed = this.finalizeAssistantMessage(text) || changed;
 			for (const toolCall of visibleToolCalls(message)) {
 				changed = this.upsertTool(toolCall.id, toolCall.name) || changed;
 			}
@@ -115,6 +119,14 @@ export class TuiEventAdapter {
 
 		this.projectedMessages.add(message);
 		return changed;
+	}
+
+	private updateUsage(usage: Usage): boolean {
+		if (usageEqual(this.state.lastUsage, usage)) {
+			return false;
+		}
+		this.state.lastUsage = { ...usage };
+		return true;
 	}
 
 	private finalizeAssistantMessage(text: string): boolean {
@@ -235,7 +247,17 @@ function editPatch(message: ToolResultMessage): string | undefined {
 	) {
 		return undefined;
 	}
-	return message.details.patch;
+	return boundToolText(stripTerminalSequences(message.details.patch));
+}
+
+function usageEqual(left: Usage | undefined, right: Usage): boolean {
+	return (
+		left?.inputTokens === right.inputTokens &&
+		left.outputTokens === right.outputTokens &&
+		left.cacheReadTokens === right.cacheReadTokens &&
+		left.cacheWriteTokens === right.cacheWriteTokens &&
+		left.totalTokens === right.totalTokens
+	);
 }
 
 function boundToolText(text: string): string {

@@ -834,6 +834,7 @@ describe("CodingSession commands and queues", () => {
 		const services = {
 			tui: {
 				getThemeName: () => "areeb-dark",
+				getThemeNames: () => ["areeb-dark", "areeb-light"],
 				getHotkeys: () => [
 					{ keys: "Ctrl+P", description: "Open the command palette" },
 				],
@@ -847,7 +848,12 @@ describe("CodingSession commands and queues", () => {
 			},
 		});
 		expect(await coding.handleCommand("/theme", services)).toMatchObject({
-			outcome: { kind: "message", text: "Active theme: areeb-dark" },
+			outcome: { kind: "theme-picker" },
+		});
+		expect(
+			await coding.handleCommand("/theme areeb-light", services),
+		).toMatchObject({
+			outcome: { kind: "set-theme", theme: "areeb-light" },
 		});
 		expect(await coding.handleCommand("/hotkeys")).toEqual({
 			handled: true,

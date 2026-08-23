@@ -357,8 +357,9 @@ describe("CLI interactive mode", () => {
 			expect(
 				await runCli(["--resume", RESUME_ID], {
 					...common,
-					async runInteractive(controller) {
+					async runInteractive(controller, options) {
 						interactiveRuns += 1;
+						expect(options?.userRoot).toBe(userRoot);
 						expect(controller.metadata.cwd).toBe(storedCwd);
 						expect(controller.model).toBe("stored-model");
 						expect(controller.messages).toEqual([]);

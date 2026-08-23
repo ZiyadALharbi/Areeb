@@ -66,6 +66,7 @@ describe("TuiEventAdapter", () => {
 					isError: false,
 				},
 			],
+			lastUsage: { ...EMPTY_USAGE },
 			sessionId: "unknown",
 			model: "unknown model",
 			cwd: ".",
@@ -150,10 +151,30 @@ describe("TuiEventAdapter", () => {
 		const empty = assistant([{ type: "thinking", thinking: "hidden" }]);
 		const second = { ...toolCall, id: "call-2", name: "bash" };
 
-		expect(adapter.apply({ type: "message_end", message: empty })).toBe(false);
+		expect(adapter.apply({ type: "message_end", message: empty })).toBe(true);
 		adapter.apply({ type: "tool_execution_start", toolCall });
 		adapter.apply({ type: "tool_execution_start", toolCall: second });
 		expect(state.items.map((item) => item.role)).toEqual(["tool", "tool"]);
+	});
+
+	test("tracks the latest completed assistant usage across live and restored state", () => {
+		const first = {
+			...assistant([{ type: "text", text: "first" }]),
+			usage: { ...EMPTY_USAGE, inputTokens: 12_400, outputTokens: 860 },
+		};
+		const second = {
+			...assistant([{ type: "thinking", thinking: "hidden" }]),
+			usage: { ...EMPTY_USAGE, inputTokens: 25, outputTokens: 7 },
+		};
+		const state = createTuiState();
+		const adapter = new TuiEventAdapter(state);
+
+		expect(adapter.restore([first, second])).toBe(true);
+		expect(state.lastUsage).toEqual(second.usage);
+		expect(state.items).toEqual([{ role: "assistant", text: "first" }]);
+		expect(adapter.apply({ type: "message_end", message: second })).toBe(false);
+		expect(adapter.restore([])).toBe(true);
+		expect(state.lastUsage).toBeUndefined();
 	});
 
 	test("restores tool calls without results and enriches matching results", () => {
@@ -212,6 +233,37 @@ describe("TuiEventAdapter", () => {
 		expect(
 			new TextEncoder().encode(item.preview).byteLength,
 		).toBeLessThanOrEqual(4 * 1024);
+	});
+
+	test("bounds and sanitizes restored edit patches", () => {
+		const state = createTuiState();
+		const adapter = new TuiEventAdapter(state);
+		const editCall: ToolCall = { ...toolCall, id: "edit-large", name: "edit" };
+		const patch = Array.from(
+			{ length: 40 },
+			(_, index) => `+line ${index} ${"x".repeat(300)}`,
+		).join("\n");
+		const result: ToolResultMessage = {
+			role: "tool_result",
+			toolCallId: editCall.id,
+			toolName: editCall.name,
+			content: [],
+			details: { patch: `\u001b[31m${patch}\u001b[0m` },
+			isError: false,
+			timestamp: 5,
+		};
+
+		adapter.restore([assistant([editCall]), result]);
+		const item = state.items[0];
+		if (item?.role !== "tool") {
+			throw new Error("Expected a restored tool item");
+		}
+		expect(item.patch).not.toContain("\u001b[");
+		expect(item.patch).toContain("omitted");
+		expect(item.patch?.split("\n").length).toBeLessThanOrEqual(16);
+		expect(new TextEncoder().encode(item.patch).byteLength).toBeLessThanOrEqual(
+			4 * 1024,
+		);
 	});
 
 	test("ignores images and malformed patches while retaining tool failures", () => {

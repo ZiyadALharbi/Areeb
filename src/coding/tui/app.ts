@@ -28,7 +28,11 @@ import {
 } from "./autocomplete.ts";
 import { MessageBlock, ToolBlock } from "./blocks.ts";
 import type { ChatItem, TuiState } from "./state.ts";
-import type { TuiTheme } from "./theme.ts";
+import {
+	createTuiThemeBinding,
+	type TuiTheme,
+	type TuiThemeName,
+} from "./theme.ts";
 
 const NOTICE_DURATION_MS = 4_000;
 const COMMAND_OVERLAY_MAX_LINES = 24;
@@ -53,6 +57,9 @@ export interface CreateTuiAppOptions {
 	readonly getCurrentModel: () => CommandModelListItem;
 	readonly onResume: (sessionId: string) => Promise<boolean>;
 	readonly onSetModel: (provider: string, model: string) => Promise<boolean>;
+	readonly themes?: readonly TuiTheme[];
+	readonly onSetTheme?: (theme: TuiThemeName) => Promise<void>;
+	readonly onCopySelection?: (text: string) => Promise<boolean>;
 	readonly state?: TuiState;
 }
 
@@ -67,6 +74,8 @@ export interface TuiApp {
 	dismissCommandPalette(): boolean;
 	openSessionPicker(): Promise<boolean>;
 	openModelPicker(): boolean;
+	openThemePicker(): boolean;
+	setTheme(name: string): Promise<boolean>;
 	dismissPicker(): boolean;
 	dismissInlineCompletion(): boolean;
 	acceptInlineCompletion(): boolean;
@@ -74,16 +83,33 @@ export interface TuiApp {
 }
 
 export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
+	const theme = createTuiThemeBinding(options.theme);
+	let activeTheme = options.theme;
+	const themes = options.themes ?? [options.theme];
+	const copySelection = options.onCopySelection;
 	const tui = new TuiAltScreen(options.terminal, true, undefined, {
-		mouse: false,
+		mouse: true,
+		...(copySelection === undefined
+			? {}
+			: {
+					copySelection: async (text: string) => {
+						try {
+							return await copySelection(text);
+						} catch {
+							return false;
+						}
+					},
+				}),
 	});
-	const transcript = new VStack([...options.transcript], { gap: 1 });
+	const initialTranscript = [...options.transcript];
+	const transcript = new VStack(initialTranscript, { gap: 1 });
+	const mountedTranscript = [...initialTranscript];
 	const scrollView = new ScrollView(transcript, {
 		follow: "end",
 		primary: true,
 		scrollbar: "hidden",
 	});
-	const editor = new Editor(tui, options.theme.editor, { paddingX: 1 });
+	const editor = new Editor(tui, theme.editor, { paddingX: 1 });
 	editor.setAutocompleteProvider(
 		createAutocompleteProvider(options.getCompletionCatalog),
 	);
@@ -117,15 +143,17 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 	let streamingBlock: MessageBlock | undefined;
 	let commandOverlay: OverlayHandle | undefined;
 	let selectorOverlay: OverlayHandle | undefined;
-	let selectorKind: "palette" | "session" | "model" | undefined;
+	let selectorKind: "palette" | "session" | "model" | "theme" | undefined;
 	let selectorGeneration = 0;
 	let selectionActive = false;
+	let themePickerOrigin: TuiTheme | undefined;
 	let notice:
 		| { readonly text: string; readonly level: CommandNoticeLevel }
 		| undefined;
 	let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 	const expandedToolCallIds = new Set<string>();
-	const blocksByItem = new WeakMap<object, Component>();
+	let blocksByItem = new WeakMap<object, Component>();
+	const toolBlocksById = new Map<string, ToolBlock>();
 
 	const renderShortcuts = (): void => {
 		const text =
@@ -136,7 +164,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 					? options.shortcuts.running
 					: options.shortcuts.idle;
 		shortcutLine.clear();
-		shortcutLine.addChild(new TruncatedText(options.theme.shortcut(text)));
+		shortcutLine.addChild(new TruncatedText(theme.shortcut(text)));
 	};
 
 	const renderStatus = (): void => {
@@ -144,10 +172,10 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		if (notice !== undefined) {
 			const style =
 				notice.level === "error"
-					? options.theme.error
+					? theme.error
 					: notice.level === "warning"
-						? options.theme.warning
-						: options.theme.muted;
+						? theme.warning
+						: theme.muted;
 			status.addChild(new TruncatedText(style(notice.text)));
 		}
 		if (currentState !== undefined) {
@@ -156,8 +184,8 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 				: "";
 			status.addChild(
 				new TruncatedText(
-					options.theme.muted(
-						`${currentState.model} · ${currentState.cwd} · ${currentState.sessionId} · ${currentState.running ? "running" : currentState.inputMode}${queue}`,
+					theme.muted(
+						`${currentState.model} · ${currentState.cwd} · ${currentState.sessionId} · ${currentState.running ? "running" : currentState.inputMode}${queue}${formatLastUsage(currentState)}`,
 					),
 				),
 			);
@@ -184,6 +212,10 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		) {
 			return false;
 		}
+		if (selectorKind === "theme" && themePickerOrigin !== undefined) {
+			applyVisualTheme(themePickerOrigin);
+			themePickerOrigin = undefined;
+		}
 		selectorGeneration += 1;
 		selectorOverlay?.hide();
 		selectorOverlay = undefined;
@@ -198,7 +230,13 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 	const dismissCommandPalette = (): boolean => dismissSelector("palette");
 	const dismissPicker = (): boolean => dismissSelector("picker");
 
-	const beginSelector = (kind: "palette" | "session" | "model"): number => {
+	const beginSelector = (
+		kind: "palette" | "session" | "model" | "theme",
+	): number => {
+		if (selectorKind === "theme" && themePickerOrigin !== undefined) {
+			applyVisualTheme(themePickerOrigin);
+			themePickerOrigin = undefined;
+		}
 		selectorGeneration += 1;
 		selectorOverlay?.hide();
 		selectorOverlay = undefined;
@@ -259,7 +297,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		const list = new FilterableSelectList(
 			completion.items.map(toSelectItem),
 			12,
-			options.theme,
+			theme,
 		);
 		list.onCancel = () => {
 			dismissCommandPalette();
@@ -313,10 +351,10 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 
 		const style =
 			level === "error"
-				? options.theme.error
+				? theme.error
 				: level === "warning"
-					? options.theme.warning
-					: options.theme.primary;
+					? theme.warning
+					: theme.primary;
 		commandOverlay = tui.showOverlay(
 			new Text(style(boundCommandText(cleanText)), 1, 1),
 			{
@@ -329,11 +367,13 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 	};
 
 	const showPicker = (
-		kind: "session" | "model",
+		kind: "session" | "model" | "theme",
 		generation: number,
 		items: PiAutocompleteItem[],
 		onSelect: (value: string) => Promise<boolean>,
 		selectedIndex = 0,
+		onCancel?: () => void,
+		onSelectionChange?: (value: string) => void,
 	): boolean => {
 		if (
 			generation !== selectorGeneration ||
@@ -348,11 +388,13 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 			return false;
 		}
 
-		const list = new FilterableSelectList(items, 12, options.theme);
+		const list = new FilterableSelectList(items, 12, theme);
 		list.setSelectedIndex(selectedIndex);
 		list.onCancel = () => {
+			onCancel?.();
 			dismissPicker();
 		};
+		list.onSelectionChange = (item) => onSelectionChange?.(item.value);
 		list.onSelect = (item) => {
 			if (selectionActive) {
 				return;
@@ -461,17 +503,97 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		);
 	};
 
+	const applyVisualTheme = (nextTheme: TuiTheme): void => {
+		theme.setTheme(nextTheme);
+		for (const component of mountedTranscript) {
+			component.invalidate?.();
+		}
+		renderStatus();
+		renderShortcuts();
+		tui.invalidate();
+		tui.requestRender();
+	};
+
+	const persistTheme = async (nextTheme: TuiTheme): Promise<boolean> => {
+		try {
+			await options.onSetTheme?.(nextTheme.name);
+			activeTheme = nextTheme;
+			applyVisualTheme(nextTheme);
+			return true;
+		} catch (error) {
+			presentCommand(`Failed to save theme: ${errorMessage(error)}`, "error");
+			return false;
+		}
+	};
+
+	const setTheme = async (name: string): Promise<boolean> => {
+		const nextTheme = themes.find((candidate) => candidate.name === name);
+		if (nextTheme === undefined) {
+			return false;
+		}
+		return persistTheme(nextTheme);
+	};
+
+	const openThemePicker = (): boolean => {
+		if (currentState?.running === true || themes.length === 0) {
+			return false;
+		}
+		dismissInlineCompletion();
+		dismissCommandOverlay();
+		const generation = beginSelector("theme");
+		const originalTheme = activeTheme;
+		themePickerOrigin = originalTheme;
+		const selectedIndex = Math.max(
+			0,
+			themes.findIndex((candidate) => candidate.name === originalTheme.name),
+		);
+		return showPicker(
+			"theme",
+			generation,
+			themes.map((candidate) => ({
+				value: candidate.name,
+				label: `${candidate.name}${candidate.name === originalTheme.name ? " (active)" : ""}`,
+				description: "Interface theme",
+			})),
+			async (value) => {
+				const nextTheme = themes.find((candidate) => candidate.name === value);
+				if (nextTheme === undefined) {
+					return false;
+				}
+				const committed = await persistTheme(nextTheme);
+				if (!committed) {
+					applyVisualTheme(originalTheme);
+				} else {
+					themePickerOrigin = undefined;
+				}
+				return committed;
+			},
+			selectedIndex,
+			undefined,
+			(value) => {
+				const preview = themes.find((candidate) => candidate.name === value);
+				if (preview !== undefined) {
+					applyVisualTheme(preview);
+				}
+			},
+		);
+	};
+
 	const refresh = (state = currentState): void => {
 		if (state === undefined) {
 			tui.requestRender();
 			return;
 		}
-		if (
-			currentSessionId !== undefined &&
-			currentSessionId !== state.sessionId
-		) {
+		const sessionReplaced =
+			currentSessionId !== undefined && currentSessionId !== state.sessionId;
+		if (sessionReplaced) {
 			clearCommandPresentation();
 			expandedToolCallIds.clear();
+			transcript.clear();
+			mountedTranscript.length = 0;
+			blocksByItem = new WeakMap<object, Component>();
+			toolBlocksById.clear();
+			streamingBlock = undefined;
 		}
 		currentState = state;
 		currentSessionId = state.sessionId;
@@ -480,17 +602,28 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 			dismissPicker();
 			dismissInlineCompletion();
 		}
-		transcript.clear();
+		const desired = [...initialTranscript];
 		for (const item of state.items) {
-			let block = blocksByItem.get(item);
-			if (block === undefined) {
-				block = createChatItemBlock(item, options.theme);
+			let block: Component;
+			if (item.role === "tool") {
+				block =
+					toolBlocksById.get(item.toolCallId) ??
+					createChatItemBlock(item, theme);
+				if (!(block instanceof ToolBlock)) {
+					throw new Error(`Invalid tool block for ${item.toolCallId}`);
+				}
+				toolBlocksById.set(item.toolCallId, block);
+				block.update({
+					preview: item.preview,
+					patch: item.patch,
+					isError: item.isError,
+				});
+				block.setExpanded(expandedToolCallIds.has(item.toolCallId));
+			} else {
+				block = blocksByItem.get(item) ?? createChatItemBlock(item, theme);
 				blocksByItem.set(item, block);
 			}
-			if (item.role === "tool" && block instanceof ToolBlock) {
-				block.setExpanded(expandedToolCallIds.has(item.toolCallId));
-			}
-			transcript.addChild(block);
+			desired.push(block);
 		}
 		if (
 			state.assistantBuffer !== undefined &&
@@ -499,10 +632,34 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 			streamingBlock ??= new MessageBlock(
 				"assistant",
 				state.assistantBuffer,
-				options.theme,
+				theme,
 			);
 			streamingBlock.setText(state.assistantBuffer);
-			transcript.addChild(streamingBlock);
+			desired.push(streamingBlock);
+		}
+
+		let stablePrefix = 0;
+		while (
+			stablePrefix < mountedTranscript.length &&
+			stablePrefix < desired.length &&
+			mountedTranscript[stablePrefix] === desired[stablePrefix]
+		) {
+			stablePrefix += 1;
+		}
+		for (
+			let index = mountedTranscript.length - 1;
+			index >= stablePrefix;
+			index -= 1
+		) {
+			const component = mountedTranscript[index];
+			if (component !== undefined) {
+				transcript.removeChild(component);
+			}
+		}
+		mountedTranscript.splice(stablePrefix);
+		for (const component of desired.slice(stablePrefix)) {
+			transcript.addChild(component);
+			mountedTranscript.push(component);
 		}
 
 		renderStatus();
@@ -550,6 +707,8 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		dismissCommandPalette,
 		openSessionPicker,
 		openModelPicker,
+		openThemePicker,
+		setTheme,
 		dismissPicker,
 		dismissInlineCompletion,
 		acceptInlineCompletion,
@@ -562,6 +721,7 @@ class FilterableSelectList implements Component {
 	private filter = "";
 	onSelect?: (item: PiAutocompleteItem) => void;
 	onCancel?: () => void;
+	onSelectionChange?: (item: PiAutocompleteItem) => void;
 
 	constructor(
 		items: PiAutocompleteItem[],
@@ -571,6 +731,7 @@ class FilterableSelectList implements Component {
 		this.list = new SelectList(items, maxVisible, theme.editor.selectList);
 		this.list.onSelect = (item) => this.onSelect?.(item);
 		this.list.onCancel = () => this.onCancel?.();
+		this.list.onSelectionChange = (item) => this.onSelectionChange?.(item);
 	}
 
 	setSelectedIndex(index: number): void {
@@ -613,6 +774,21 @@ class FilterableSelectList implements Component {
 		}
 		this.list.handleInput(data);
 	}
+}
+
+function formatLastUsage(state: TuiState): string {
+	if (state.lastUsage === undefined) {
+		return "";
+	}
+	return ` · last response in ${formatTokenCount(state.lastUsage.inputTokens)} · out ${formatTokenCount(state.lastUsage.outputTokens)}`;
+}
+
+function formatTokenCount(value: number): string {
+	if (value < 1_000) {
+		return String(value);
+	}
+	const formatted = (value / 1_000).toFixed(value < 10_000 ? 1 : 0);
+	return `${formatted.replace(/\.0$/, "")}k`;
 }
 
 function createAutocompleteProvider(
