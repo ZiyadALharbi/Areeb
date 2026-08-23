@@ -787,7 +787,7 @@ function formatTokenCount(value: number): string {
 	if (value < 1_000) {
 		return String(value);
 	}
-	const formatted = (value / 1_000).toFixed(value < 10_000 ? 1 : 0);
+	const formatted = (value / 1_000).toFixed(1);
 	return `${formatted.replace(/\.0$/, "")}k`;
 }
 
