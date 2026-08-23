@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	type CommandContext,
 	type CommandModelListItem,
+	type CommandProviderAuthItem,
 	CommandRegistry,
 	type CommandResourceSummary,
 	type CommandSessionListItem,
@@ -21,6 +22,7 @@ function context(
 	systemPromptChanged = false,
 	sessions: readonly CommandSessionListItem[] | Error = [],
 	models: readonly CommandModelListItem[] = [],
+	providers: readonly CommandProviderAuthItem[] = [],
 ): CommandContext {
 	let name: string | undefined;
 	return {
@@ -32,6 +34,7 @@ function context(
 			return sessions;
 		},
 		listModels: () => models,
+		listAuthProviders: () => providers,
 		getResourceSummary: () => resourceSummary,
 		getContextFiles: () => [...contextFiles],
 		async reloadResources() {
@@ -231,6 +234,7 @@ describe("default slash commands", () => {
 			"resume",
 			"model",
 			"login",
+			"logout",
 			"reload",
 			"name",
 			"copy",
@@ -241,6 +245,66 @@ describe("default slash commands", () => {
 		]);
 		expect(commands.find((entry) => entry.name === "new")?.searchTerms).toEqual(
 			["clear"],
+		);
+	});
+
+	test("returns provider-auth outcomes without performing auth side effects", async () => {
+		const registry = createDefaultCommandRegistry();
+		const providers: readonly CommandProviderAuthItem[] = [
+			{
+				id: "openai-codex",
+				displayName: "ChatGPT Plus/Pro (Codex Subscription)",
+				authType: "oauth",
+				authLabel: "subscription",
+			},
+			{
+				id: "openai",
+				displayName: "OpenAI",
+				authType: "api_key",
+				authLabel: "api key",
+			},
+		];
+		const commandContext = context(
+			["provider-auth"],
+			undefined,
+			[],
+			false,
+			[],
+			[],
+			providers,
+		);
+
+		expect(await registry.dispatch("/login", commandContext)).toEqual({
+			handled: true,
+			outcome: { kind: "login-picker" },
+		});
+		expect(
+			await registry.dispatch("/login openai-codex", commandContext),
+		).toEqual({
+			handled: true,
+			outcome: {
+				kind: "login",
+				provider: "openai-codex",
+				authType: "oauth",
+			},
+		});
+		expect(await registry.dispatch("/logout", commandContext)).toEqual({
+			handled: true,
+			outcome: { kind: "logout-picker" },
+		});
+		expect(await registry.dispatch("/logout openai", commandContext)).toEqual({
+			handled: true,
+			outcome: { kind: "logout", provider: "openai" },
+		});
+		expect(await registry.dispatch("/login anthropic", commandContext)).toEqual(
+			{
+				handled: true,
+				outcome: {
+					kind: "message",
+					level: "error",
+					text: "Unknown provider: anthropic",
+				},
+			},
 		);
 	});
 

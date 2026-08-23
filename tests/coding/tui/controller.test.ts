@@ -432,14 +432,16 @@ describe("TuiController", () => {
 		expect(await loading).toEqual({ kind: "none" });
 	});
 
-	test("stages model changes and preserves the active bundle on load or commit failure", async () => {
+	test("commits model changes before saving the global default", async () => {
 		const { manager, initial } = await createFixture();
 		const models = [
 			{ provider: "fake", model: "model-a" },
 			{ provider: "other", model: "org/model-b" },
 		];
 		let commitFailure: Error | undefined;
+		let saveFailure: Error | undefined;
 		let commits = 0;
+		const savedSelections: SessionModel[] = [];
 		const controller = new TuiController({
 			session: initial,
 			manager,
@@ -470,6 +472,12 @@ describe("TuiController", () => {
 					},
 				};
 			},
+			async saveDefaultSelection(selection) {
+				if (saveFailure !== undefined) {
+					throw saveFailure;
+				}
+				savedSelections.push({ ...selection });
+			},
 		});
 
 		expect(await controller.setModel("fake", "model-a")).toMatchObject({
@@ -477,6 +485,7 @@ describe("TuiController", () => {
 			text: "fake/model-a is already active",
 		});
 		expect(commits).toBe(0);
+		expect(savedSelections).toEqual([{ provider: "fake", model: "model-a" }]);
 		const original = {
 			session: controller.session,
 			state: controller.state,
@@ -491,6 +500,7 @@ describe("TuiController", () => {
 		expect(controller.session).toBe(original.session);
 		expect(controller.state).toBe(original.state);
 		expect(controller.adapter).toBe(original.adapter);
+		expect(savedSelections).toHaveLength(1);
 
 		commitFailure = undefined;
 		expect(await controller.setModel("other", "org/model-b")).toEqual({
@@ -503,6 +513,21 @@ describe("TuiController", () => {
 		expect(controller.state.items).toEqual([
 			{ role: "user", text: "replacement" },
 		]);
+		expect(savedSelections).toEqual([
+			{ provider: "fake", model: "model-a" },
+			{ provider: "other", model: "org/model-b" },
+		]);
+
+		saveFailure = new Error("settings unavailable");
+		expect(await controller.setModel("fake", "model-a")).toEqual({
+			kind: "message",
+			level: "warning",
+			text: "fake/model-a is active, but Areeb could not save it as the global default: settings unavailable",
+		});
+		expect(controller).toMatchObject({
+			provider: "fake",
+			model: "model-a",
+		});
 	});
 
 	test("blocks model changes while running and delegates queue operations", async () => {

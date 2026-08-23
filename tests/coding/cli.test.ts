@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { AgentMessage } from "../../src/agent/types.ts";
 import { FakeProvider } from "../../src/ai/fake_provider.ts";
 import type { OpenAICompatibleConfig } from "../../src/ai/openai_compatible_provider.ts";
+import { FileCredentialStore } from "../../src/coding/auth-store.ts";
 import { parseCli, runCli } from "../../src/coding/cli.ts";
 import type { PrintModeSession } from "../../src/coding/modes/types.ts";
 import { setupOpenAICompatibleProvider } from "../../src/coding/provider-config.ts";
@@ -12,6 +13,14 @@ import { CodingSessionManager } from "../../src/coding/session-manager.ts";
 import { textScript } from "./modes/helpers.ts";
 
 const RESUME_ID = "00000000-0000-4000-8000-000000000001";
+
+function jwt(accountId: string): string {
+	const encode = (value: unknown): string =>
+		Buffer.from(JSON.stringify(value)).toString("base64url");
+	return `${encode({ alg: "none" })}.${encode({
+		"https://api.openai.com/auth": { chatgpt_account_id: accountId },
+	})}.signature`;
+}
 
 class BufferOutput {
 	value = "";
@@ -313,6 +322,91 @@ describe("CLI interactive mode", () => {
 		expect(providerCreated).toBe(false);
 	});
 
+	test("starts interactive mode without credentials so login remains reachable", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "areeb-cli-first-run-"));
+		try {
+			let providerCreated = false;
+			expect(
+				await runCli([], {
+					cwd: join(directory, "project"),
+					userRoot: join(directory, "user"),
+					agentsRoot: join(directory, "agents"),
+					env: {},
+					stdin: { isTTY: true },
+					stdout: new BufferOutput(true),
+					stderr: new BufferOutput(),
+					createProvider() {
+						providerCreated = true;
+						return new FakeProvider([]);
+					},
+					async runInteractive(controller) {
+						expect(controller.unavailableReason).toContain(
+							"No credentials for openai",
+						);
+						expect(
+							controller.completionCatalog.availableCapabilities,
+						).toContain("provider-auth");
+						expect(await controller.handleCommand("/login")).toEqual({
+							handled: true,
+							outcome: { kind: "login-picker" },
+						});
+						return 0;
+					},
+				}),
+			).toBe(0);
+			expect(providerCreated).toBe(false);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	test("uses global Codex credentials when starting in another directory", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "areeb-cli-global-auth-"));
+		try {
+			const userRoot = join(directory, "user");
+			await new FileCredentialStore({ userRoot }).modify(
+				"openai-codex",
+				() => ({
+					type: "oauth",
+					access: jwt("account"),
+					refresh: "refresh",
+					expires: Date.now() + 60_000,
+				}),
+			);
+
+			let openAiCreated = false;
+			expect(
+				await runCli([], {
+					cwd: join(directory, "unrelated-project"),
+					userRoot,
+					agentsRoot: join(directory, "agents"),
+					env: {},
+					stdin: { isTTY: true },
+					stdout: new BufferOutput(true),
+					stderr: new BufferOutput(),
+					createProvider() {
+						openAiCreated = true;
+						return new FakeProvider([]);
+					},
+					createCodexProvider() {
+						return new FakeProvider([], { providerId: "openai-codex" });
+					},
+					async runInteractive(controller) {
+						expect(controller).toMatchObject({
+							provider: "openai-codex",
+							model: "gpt-5.6-sol",
+						});
+						expect(controller.unavailableReason).toBeUndefined();
+						return 0;
+					},
+				}),
+			).toBe(0);
+			expect(openAiCreated).toBe(false);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	test("dispatches sibling runners and propagates interactive failures", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "areeb-cli-interactive-"));
 		try {
@@ -363,9 +457,10 @@ describe("CLI interactive mode", () => {
 						expect(controller.metadata.cwd).toBe(storedCwd);
 						expect(controller.model).toBe("stored-model");
 						expect(controller.messages).toEqual([]);
-						expect(controller.completionCatalog.models).toMatchObject([
-							{ provider: "openai", model: "stored-model" },
-						]);
+						expect(controller.completionCatalog.models).toContainEqual({
+							provider: "openai",
+							model: "stored-model",
+						});
 						expect(await controller.handleCommand("/new")).toMatchObject({
 							outcome: { kind: "message", level: "warning" },
 						});
@@ -455,10 +550,14 @@ describe("CLI interactive mode", () => {
 						return new FakeProvider([], { providerId: config.providerId });
 					},
 					async runInteractive(controller) {
-						expect(controller.completionCatalog.models).toMatchObject([
-							{ provider: "local", model: "org/model-b" },
-							{ provider: "openai", model: "model-a" },
-						]);
+						expect(controller.completionCatalog.models).toContainEqual({
+							provider: "local",
+							model: "org/model-b",
+						});
+						expect(controller.completionCatalog.models).toContainEqual({
+							provider: "openai",
+							model: "model-a",
+						});
 						expect(await controller.setModel("local", "org/model-b")).toEqual({
 							kind: "none",
 						});
@@ -481,6 +580,12 @@ describe("CLI interactive mode", () => {
 			expect(record?.model).toEqual({
 				provider: "local",
 				model: "org/model-b",
+			});
+			expect(
+				JSON.parse(await readFile(join(userRoot, "providers.json"), "utf8")),
+			).toMatchObject({
+				default_provider: "local",
+				default_model: "org/model-b",
 			});
 		} finally {
 			await rm(directory, { recursive: true, force: true });

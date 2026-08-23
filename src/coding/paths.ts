@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 
 export interface AreebPaths {
 	readonly userRoot: string;
+	readonly userAuth: string;
 	readonly userProviders: string;
 	readonly userTuiConfig: string;
 	readonly userLastCopy: string;
@@ -39,6 +40,7 @@ export function areebPaths(options: AreebPathOptions = {}): AreebPaths {
 
 	return Object.freeze({
 		userRoot,
+		userAuth: join(userRoot, "auth.json"),
 		userProviders: join(userRoot, "providers.json"),
 		userTuiConfig: join(userRoot, "tui.json"),
 		userLastCopy: join(userRoot, "last-copy.txt"),

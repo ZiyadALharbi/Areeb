@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FakeProvider } from "../../src/ai/fake_provider.ts";
@@ -11,6 +11,7 @@ import {
 	loadProviderSettings,
 	parseProviderSettings,
 	resolveProviderSelection,
+	saveDefaultProviderModel,
 	setupOpenAICompatibleProvider,
 	usableFavoriteModels,
 } from "../../src/coding/provider-config.ts";
@@ -277,5 +278,45 @@ describe("provider settings persistence", () => {
 			timeoutSeconds: 120,
 		});
 		expect(updated.defaultProvider).toBe("local");
+		expect(updated.defaultModel).toBe("llama");
+	});
+
+	test("persists a credential-backed default without changing provider setup", async () => {
+		const userRoot = join(await createTempDirectory(), "user");
+		await setupOpenAICompatibleProvider({
+			userRoot,
+			env: {},
+			provider: "local",
+			baseUrl: "http://localhost:11434/v1",
+			models: ["qwen"],
+			defaultModel: "qwen",
+		});
+		const path = join(userRoot, "providers.json");
+		const document = JSON.parse(await readFile(path, "utf8")) as Record<
+			string,
+			unknown
+		>;
+		document.favorite_models = [{ provider: "local", model: "qwen" }];
+		await writeFile(path, `${JSON.stringify(document)}\n`, "utf8");
+
+		const settings = await saveDefaultProviderModel(
+			{ provider: "openai-codex", model: "gpt-5.6-terra" },
+			{ userRoot, env: {} },
+		);
+
+		expect(settings).toMatchObject({
+			defaultProvider: "openai-codex",
+			defaultModel: "gpt-5.6-terra",
+			favoriteModels: [{ provider: "local", model: "qwen" }],
+		});
+		expect(settings.providers.local?.models).toEqual(["qwen"]);
+		expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({
+			default_provider: "openai-codex",
+			default_model: "gpt-5.6-terra",
+			providers: {
+				local: { default_model: "qwen" },
+			},
+			favorite_models: [{ provider: "local", model: "qwen" }],
+		});
 	});
 });

@@ -1,5 +1,6 @@
 import { assertUuid } from "../agent/session/session.ts";
 import type { SessionModel } from "../agent/session/types.ts";
+import type { AuthType } from "../ai/auth.ts";
 import type { ReasoningLevel } from "../ai/types.ts";
 import type { ResourceDiagnostic } from "./resources.ts";
 
@@ -46,6 +47,13 @@ export interface CommandModelListItem {
 	readonly model: string;
 }
 
+export interface CommandProviderAuthItem {
+	readonly id: string;
+	readonly displayName: string;
+	readonly authType: AuthType;
+	readonly authLabel: string;
+}
+
 export interface CommandHotkey {
 	readonly keys: string;
 	readonly description: string;
@@ -61,6 +69,7 @@ export interface CommandContext {
 	readonly hasCapability: (capability: CommandCapability) => boolean;
 	readonly listSessions: () => Promise<readonly CommandSessionListItem[]>;
 	readonly listModels: () => readonly CommandModelListItem[];
+	readonly listAuthProviders?: () => readonly CommandProviderAuthItem[];
 	readonly getSessionInfo: () => Promise<CommandSessionInfo>;
 	readonly getResourceSummary: () => CommandResourceSummary;
 	readonly getContextFiles: () => readonly string[];
@@ -82,6 +91,14 @@ export type CommandOutcome =
 	| { readonly kind: "resume-picker" }
 	| { readonly kind: "resume"; readonly sessionId: string }
 	| { readonly kind: "model-picker" }
+	| { readonly kind: "login-picker" }
+	| {
+			readonly kind: "login";
+			readonly provider: string;
+			readonly authType: AuthType;
+	  }
+	| { readonly kind: "logout-picker" }
+	| { readonly kind: "logout"; readonly provider: string }
 	| { readonly kind: "theme-picker" }
 	| { readonly kind: "set-theme"; readonly theme: string }
 	| { readonly kind: "copy-last-assistant" }
@@ -388,9 +405,55 @@ export function createDefaultCommandRegistry(): CommandRegistry {
 		name: "login",
 		description: "Add or refresh a provider login",
 		usage: "/login [provider]",
-		// Authentication is deferred to a provider credential service so commands do
-		// not perform provider-specific or partially persisted login flows.
 		requirements: ["provider-auth"],
+		async handler(context, argumentsText) {
+			if (argumentsText.length === 0) {
+				return { kind: "login-picker" };
+			}
+			if (/\s/.test(argumentsText)) {
+				return usageError("/login [provider]");
+			}
+			const provider = context
+				.listAuthProviders?.()
+				.find((entry) => entry.id === argumentsText);
+			if (provider === undefined) {
+				return {
+					kind: "message",
+					level: "error",
+					text: `Unknown provider: ${argumentsText}`,
+				};
+			}
+			return {
+				kind: "login",
+				provider: provider.id,
+				authType: provider.authType,
+			};
+		},
+	});
+	registry.register({
+		name: "logout",
+		description: "Remove a saved provider login",
+		usage: "/logout [provider]",
+		requirements: ["provider-auth"],
+		async handler(context, argumentsText) {
+			if (argumentsText.length === 0) {
+				return { kind: "logout-picker" };
+			}
+			if (/\s/.test(argumentsText)) {
+				return usageError("/logout [provider]");
+			}
+			const provider = context
+				.listAuthProviders?.()
+				.find((entry) => entry.id === argumentsText);
+			if (provider === undefined) {
+				return {
+					kind: "message",
+					level: "error",
+					text: `Unknown provider: ${argumentsText}`,
+				};
+			}
+			return { kind: "logout", provider: provider.id };
+		},
 	});
 	registry.register({
 		name: "reload",
