@@ -141,6 +141,21 @@ describe("TUI transcript blocks", () => {
 		expect(expanded.every((line) => visibleWidth(line) <= 24)).toBe(true);
 	});
 
+	test("updates a mounted tool block in place", () => {
+		const tool = new ToolBlock("read", theme, {
+			expanded: true,
+			preview: "old preview",
+		});
+
+		expect(tool.render(40).map(stripTerminalSequences)).toContain(
+			"   old preview",
+		);
+		tool.update({ preview: "new preview", isError: true });
+		const rendered = tool.render(40);
+		expect(rendered.map(stripTerminalSequences)).toContain("   new preview");
+		expect(rendered[0]).toContain("38;2;247;118;142");
+	});
+
 	test("prefers a literal edit patch and uses the error accent", () => {
 		const tool = new ToolBlock("edit", theme, {
 			expanded: true,
@@ -157,6 +172,40 @@ describe("TUI transcript blocks", () => {
 			"   +new",
 		]);
 		expect(rendered[0]).toContain("38;2;247;118;142");
+	});
+
+	test("styles every unified-diff category before wrapping", () => {
+		const tool = new ToolBlock("edit", theme, {
+			expanded: true,
+			patch: [
+				"diff --git a/file b/file",
+				"index 111..222 100644",
+				"--- a/file",
+				"+++ b/file",
+				"@@ -1 +1 @@",
+				" context",
+				"-removed",
+				"+added and wrapped across the available width",
+				"\\ No newline at end of file",
+			].join("\n"),
+		});
+		const rendered = tool.render(24);
+		const plain = rendered.map(stripTerminalSequences);
+		const styledLine = (text: string): string => {
+			const index = plain.findIndex((line) => line.includes(text));
+			return rendered[index] ?? "";
+		};
+
+		expect(plain).toContain("   --- a/file");
+		expect(plain).toContain("   +++ b/file");
+		expect(styledLine("diff --git")).toContain("38;2;120;120;120");
+		expect(styledLine("@@ -1")).toContain("38;2;122;162;247");
+		expect(styledLine("context")).toContain("38;2;169;177;214");
+		expect(styledLine("removed")).toContain("38;2;247;118;142");
+		const addedIndex = plain.findIndex((line) => line.includes("+added"));
+		expect(addedIndex).toBeGreaterThan(0);
+		expect(rendered[addedIndex]).toContain("38;2;158;206;106");
+		expect(rendered[addedIndex + 1]).toContain("38;2;158;206;106");
 	});
 
 	test("strips injected terminal styling and adds no labels, boxes, or backgrounds", () => {

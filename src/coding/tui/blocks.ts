@@ -123,17 +123,29 @@ export interface ToolBlockOptions {
 
 export class ToolBlock implements Component {
 	private expanded: boolean;
+	private preview?: string;
+	private patch?: string;
+	private isError?: boolean;
 
 	constructor(
 		private readonly toolName: string,
 		private readonly theme: TuiTheme,
-		private readonly options: ToolBlockOptions = {},
+		options: ToolBlockOptions = {},
 	) {
 		this.expanded = options.expanded ?? false;
+		this.preview = options.preview;
+		this.patch = options.patch;
+		this.isError = options.isError;
 	}
 
 	setExpanded(expanded: boolean): void {
 		this.expanded = expanded;
+	}
+
+	update(options: ToolBlockOptions): void {
+		this.preview = options.preview;
+		this.patch = options.patch;
+		this.isError = options.isError;
 	}
 
 	invalidate(): void {}
@@ -144,7 +156,7 @@ export class ToolBlock implements Component {
 			return [];
 		}
 
-		const accent = this.options.isError ? this.theme.error : this.theme.tool;
+		const accent = this.isError ? this.theme.error : this.theme.tool;
 		const glyph = accent(TOOL_GLYPH);
 		const cleanName =
 			stripTerminalSequences(this.toolName).split(/\r\n|\r|\n/, 1)[0] ?? "";
@@ -159,21 +171,25 @@ export class ToolBlock implements Component {
 		const header = name
 			? `${glyph}${" ".repeat(inset)}${this.theme.primary(name)}`
 			: glyph;
-		const detail = this.options.patch ?? this.options.preview;
+		const detail = this.patch ?? this.preview;
 		if (!this.expanded || !detail || contentWidth <= 0) {
 			return [header];
 		}
 
 		const cleanDetail = stripTerminalSequences(detail);
 		const detailLines = limitPhysicalLines(
-			wrapLiteralText(cleanDetail, contentWidth),
+			this.patch === undefined
+				? wrapLiteralText(cleanDetail, contentWidth).map((text) => ({ text }))
+				: wrapDiffText(cleanDetail, contentWidth, this.theme),
 			contentWidth,
 		);
 		const prefix = " ".repeat(visibleWidth(TOOL_GLYPH) + inset);
 		return [
 			header,
 			...detailLines.map((line) =>
-				line ? `${prefix}${this.theme.primary(line)}` : "",
+				line.text
+					? `${prefix}${line.style?.(line.text) ?? this.theme.primary(line.text)}`
+					: "",
 			),
 		];
 	}
@@ -207,7 +223,50 @@ function trimTerminalLineEnd(line: string): string {
 	return truncateToWidth(line, width, "");
 }
 
-function limitPhysicalLines(lines: string[], width: number): string[] {
+interface StyledLine {
+	readonly text: string;
+	readonly style?: TuiTheme["primary"];
+}
+
+function wrapDiffText(
+	text: string,
+	width: number,
+	theme: TuiTheme,
+): StyledLine[] {
+	const lines: StyledLine[] = [];
+	for (const logicalLine of text.split(/\r\n|\r|\n/)) {
+		const style = diffStyle(logicalLine, theme);
+		const wrapped = wrapLiteralText(logicalLine, width);
+		lines.push(...wrapped.map((fragment) => ({ text: fragment, style })));
+	}
+	return lines;
+}
+
+function diffStyle(line: string, theme: TuiTheme): TuiTheme["primary"] {
+	if (line.startsWith("@@")) {
+		return theme.diffHunk;
+	}
+	if (
+		line.startsWith("---") ||
+		line.startsWith("+++") ||
+		line.startsWith("diff ") ||
+		line.startsWith("index ") ||
+		line.startsWith("\\ No newline") ||
+		line.includes("output omitted") ||
+		line.includes("lines omitted")
+	) {
+		return theme.diffMeta;
+	}
+	if (line.startsWith("+")) {
+		return theme.diffAdded;
+	}
+	if (line.startsWith("-")) {
+		return theme.diffRemoved;
+	}
+	return line.startsWith(" ") ? theme.diffContext : theme.primary;
+}
+
+function limitPhysicalLines(lines: StyledLine[], width: number): StyledLine[] {
 	if (lines.length <= TOOL_PREVIEW_MAX_LINES) {
 		return lines;
 	}
@@ -215,11 +274,13 @@ function limitPhysicalLines(lines: string[], width: number): string[] {
 	const tailCount = TOOL_PREVIEW_MAX_LINES - headCount - 1;
 	return [
 		...lines.slice(0, headCount),
-		truncateToWidth(
-			`… ${lines.length - headCount - tailCount} lines omitted …`,
-			width,
-			"",
-		),
+		{
+			text: truncateToWidth(
+				`… ${lines.length - headCount - tailCount} lines omitted …`,
+				width,
+				"",
+			),
+		},
 		...lines.slice(-tailCount),
 	];
 }

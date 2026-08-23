@@ -426,6 +426,9 @@ async function runSessionCommand(
 			models: usableProviderModels(settings, env),
 			prepareModelSession,
 		}),
+		{
+			...(runtime.userRoot === undefined ? {} : { userRoot: runtime.userRoot }),
+		},
 	);
 }
 

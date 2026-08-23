@@ -1,4 +1,5 @@
 import type { AgentEndReason } from "../../agent/types.ts";
+import type { Usage } from "../../ai/types.ts";
 
 export type ChatItem =
 	| { readonly role: "user"; readonly text: string }
@@ -25,6 +26,7 @@ export interface TuiState {
 	running: boolean;
 	inputMode: "idle" | "locked" | "running";
 	queuedCount: number;
+	lastUsage?: Usage;
 	terminalReason?: AgentEndReason;
 }
 

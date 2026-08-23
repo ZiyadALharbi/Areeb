@@ -53,6 +53,7 @@ export interface CommandHotkey {
 
 export interface CommandTuiInfo {
 	readonly themeName: string;
+	readonly themeNames: readonly string[];
 	readonly hotkeys: readonly CommandHotkey[];
 }
 
@@ -81,6 +82,9 @@ export type CommandOutcome =
 	| { readonly kind: "resume-picker" }
 	| { readonly kind: "resume"; readonly sessionId: string }
 	| { readonly kind: "model-picker" }
+	| { readonly kind: "theme-picker" }
+	| { readonly kind: "set-theme"; readonly theme: string }
+	| { readonly kind: "copy-last-assistant" }
 	| {
 			readonly kind: "set-model";
 			readonly provider: string;
@@ -432,19 +436,36 @@ export function createDefaultCommandRegistry(): CommandRegistry {
 		},
 	});
 	registry.register({
+		name: "copy",
+		description: "Copy the most recent assistant response",
+		usage: "/copy",
+		requirements: ["tui"],
+		async handler(_context, argumentsText) {
+			return argumentsText.length > 0
+				? usageError("/copy")
+				: { kind: "copy-last-assistant" };
+		},
+	});
+	registry.register({
 		name: "theme",
-		description: "Show the active interface theme",
-		usage: "/theme",
+		description: "Preview or switch the interface theme",
+		usage: "/theme [name]",
 		requirements: ["tui"],
 		async handler(context, argumentsText) {
-			if (argumentsText.length > 0) {
-				return usageError("/theme");
+			if (argumentsText.length === 0) {
+				return { kind: "theme-picker" };
 			}
-			return {
-				kind: "message",
-				level: "info",
-				text: `Active theme: ${context.getTuiInfo().themeName}`,
-			};
+			if (/\s/.test(argumentsText)) {
+				return usageError("/theme [name]");
+			}
+			if (!context.getTuiInfo().themeNames.includes(argumentsText)) {
+				return {
+					kind: "message",
+					level: "error",
+					text: `Unknown theme: ${argumentsText}`,
+				};
+			}
+			return { kind: "set-theme", theme: argumentsText };
 		},
 	});
 	return registry;

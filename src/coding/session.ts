@@ -81,6 +81,7 @@ export interface CodingSessionModelService {
 
 export interface CodingSessionTuiService {
 	getThemeName(): string;
+	getThemeNames(): readonly string[];
 	getHotkeys(): readonly CommandHotkey[];
 }
 
@@ -629,6 +630,7 @@ export class CodingSession<
 				}
 				return {
 					themeName: tui.getThemeName(),
+					themeNames: [...tui.getThemeNames()],
 					hotkeys: tui.getHotkeys().map((hotkey) => ({ ...hotkey })),
 				};
 			},

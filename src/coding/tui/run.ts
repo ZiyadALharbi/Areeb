@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { chmod, mkdir, open, rename, unlink } from "node:fs/promises";
+import { dirname } from "node:path";
 import {
 	Key,
 	matchesKey,
@@ -11,6 +14,8 @@ import type {
 	QueuedMessages,
 } from "../../agent/types.ts";
 import type { CommandHotkey, CommandSessionListItem } from "../commands.ts";
+import { areebPaths } from "../paths.ts";
+import type { ResourceDiagnostic } from "../resources.ts";
 import type { CodingSessionTuiService } from "../session.ts";
 import type { TuiEventAdapter } from "./adapter.ts";
 import {
@@ -20,9 +25,19 @@ import {
 	type TuiShortcutSet,
 } from "./app.ts";
 import type { CompletionCatalog } from "./autocomplete.ts";
+import {
+	type LoadedTuiConfig,
+	loadTuiConfig,
+	saveTuiConfig,
+} from "./config.ts";
 import type { TuiCommandResult, TuiTransitionOutcome } from "./controller.ts";
 import type { TuiState } from "./state.ts";
-import { AREEB_DARK_THEME, type TuiTheme } from "./theme.ts";
+import {
+	AREEB_DARK_THEME,
+	getTuiTheme,
+	listTuiThemes,
+	type TuiTheme,
+} from "./theme.ts";
 
 export interface InteractiveController {
 	readonly messages: readonly AgentMessage[];
@@ -33,6 +48,7 @@ export interface InteractiveController {
 	readonly adapter: TuiEventAdapter;
 	readonly isRunning: boolean;
 	readonly queuedMessages: QueuedMessages;
+	readonly resourceDiagnostics: readonly ResourceDiagnostic[];
 	readonly completionCatalog: CompletionCatalog;
 	prompt(input: string): AgentRunStream;
 	handleCommand(
@@ -84,6 +100,8 @@ export const INTERACTIVE_HOTKEYS: readonly InteractiveHotkey[] = Object.freeze([
 		description: "Toggle tool previews",
 		footerLabel: "tools",
 	},
+	{ keys: "/theme", description: "Preview or switch the interface theme" },
+	{ keys: "/copy", description: "Copy the latest assistant response" },
 ]);
 
 export const INTERACTIVE_SHORTCUTS: TuiShortcutSet = Object.freeze({
@@ -95,7 +113,15 @@ export const INTERACTIVE_SHORTCUTS: TuiShortcutSet = Object.freeze({
 export interface InteractiveRunOptions {
 	readonly terminal?: Terminal;
 	readonly theme?: TuiTheme;
+	readonly userRoot?: string;
 	readonly createApp?: (options: CreateTuiAppOptions) => TuiApp;
+}
+
+export interface CopyDeliveryResult {
+	readonly osc52Sent: boolean;
+	readonly backupSaved: boolean;
+	readonly backupPath: string;
+	readonly error?: string;
 }
 
 /** Run the controller's active session until the user quits the fullscreen TUI. */
@@ -103,15 +129,36 @@ export async function runInteractiveMode(
 	controller: InteractiveController,
 	options: InteractiveRunOptions = {},
 ): Promise<number> {
-	const theme = options.theme ?? AREEB_DARK_THEME;
+	const paths = areebPaths({
+		...(options.userRoot === undefined ? {} : { userRoot: options.userRoot }),
+	});
+	const loadedConfig: LoadedTuiConfig =
+		options.theme === undefined
+			? await loadTuiConfig(paths.userTuiConfig)
+			: { config: { theme: options.theme.name } };
+	const initialTheme =
+		options.theme ?? getTuiTheme(loadedConfig.config.theme) ?? AREEB_DARK_THEME;
+	let activeThemeName = initialTheme.name;
+	const terminal = options.terminal ?? new ProcessTerminal();
 	const tuiService: CodingSessionTuiService = {
-		getThemeName: () => theme.name,
+		getThemeName: () => activeThemeName,
+		getThemeNames: () => listTuiThemes().map((theme) => theme.name),
 		getHotkeys: () => INTERACTIVE_HOTKEYS,
 	};
 	let app!: TuiApp;
 	app = (options.createApp ?? createTuiApp)({
-		terminal: options.terminal ?? new ProcessTerminal(),
-		theme,
+		terminal,
+		theme: initialTheme,
+		themes: listTuiThemes(),
+		onSetTheme: async (theme) => {
+			await saveTuiConfig(paths.userTuiConfig, { theme });
+			activeThemeName = theme;
+		},
+		onCopySelection: async (text) => {
+			const result = await copyTuiText(terminal, paths.userLastCopy, text);
+			presentCopyResult(app, result);
+			return result.backupSaved;
+		},
 		transcript: [],
 		shortcuts: INTERACTIVE_SHORTCUTS,
 		getCompletionCatalog: () => controller.completionCatalog,
@@ -135,6 +182,13 @@ export async function runInteractiveMode(
 			),
 		state: controller.state,
 	});
+	const startupWarning = formatStartupWarning(
+		loadedConfig.warning,
+		controller.resourceDiagnostics,
+	);
+	if (startupWarning !== undefined) {
+		app.presentCommand(startupWarning, "warning");
+	}
 
 	let submissionActive = false;
 	let abortRequested = false;
@@ -219,7 +273,17 @@ export async function runInteractiveMode(
 		try {
 			const command = await controller.handleCommand(input, tuiService);
 			if (command.handled) {
-				await applyCommandResult(command, input, app, requestExit);
+				await applyCommandResult(command, input, app, requestExit, async () => {
+					const text = findLastAssistantText(controller.state);
+					if (text === undefined) {
+						app.presentCommand("No assistant response to copy", "error");
+						return;
+					}
+					presentCopyResult(
+						app,
+						await copyTuiText(terminal, paths.userLastCopy, text),
+					);
+				});
 				app.refresh(controller.state);
 			} else if (!exitRequested) {
 				await consumePrompt(controller, input, controller.adapter, app);
@@ -392,6 +456,7 @@ async function applyCommandResult(
 	input: string,
 	app: TuiApp,
 	requestExit: () => void,
+	copyLastAssistant: () => Promise<void>,
 ): Promise<void> {
 	switch (result.outcome.kind) {
 		case "message":
@@ -413,6 +478,17 @@ async function applyCommandResult(
 			return;
 		case "model-picker":
 			app.openModelPicker();
+			return;
+		case "theme-picker":
+			app.openThemePicker();
+			return;
+		case "set-theme":
+			if (await app.setTheme(result.outcome.theme)) {
+				app.presentCommand(`Theme set to ${result.outcome.theme}`, "info");
+			}
+			return;
+		case "copy-last-assistant":
+			await copyLastAssistant();
 			return;
 		case "none":
 			return;
@@ -441,8 +517,117 @@ function applyPickerOutcome(
 		case "quit":
 		case "resume-picker":
 		case "model-picker":
+		case "theme-picker":
+		case "set-theme":
+		case "copy-last-assistant":
 			return false;
 	}
+}
+
+export async function copyTuiText(
+	terminal: Terminal,
+	backupPath: string,
+	text: string,
+): Promise<CopyDeliveryResult> {
+	let osc52Sent = false;
+	let oscError: unknown;
+	try {
+		terminal.write(
+			`\u001b]52;c;${Buffer.from(text, "utf8").toString("base64")}\u0007`,
+		);
+		osc52Sent = true;
+	} catch (error) {
+		oscError = error;
+	}
+
+	try {
+		await writePrivateTextFile(backupPath, text);
+		return {
+			osc52Sent,
+			backupSaved: true,
+			backupPath,
+			...(oscError === undefined ? {} : { error: errorMessage(oscError) }),
+		};
+	} catch (error) {
+		return {
+			osc52Sent,
+			backupSaved: false,
+			backupPath,
+			error: errorMessage(error),
+		};
+	}
+}
+
+function presentCopyResult(app: TuiApp, result: CopyDeliveryResult): void {
+	if (result.backupSaved && result.osc52Sent) {
+		app.presentCommand(
+			`Copy sent via OSC 52 and saved to ${result.backupPath}`,
+			"info",
+		);
+		return;
+	}
+	if (result.backupSaved) {
+		app.presentCommand(
+			`Clipboard send failed; copy saved to ${result.backupPath}`,
+			"warning",
+		);
+		return;
+	}
+	app.presentCommand(
+		`${result.osc52Sent ? "OSC 52 sent, but copy recovery failed" : "Copy failed"}: could not save ${result.backupPath}${result.error === undefined ? "" : ` (${result.error})`}`,
+		"error",
+	);
+}
+
+async function writePrivateTextFile(path: string, text: string): Promise<void> {
+	const directory = dirname(path);
+	await mkdir(directory, { recursive: true, mode: 0o700 });
+	const temporaryPath = `${path}.tmp-${process.pid}-${randomUUID()}`;
+	let temporaryCreated = false;
+	try {
+		const file = await open(temporaryPath, "wx", 0o600);
+		temporaryCreated = true;
+		try {
+			await file.writeFile(text, "utf8");
+			await file.sync();
+		} finally {
+			await file.close();
+		}
+		await rename(temporaryPath, path);
+		temporaryCreated = false;
+		await chmod(path, 0o600);
+	} finally {
+		if (temporaryCreated) {
+			await unlink(temporaryPath).catch(() => undefined);
+		}
+	}
+}
+
+function findLastAssistantText(state: TuiState): string | undefined {
+	for (let index = state.items.length - 1; index >= 0; index -= 1) {
+		const item = state.items[index];
+		if (item?.role === "assistant" && item.text.trim().length > 0) {
+			return item.text;
+		}
+	}
+	return undefined;
+}
+
+function formatStartupWarning(
+	configWarning: string | undefined,
+	diagnostics: readonly ResourceDiagnostic[],
+): string | undefined {
+	const warningCount = diagnostics.filter(
+		(diagnostic) => diagnostic.severity === "warning",
+	).length;
+	const resourceWarning =
+		warningCount === 0
+			? undefined
+			: `${warningCount} resource warning${warningCount === 1 ? "" : "s"}; run /resources for details`;
+	const parts = [configWarning, resourceWarning].filter(
+		(value): value is string => value !== undefined,
+	);
+	return parts.length === 0 ? undefined : parts.join(" · ");
 }
 
 function isExplicitCtrlM(data: string): boolean {

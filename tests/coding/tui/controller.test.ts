@@ -45,6 +45,7 @@ class StubSession implements TuiControllerSession {
 	readonly commands = [];
 	readonly skills: { readonly name: string }[] = [];
 	readonly promptTemplates: { readonly name: string }[] = [];
+	readonly resourceDiagnostics = [];
 	abortCount = 0;
 	isRunning = false;
 	lastServices: CodingSessionHostServices | undefined;
@@ -226,6 +227,7 @@ describe("TuiController", () => {
 		initial.promptTemplates.push({ name: "explain" });
 		const tui = {
 			getThemeName: () => "areeb-dark",
+			getThemeNames: () => ["areeb-dark", "areeb-light"],
 			getHotkeys: () => [{ keys: "Ctrl+P", description: "Commands" }],
 		};
 

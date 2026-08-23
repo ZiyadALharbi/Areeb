@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
+	Terminal,
 	TuiInputListener,
 	TuiInputListenerResult,
 } from "@earendil-works/pi-tui";
@@ -12,6 +16,7 @@ import type {
 import { EventStream } from "../../../src/ai/event-stream.ts";
 import type { UserMessage } from "../../../src/ai/types.ts";
 import { createDefaultCommandRegistry } from "../../../src/coding/commands.ts";
+import type { ResourceDiagnostic } from "../../../src/coding/resources.ts";
 import type { CodingSessionTuiService } from "../../../src/coding/session.ts";
 import { TuiEventAdapter } from "../../../src/coding/tui/adapter.ts";
 import type {
@@ -24,6 +29,7 @@ import type {
 	TuiTransitionOutcome,
 } from "../../../src/coding/tui/controller.ts";
 import {
+	copyTuiText,
 	type InteractiveController,
 	runInteractiveMode,
 } from "../../../src/coding/tui/run.ts";
@@ -31,12 +37,39 @@ import {
 	createTuiState,
 	type TuiState,
 } from "../../../src/coding/tui/state.ts";
+import { AREEB_DARK_THEME } from "../../../src/coding/tui/theme.ts";
 
 const restoredUser: UserMessage = {
 	role: "user",
 	content: [{ type: "text", text: "restored" }],
 	timestamp: 1,
 };
+
+class CopyTerminal implements Terminal {
+	readonly columns = 120;
+	readonly rows = 32;
+	readonly kittyProtocolActive = false;
+	readonly writes: string[] = [];
+	failWrites = false;
+
+	start(): void {}
+	stop(): void {}
+	async drainInput(): Promise<void> {}
+	write(data: string): void {
+		if (this.failWrites) {
+			throw new Error("terminal unavailable");
+		}
+		this.writes.push(data);
+	}
+	moveBy(): void {}
+	hideCursor(): void {}
+	showCursor(): void {}
+	clearLine(): void {}
+	clearFromCursor(): void {}
+	clearScreen(): void {}
+	setTitle(): void {}
+	setProgress(): void {}
+}
 
 class ManualSession implements InteractiveController {
 	readonly metadata = {
@@ -45,6 +78,7 @@ class ManualSession implements InteractiveController {
 	};
 	readonly model = "fake-model";
 	readonly provider = "fake";
+	readonly resourceDiagnostics: ResourceDiagnostic[] = [];
 	readonly completionCatalog = {
 		commands: createDefaultCommandRegistry().list(),
 		skillNames: ["review"],
@@ -294,6 +328,12 @@ function createAppController(): {
 					modelPickerOpenCount += 1;
 					return true;
 				},
+				openThemePicker() {
+					return true;
+				},
+				async setTheme() {
+					return true;
+				},
 				dismissPicker() {
 					return false;
 				},
@@ -373,6 +413,7 @@ describe("runInteractiveMode", () => {
 		const controller = createAppController();
 		const running = runInteractiveMode(session, {
 			createApp: controller.createApp,
+			theme: AREEB_DARK_THEME,
 		});
 
 		expect(controller.initialStates[0]?.items).toEqual([
@@ -384,6 +425,10 @@ describe("runInteractiveMode", () => {
 		await waitUntil(() => controller.states.at(-1)?.inputMode === "idle");
 		expect(session.commandCalls).toEqual(["/help"]);
 		expect(session.lastTuiService?.getThemeName()).toBe("areeb-dark");
+		expect(session.lastTuiService?.getThemeNames()).toEqual([
+			"areeb-dark",
+			"areeb-light",
+		]);
 		expect(
 			session.lastTuiService
 				?.getHotkeys()
@@ -418,7 +463,10 @@ describe("runInteractiveMode", () => {
 						},
 					};
 		const app = createAppController();
-		const running = runInteractiveMode(session, { createApp: app.createApp });
+		const running = runInteractiveMode(session, {
+			createApp: app.createApp,
+			theme: AREEB_DARK_THEME,
+		});
 
 		app.submit("/session");
 		await waitUntil(
@@ -436,6 +484,35 @@ describe("runInteractiveMode", () => {
 		expect(await running).toBe(0);
 	});
 
+	test("shows one initial resource warning without adding a transcript item", async () => {
+		const session = new ManualSession();
+		session.resourceDiagnostics.push({
+			kind: "skill",
+			code: "validation-failed",
+			severity: "warning",
+			message: "Invalid skill",
+		});
+		session.commandHandler = async () => ({
+			handled: true,
+			outcome: { kind: "quit" },
+		});
+		const app = createAppController();
+		const running = runInteractiveMode(session, {
+			createApp: app.createApp,
+			theme: AREEB_DARK_THEME,
+		});
+
+		expect(app.presentations).toEqual([
+			{
+				text: "1 resource warning; run /resources for details",
+				level: "warning",
+			},
+		]);
+		expect(session.state.items).toEqual([]);
+		app.submit("/quit");
+		expect(await running).toBe(0);
+	});
+
 	test("opens the shared palette and consumes Enter only when completion changes", async () => {
 		const session = new ManualSession();
 		session.commandHandler = async () => ({
@@ -443,7 +520,10 @@ describe("runInteractiveMode", () => {
 			outcome: { kind: "quit" },
 		});
 		const app = createAppController();
-		const running = runInteractiveMode(session, { createApp: app.createApp });
+		const running = runInteractiveMode(session, {
+			createApp: app.createApp,
+			theme: AREEB_DARK_THEME,
+		});
 
 		expect(app.input("\u0010")).toEqual({ consume: true });
 		expect(app.paletteOpens()).toBe(1);
@@ -473,7 +553,10 @@ describe("runInteractiveMode", () => {
 				? { handled: true, outcome: { kind: "quit" } }
 				: { handled: false };
 		const app = createAppController();
-		const running = runInteractiveMode(session, { createApp: app.createApp });
+		const running = runInteractiveMode(session, {
+			createApp: app.createApp,
+			theme: AREEB_DARK_THEME,
+		});
 
 		app.submit("first");
 		await waitUntil(() => session.promptCalls.length === 1);
@@ -499,7 +582,10 @@ describe("runInteractiveMode", () => {
 	test("restores a live draft after enqueue failure", async () => {
 		const session = new ManualSession();
 		const app = createAppController();
-		const running = runInteractiveMode(session, { createApp: app.createApp });
+		const running = runInteractiveMode(session, {
+			createApp: app.createApp,
+			theme: AREEB_DARK_THEME,
+		});
 
 		app.submit("first");
 		await waitUntil(() => session.promptCalls.length === 1);
@@ -535,7 +621,10 @@ describe("runInteractiveMode", () => {
 			return { handled: true, outcome: { kind: "quit" } };
 		};
 		const app = createAppController();
-		const running = runInteractiveMode(session, { createApp: app.createApp });
+		const running = runInteractiveMode(session, {
+			createApp: app.createApp,
+			theme: AREEB_DARK_THEME,
+		});
 
 		app.submit("/switch");
 		await waitUntil(
@@ -558,6 +647,7 @@ describe("runInteractiveMode", () => {
 		const controller = createAppController();
 		const running = runInteractiveMode(session, {
 			createApp: controller.createApp,
+			theme: AREEB_DARK_THEME,
 		});
 
 		controller.submit("hello");
@@ -590,6 +680,7 @@ describe("runInteractiveMode", () => {
 		const controller = createAppController();
 		const running = runInteractiveMode(session, {
 			createApp: controller.createApp,
+			theme: AREEB_DARK_THEME,
 		});
 
 		controller.submit("hello");
@@ -604,5 +695,40 @@ describe("runInteractiveMode", () => {
 		});
 		expect(controller.stopped()).toBe(1);
 		expect(controller.listenerCount()).toBe(0);
+	});
+});
+
+describe("copyTuiText", () => {
+	test("always overwrites a private backup even when OSC 52 fails", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "areeb-copy-"));
+		try {
+			const backupPath = join(directory, "user", "last-copy.txt");
+			const terminal = new CopyTerminal();
+			const first = await copyTuiText(terminal, backupPath, "first π");
+
+			expect(first).toEqual({
+				osc52Sent: true,
+				backupSaved: true,
+				backupPath,
+			});
+			expect(terminal.writes[0]).toBe(
+				`\u001b]52;c;${Buffer.from("first π").toString("base64")}\u0007`,
+			);
+			expect(await readFile(backupPath, "utf8")).toBe("first π");
+			expect((await stat(join(directory, "user"))).mode & 0o777).toBe(0o700);
+			expect((await stat(backupPath)).mode & 0o777).toBe(0o600);
+
+			terminal.failWrites = true;
+			expect(
+				await copyTuiText(terminal, backupPath, "replacement"),
+			).toMatchObject({
+				osc52Sent: false,
+				backupSaved: true,
+				error: "terminal unavailable",
+			});
+			expect(await readFile(backupPath, "utf8")).toBe("replacement");
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
 	});
 });
