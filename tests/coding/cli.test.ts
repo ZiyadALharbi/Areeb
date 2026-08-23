@@ -576,6 +576,12 @@ describe("CLI interactive mode", () => {
 				provider: "local",
 				model: "org/model-b",
 			});
+			expect(
+				JSON.parse(await readFile(join(userRoot, "providers.json"), "utf8")),
+			).toMatchObject({
+				default_provider: "local",
+				default_model: "org/model-b",
+			});
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}

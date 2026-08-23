@@ -54,6 +54,7 @@ export interface ProviderSettings {
 	readonly version: typeof PROVIDER_SETTINGS_VERSION;
 	readonly path: string;
 	readonly defaultProvider: string;
+	readonly defaultModel?: string;
 	readonly providers: Readonly<Record<string, OpenAICompatibleProviderConfig>>;
 	readonly favoriteModels: readonly ProviderModelReference[];
 }
@@ -165,6 +166,7 @@ const rawSettingsSchema = z
 	.object({
 		version: z.literal(PROVIDER_SETTINGS_VERSION),
 		default_provider: providerIdSchema.optional(),
+		default_model: modelIdSchema.optional(),
 		providers: z.record(providerIdSchema, rawProviderSchema).optional(),
 		favorite_models: z.array(rawFavoriteSchema).optional(),
 	})
@@ -204,6 +206,10 @@ export function configuredProviderModels(
 			continue;
 		}
 		const authStatus = getProviderAuthStatus(provider, env);
+		const defaultModel =
+			providerId === settings.defaultProvider
+				? (settings.defaultModel ?? provider.defaultModel)
+				: provider.defaultModel;
 		for (const model of [...provider.models].sort()) {
 			entries.push(
 				Object.freeze({
@@ -211,7 +217,7 @@ export function configuredProviderModels(
 					model,
 					baseUrl: provider.baseUrl,
 					isDefaultProvider: providerId === settings.defaultProvider,
-					isDefaultModel: model === provider.defaultModel,
+					isDefaultModel: model === defaultModel,
 					authStatus,
 					usable: !authStatus.startsWith("missing:"),
 				}),
@@ -278,7 +284,13 @@ export function resolveProviderSelection(
 		throw new Error(`Unknown provider: ${providerId}`);
 	}
 
-	const model = options.stored?.model ?? options.model ?? provider.defaultModel;
+	const model =
+		options.stored?.model ??
+		options.model ??
+		(providerId === settings.defaultProvider
+			? settings.defaultModel
+			: undefined) ??
+		provider.defaultModel;
 	if (!provider.models.includes(model)) {
 		throw new Error(`Unknown model "${model}" for provider "${providerId}"`);
 	}
@@ -424,10 +436,61 @@ export async function setupOpenAICompatibleProvider(
 			default_provider: options.setDefault
 				? options.provider
 				: (currentRaw?.default_provider ?? "openai"),
+			...(options.setDefault || currentRaw?.default_model === undefined
+				? {}
+				: { default_model: currentRaw.default_model }),
 			providers: {
 				...(currentRaw?.providers ?? {}),
 				[options.provider]: nextProvider,
 			},
+			...(currentRaw?.favorite_models === undefined
+				? {}
+				: { favorite_models: currentRaw.favorite_models }),
+		};
+		let nextSettings = composeProviderSettings(nextRaw, path, env);
+		if (options.setDefault) {
+			const selectedProvider = nextSettings.providers[options.provider];
+			if (selectedProvider === undefined) {
+				throwConfig(
+					path,
+					"$.default_provider",
+					`references unknown provider "${options.provider}"`,
+				);
+			}
+			nextRaw.default_model = selectedProvider.defaultModel;
+			nextSettings = composeProviderSettings(nextRaw, path, env);
+		}
+		await writeRawSettings(path, nextRaw);
+		return nextSettings;
+	});
+}
+
+/** Persist the global provider/model preference without changing provider setup. */
+export async function saveDefaultProviderModel(
+	selection: ProviderModelReference,
+	options: LoadProviderSettingsOptions = {},
+): Promise<ProviderSettings> {
+	const path = resolveSettingsPath(options);
+	const env = options.env ?? process.env;
+	assertProviderId(selection.provider, path, "$.default_provider");
+	const model = modelIdSchema.safeParse(selection.model);
+	if (!model.success) {
+		throwConfig(
+			path,
+			"$.default_model",
+			model.error.issues[0]?.message ?? "invalid model",
+		);
+	}
+
+	return withSettingsLock(path, async () => {
+		const currentRaw = await readRawSettings(path);
+		const nextRaw: RawProviderSettings = {
+			version: PROVIDER_SETTINGS_VERSION,
+			default_provider: selection.provider,
+			default_model: model.data,
+			...(currentRaw?.providers === undefined
+				? {}
+				: { providers: currentRaw.providers }),
 			...(currentRaw?.favorite_models === undefined
 				? {}
 				: { favorite_models: currentRaw.favorite_models }),
@@ -485,7 +548,10 @@ function composeProviderSettings(
 	}
 
 	const defaultProvider = raw?.default_provider ?? "openai";
-	if (!Object.hasOwn(providers, defaultProvider)) {
+	if (
+		!Object.hasOwn(providers, defaultProvider) &&
+		!RESERVED_PROVIDER_IDS.has(defaultProvider)
+	) {
 		throwConfig(
 			path,
 			"$.default_provider",
@@ -515,6 +581,9 @@ function composeProviderSettings(
 		version: PROVIDER_SETTINGS_VERSION,
 		path,
 		defaultProvider,
+		...(raw?.default_model === undefined
+			? {}
+			: { defaultModel: raw.default_model }),
 		providers: Object.freeze(providers),
 		favoriteModels: Object.freeze(
 			favorites.map((favorite) => Object.freeze({ ...favorite })),

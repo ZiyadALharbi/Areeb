@@ -156,4 +156,52 @@ describe("ProviderRuntimeService", () => {
 			await service.resolveInitialSelection({ provider: "openai" }),
 		).toEqual({ provider: "openai", model: "gpt-5.6-sol" });
 	});
+
+	test("prefers the saved global selection and repairs a stale saved model", async () => {
+		const store = new MemoryCredentialStore({
+			"openai-codex": {
+				type: "oauth",
+				access: jwt("account"),
+				refresh: "refresh",
+				expires: Date.now() + 60_000,
+			},
+		});
+		const options = {
+			store,
+			registry: createDefaultProviderAuthRegistry(),
+			env: { OPENAI_API_KEY: "environment-key" },
+		};
+		const saved = new ProviderRuntimeService({
+			...options,
+			settings: parseProviderSettings(
+				{
+					version: 1,
+					default_provider: "openai-codex",
+					default_model: "gpt-5.6-terra",
+				},
+				{ path: "/tmp/providers.json", env: options.env },
+			),
+		});
+
+		expect(await saved.resolveInitialSelection()).toEqual({
+			provider: "openai-codex",
+			model: "gpt-5.6-terra",
+		});
+
+		const stale = new ProviderRuntimeService({
+			...options,
+			settings: parseProviderSettings(
+				{
+					version: 1,
+					default_provider: "openai-codex",
+					default_model: "removed-model",
+				},
+				{ path: "/tmp/providers.json", env: options.env },
+			),
+		});
+		expect(await stale.resolveInitialSelection()).toEqual({
+			provider: "openai-codex",
+			model: "gpt-5.6-sol",
+		});
+	});
 });

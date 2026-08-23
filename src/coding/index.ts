@@ -93,6 +93,7 @@ export {
 	ProviderConfigError,
 	parseProviderSettings,
 	resolveProviderSelection,
+	saveDefaultProviderModel,
 	setupOpenAICompatibleProvider,
 	usableFavoriteModels,
 	usableProviderModels,

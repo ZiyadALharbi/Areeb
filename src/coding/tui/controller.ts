@@ -108,6 +108,7 @@ export interface TuiControllerOptions {
 	readonly loadSession: TuiSessionLoader;
 	readonly models?: readonly CommandModelListItem[];
 	readonly prepareModelSession?: TuiModelSessionLoader;
+	readonly saveDefaultSelection?: (selection: SessionModel) => Promise<void>;
 	readonly providerAuth?: TuiProviderAuthController;
 }
 
@@ -470,27 +471,32 @@ export class TuiController {
 				`Unknown or unavailable model: ${provider}/${model}`,
 			);
 		}
-		if (
-			provider === this.active.session.provider &&
-			model === this.active.session.model
-		) {
-			return message("info", `${provider}/${model} is already active`);
-		}
-
+		const selection = { provider, model };
 		this.transitionActive = true;
 		try {
+			if (
+				provider === this.active.session.provider &&
+				model === this.active.session.model
+			) {
+				return (
+					(await this.persistDefaultSelection(selection)) ??
+					message("info", `${provider}/${model} is already active`)
+				);
+			}
 			const handle = await this.options.manager.open(
 				this.active.session.metadata.id,
 			);
 			const prepared = await this.options.prepareModelSession({
 				handle,
-				selection: { provider, model },
+				selection,
 				reasoning: this.active.session.reasoning,
 			});
 			const bundle = buildBundle(prepared.session);
 			await prepared.commit();
 			this.active = bundle;
-			return { kind: "none" };
+			return (
+				(await this.persistDefaultSelection(selection)) ?? { kind: "none" }
+			);
 		} catch (error) {
 			return transitionFailure(
 				`Failed to switch to ${provider}/${model}`,
@@ -549,6 +555,20 @@ export class TuiController {
 			reasoning: this.active.session.reasoning,
 		});
 		this.active = buildBundle(candidate);
+	}
+
+	private async persistDefaultSelection(
+		selection: SessionModel,
+	): Promise<TuiTransitionOutcome | undefined> {
+		try {
+			await this.options.saveDefaultSelection?.(selection);
+			return undefined;
+		} catch (error) {
+			return message(
+				"warning",
+				`${selection.provider}/${selection.model} is active, but Areeb could not save it as the global default: ${errorMessage(error)}`,
+			);
+		}
 	}
 
 	private async replaceSession(

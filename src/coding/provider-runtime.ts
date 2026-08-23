@@ -23,6 +23,7 @@ import {
 	type ProviderSelection,
 	type ProviderSelectionOptions,
 	type ProviderSettings,
+	saveDefaultProviderModel,
 } from "./provider-config.ts";
 
 const OAUTH_REFRESH_WINDOW_MS = 5 * 60_000;
@@ -82,9 +83,16 @@ export class ProviderRuntimeService {
 			this.options.settings.defaultProvider;
 		const configured = this.options.settings.providers[providerId];
 		const registration = this.options.registry.get(providerId);
+		const savedDefaultModel =
+			providerId === this.options.settings.defaultProvider
+				? this.options.settings.defaultModel
+				: undefined;
 		if (configured !== undefined) {
 			const model =
-				options.stored?.model ?? options.model ?? configured.defaultModel;
+				options.stored?.model ??
+				options.model ??
+				savedDefaultModel ??
+				configured.defaultModel;
 			const models = new Set([
 				...configured.models,
 				...(registration?.models ?? []),
@@ -98,7 +106,10 @@ export class ProviderRuntimeService {
 		}
 		if (registration?.models.length) {
 			const model =
-				options.stored?.model ?? options.model ?? registration.defaultModel;
+				options.stored?.model ??
+				options.model ??
+				savedDefaultModel ??
+				registration.defaultModel;
 			if (!registration.models.includes(model)) {
 				throw new Error(
 					`Unknown model "${model}" for provider "${providerId}"`,
@@ -112,12 +123,22 @@ export class ProviderRuntimeService {
 	async resolveInitialSelection(
 		options: ProviderSelectionOptions = {},
 	): Promise<ProviderSelection> {
-		const configured = this.resolveSelection(options);
-		if (
+		const explicit =
 			options.stored !== undefined ||
 			options.provider !== undefined ||
-			options.model !== undefined
-		) {
+			options.model !== undefined;
+		let configured: ProviderSelection;
+		try {
+			configured = this.resolveSelection(options);
+		} catch (error) {
+			if (explicit) {
+				throw error;
+			}
+			configured = this.resolveProviderDefault(
+				this.options.settings.defaultProvider,
+			);
+		}
+		if (explicit) {
 			return configured;
 		}
 
@@ -226,6 +247,10 @@ export class ProviderRuntimeService {
 			const models = [
 				...new Set([...provider.models, ...(registration?.models ?? [])]),
 			].sort();
+			const defaultModel =
+				providerId === this.options.settings.defaultProvider
+					? (this.options.settings.defaultModel ?? provider.defaultModel)
+					: provider.defaultModel;
 			for (const model of models) {
 				entries.push(
 					Object.freeze({
@@ -234,7 +259,7 @@ export class ProviderRuntimeService {
 						usable,
 						isDefaultProvider:
 							providerId === this.options.settings.defaultProvider,
-						isDefaultModel: model === provider.defaultModel,
+						isDefaultModel: model === defaultModel,
 					}),
 				);
 			}
@@ -248,14 +273,19 @@ export class ProviderRuntimeService {
 			}
 			const credential = credentials.get(registration.id);
 			const usable = credential?.type === registration.authType;
+			const defaultModel =
+				registration.id === this.options.settings.defaultProvider
+					? (this.options.settings.defaultModel ?? registration.defaultModel)
+					: registration.defaultModel;
 			for (const model of registration.models) {
 				entries.push(
 					Object.freeze({
 						provider: registration.id,
 						model,
 						usable,
-						isDefaultProvider: false,
-						isDefaultModel: model === registration.defaultModel,
+						isDefaultProvider:
+							registration.id === this.options.settings.defaultProvider,
+						isDefaultModel: model === defaultModel,
 					}),
 				);
 			}
@@ -267,6 +297,14 @@ export class ProviderRuntimeService {
 		return Object.freeze(
 			(await this.configuredModels()).filter((entry) => entry.usable),
 		);
+	}
+
+	async saveDefaultSelection(selection: ProviderSelection): Promise<void> {
+		const canonical = this.resolveSelection({ stored: selection });
+		await saveDefaultProviderModel(canonical, {
+			path: this.options.settings.path,
+			env: this.env,
+		});
 	}
 
 	async login(
@@ -381,6 +419,24 @@ export class ProviderRuntimeService {
 			selection,
 			unavailableReason: reason,
 		});
+	}
+
+	private resolveProviderDefault(providerId: string): ProviderSelection {
+		const configured = this.options.settings.providers[providerId];
+		if (configured !== undefined) {
+			return Object.freeze({
+				provider: providerId,
+				model: configured.defaultModel,
+			});
+		}
+		const registration = this.options.registry.get(providerId);
+		if (registration?.models.includes(registration.defaultModel)) {
+			return Object.freeze({
+				provider: providerId,
+				model: registration.defaultModel,
+			});
+		}
+		throw new Error(`Unknown provider: ${providerId}`);
 	}
 
 	private async resolveCodexAuth(

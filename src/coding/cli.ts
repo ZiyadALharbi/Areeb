@@ -440,6 +440,8 @@ async function runSessionCommand(
 				model: entry.model,
 			})),
 			prepareModelSession,
+			saveDefaultSelection: (selection) =>
+				providerRuntime.saveDefaultSelection(selection),
 			providerAuth: {
 				listMetadata: () => providerRuntime.authMetadata,
 				listProviders: (savedOnly) => providerRuntime.listProviders(savedOnly),
