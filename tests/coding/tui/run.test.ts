@@ -421,7 +421,10 @@ describe("runInteractiveMode", () => {
 		const running = runInteractiveMode(session, { createApp: app.createApp });
 
 		app.submit("/session");
-		await waitUntil(() => app.presentations.length === 1);
+		await waitUntil(
+			() =>
+				app.presentations.length === 1 && session.state.inputMode === "idle",
+		);
 		expect(session.state.items).toEqual([]);
 		app.input("\u001b");
 		expect(app.dismissedOverlays()).toBe(1);

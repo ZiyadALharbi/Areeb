@@ -156,19 +156,25 @@ describe("createTuiApp pickers", () => {
 		);
 
 		expect(app.openModelPicker()).toBe(true);
-		let output = stripTerminalSequences(app.tui.render(100).join("\n"));
-		expect(output).toContain("Filter: type to narrow");
-		expect(output).toContain("model-a");
-		expect(output).toContain("fake");
-		expect(output).toContain("menu shortcuts");
-		expect(output).not.toMatch(/[┌┐└┘]/);
+		const picker = app.tui.getFocusedComponent();
+		expect(picker).not.toBe(app.editor);
+		const pickerOutput = stripTerminalSequences(
+			picker?.render(100).join("\n") ?? "",
+		);
+		expect(pickerOutput).toContain("Filter: type to narrow");
+		expect(pickerOutput).toContain("model-a");
+		expect(pickerOutput).toContain("fake");
+		expect(pickerOutput).not.toMatch(/[┌┐└┘]/);
+		expect(stripTerminalSequences(app.tui.render(100).join("\n"))).toContain(
+			"menu shortcuts",
+		);
 
 		app.dismissPicker();
 		state.running = true;
 		state.inputMode = "running";
 		state.queuedCount = 2;
 		app.refresh(state);
-		output = stripTerminalSequences(app.tui.render(100).join("\n"));
+		const output = stripTerminalSequences(app.tui.render(100).join("\n"));
 		expect(output).toContain("running shortcuts");
 		expect(output).toContain("queued 2");
 		expect(app.editor.disableSubmit).toBe(false);
