@@ -26,14 +26,25 @@ export function runTuiSmoke(): void {
 				theme,
 			),
 		],
-		shortcuts: "Esc:quit  │  Ctrl+C:quit",
+		shortcuts: {
+			idle: "Esc:quit  │  Ctrl+C:quit",
+			menu: "Type:filter  │  Up/Down:move  │  Enter:select  │  Esc:close",
+			running: "Enter:queue  │  Esc:interrupt  │  Ctrl+C:quit",
+		},
 		getCompletionCatalog: () => ({
 			commands: [],
 			skillNames: [],
 			templateNames: [],
 			availableCapabilities: ["tui"],
 			cwd: process.cwd(),
+			listSessions: async () => [],
+			models: [],
 		}),
+		listSessions: async () => [],
+		getModels: () => [],
+		getCurrentModel: () => ({ provider: "unknown", model: "unknown" }),
+		onResume: async () => false,
+		onSetModel: async () => false,
 	});
 
 	let stopped = false;

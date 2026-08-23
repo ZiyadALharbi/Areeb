@@ -16,6 +16,7 @@ import {
 	loadProviderSettings,
 	resolveProviderSelection,
 	setupOpenAICompatibleProvider,
+	usableProviderModels,
 } from "./provider-config.ts";
 import { CodingSession } from "./session.ts";
 import {
@@ -24,7 +25,11 @@ import {
 	findCodingSession,
 	listCodingSessions,
 } from "./session-manager.ts";
-import { TuiController, type TuiSessionLoader } from "./tui/controller.ts";
+import {
+	TuiController,
+	type TuiModelSessionLoader,
+	type TuiSessionLoader,
+} from "./tui/controller.ts";
 import { runInteractiveMode } from "./tui/run.ts";
 
 export const USAGE = `Usage:
@@ -384,6 +389,24 @@ async function runSessionCommand(
 				: { createProvider: runtime.createProvider }),
 			trustProjectResources: command.trustProjectResources,
 		});
+	const prepareModelSession: TuiModelSessionLoader = async ({
+		handle,
+		selection,
+		reasoning,
+	}) =>
+		prepareCodingSessionModelChange(handle, selection, reasoning, {
+			settings,
+			env,
+			cwd,
+			...(runtime.userRoot === undefined ? {} : { userRoot: runtime.userRoot }),
+			...(runtime.agentsRoot === undefined
+				? {}
+				: { agentsRoot: runtime.agentsRoot }),
+			...(runtime.createProvider === undefined
+				? {}
+				: { createProvider: runtime.createProvider }),
+			trustProjectResources: command.trustProjectResources,
+		});
 	const coding = await loadSession({
 		handle: session,
 		selection: initialSelection,
@@ -396,7 +419,13 @@ async function runSessionCommand(
 		});
 	}
 	return (runtime.runInteractive ?? runInteractiveMode)(
-		new TuiController({ session: coding, manager, loadSession }),
+		new TuiController({
+			session: coding,
+			manager,
+			loadSession,
+			models: usableProviderModels(settings, env),
+			prepareModelSession,
+		}),
 	);
 }
 
@@ -423,6 +452,37 @@ async function loadCodingSession(
 			: { createProvider: options.createProvider }),
 	});
 	return CodingSession.load({
+		session,
+		provider: providerRuntime.provider,
+		model: providerRuntime.selection.model,
+		reasoning,
+		...(providerRuntime.timeoutMs === undefined
+			? {}
+			: { timeout: providerRuntime.timeoutMs }),
+		resourcePaths: areebPaths({
+			cwd: options.cwd,
+			...(options.userRoot === undefined ? {} : { userRoot: options.userRoot }),
+			...(options.agentsRoot === undefined
+				? {}
+				: { agentsRoot: options.agentsRoot }),
+		}),
+		trustProjectResources: options.trustProjectResources,
+	});
+}
+
+async function prepareCodingSessionModelChange(
+	session: Parameters<TuiSessionLoader>[0]["handle"],
+	selection: SessionModel,
+	reasoning: Parameters<TuiSessionLoader>[0]["reasoning"],
+	options: CodingSessionLoaderOptions,
+) {
+	const providerRuntime = createProviderRuntime(options.settings, selection, {
+		env: options.env,
+		...(options.createProvider === undefined
+			? {}
+			: { createProvider: options.createProvider }),
+	});
+	return CodingSession.prepareModelChange({
 		session,
 		provider: providerRuntime.provider,
 		model: providerRuntime.selection.model,

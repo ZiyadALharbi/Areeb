@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
 	type CommandContext,
+	type CommandModelListItem,
 	CommandRegistry,
 	type CommandResourceSummary,
 	type CommandSessionListItem,
@@ -19,6 +20,7 @@ function context(
 	contextFiles: readonly string[] = [],
 	systemPromptChanged = false,
 	sessions: readonly CommandSessionListItem[] | Error = [],
+	models: readonly CommandModelListItem[] = [],
 ): CommandContext {
 	let name: string | undefined;
 	return {
@@ -29,6 +31,7 @@ function context(
 			}
 			return sessions;
 		},
+		listModels: () => models,
 		getResourceSummary: () => resourceSummary,
 		getContextFiles: () => [...contextFiles],
 		async reloadResources() {
@@ -301,6 +304,10 @@ describe("default slash commands", () => {
 			handled: true,
 			outcome: { kind: "resume", sessionId: id },
 		});
+		expect(await registry.dispatch("/resume", commandContext)).toEqual({
+			handled: true,
+			outcome: { kind: "resume-picker" },
+		});
 		for (const input of ["/resume partial", `/resume ${id} extra`]) {
 			expect(await registry.dispatch(input, commandContext)).toEqual({
 				handled: true,
@@ -343,52 +350,53 @@ describe("default slash commands", () => {
 		});
 	});
 
-	test("lists project sessions as sanitized text and recovers listing failures", async () => {
+	test("opens semantic pickers and validates canonical model selections", async () => {
 		const registry = createDefaultCommandRegistry();
-		const sessions: readonly CommandSessionListItem[] = [
-			{
-				id: "00000000-0000-4000-8000-000000000002",
-				title: "Newest\ttitle",
-				model: { provider: "fake", model: "model-a" },
-			},
-			{
-				id: "00000000-0000-4000-8000-000000000001",
-				title: "Older\nname",
-				model: null,
-			},
+		const models: readonly CommandModelListItem[] = [
+			{ provider: "openai", model: "gpt-5.6-sol" },
+			{ provider: "local", model: "org/model/version" },
 		];
-		const listed = await registry.dispatch(
-			"/resume",
-			context(["session-controller"], undefined, [], false, sessions),
+		const commandContext = context(
+			["session-controller", "model-selection"],
+			undefined,
+			[],
+			false,
+			[],
+			models,
 		);
-		expect(listed).toEqual({
+
+		expect(await registry.dispatch("/resume", commandContext)).toEqual({
+			handled: true,
+			outcome: { kind: "resume-picker" },
+		});
+		expect(await registry.dispatch("/model", commandContext)).toEqual({
+			handled: true,
+			outcome: { kind: "model-picker" },
+		});
+		expect(
+			await registry.dispatch("/model local/org/model/version", commandContext),
+		).toEqual({
 			handled: true,
 			outcome: {
-				kind: "message",
-				level: "info",
-				text: `${sessions[0]?.id}\tNewest title\tfake/model-a\n${sessions[1]?.id}\tOlder name\t-`,
+				kind: "set-model",
+				provider: "local",
+				model: "org/model/version",
 			},
 		});
 		expect(
-			await registry.dispatch("/resume", context(["session-controller"])),
-		).toMatchObject({ outcome: { text: "No sessions found" } });
-		expect(
-			await registry.dispatch(
-				"/resume",
-				context(
-					["session-controller"],
-					undefined,
-					[],
-					false,
-					new Error("storage failed"),
-				),
-			),
+			await registry.dispatch("/model local/missing", commandContext),
 		).toMatchObject({
 			outcome: {
 				kind: "message",
 				level: "error",
-				text: "Failed to list sessions: storage failed",
+				text: "Unknown or unavailable model: local/missing",
 			},
+		});
+		expect(
+			await registry.dispatch("/model missing-provider", commandContext),
+		).toMatchObject({ outcome: { text: "Usage: /model [provider/model]" } });
+		expect(await registry.dispatch("/login", commandContext)).toMatchObject({
+			outcome: { missingCapability: "provider-auth" },
 		});
 	});
 

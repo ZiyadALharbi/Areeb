@@ -361,6 +361,74 @@ describe("CodingSession loading", () => {
 			),
 		).rejects.toThrow("Stored active tool is unavailable: missing");
 	});
+
+	test("stages model reconstruction before durably committing the new runtime", async () => {
+		const session = await createMemorySession();
+		await seedRuntime(session);
+		const provider = new FakeProvider([textScript("switched")], {
+			providerId: "other",
+		});
+		const prepared = await CodingSession.prepareModelChange(
+			config(session, provider, {
+				model: "org/model/version",
+				tools: [],
+				timeout: 321,
+			}),
+		);
+
+		expect(prepared.session).toMatchObject({
+			provider: "other",
+			model: "org/model/version",
+			reasoning: "high",
+		});
+		expect((await session.buildContext()).model).toEqual({
+			provider: "fake",
+			model: "stored-model",
+		});
+
+		await prepared.commit();
+		expect((await session.buildContext()).model).toEqual({
+			provider: "other",
+			model: "org/model/version",
+		});
+		await prepared.session.prompt("after switch").result();
+		expect(provider.calls[0]).toMatchObject({
+			model: "org/model/version",
+			options: { reasoning: "high", timeout: 321 },
+		});
+		await expect(prepared.commit()).rejects.toThrow("already been committed");
+	});
+
+	test("leaves the stored model unchanged when a staged commit fails", async () => {
+		const session = await createMemorySession();
+		await seedRuntime(session);
+		const failingSession = new Proxy(session, {
+			get(target, property) {
+				if (property === "appendEntry") {
+					return async (entry: { type: string }) => {
+						if (entry.type === "model_change") {
+							throw new Error("model storage failed");
+						}
+						return target.appendEntry(entry as never);
+					};
+				}
+				const value = Reflect.get(target, property, target);
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
+		const prepared = await CodingSession.prepareModelChange(
+			config(failingSession, new FakeProvider([], { providerId: "other" }), {
+				model: "model-b",
+				tools: [],
+			}),
+		);
+
+		await expect(prepared.commit()).rejects.toThrow("model storage failed");
+		expect((await session.buildContext()).model).toEqual({
+			provider: "fake",
+			model: "stored-model",
+		});
+	});
 });
 
 describe("CodingSession persistence", () => {
@@ -677,6 +745,8 @@ describe("CodingSession commands and queues", () => {
 		}
 		expect(coding.steer("steer").count).toBe(1);
 		expect(coding.followUp("follow up").count).toBe(2);
+		expect(coding.queuedMessages.count).toBe(2);
+		expect(coding.clearQueues().count).toBe(0);
 	});
 
 	test("enables only session-controller commands when that host service is supplied", async () => {
@@ -704,10 +774,7 @@ describe("CodingSession commands and queues", () => {
 		});
 		expect(await coding.handleCommand("/resume", services)).toMatchObject({
 			handled: true,
-			outcome: {
-				kind: "message",
-				text: "00000000-0000-4000-8000-000000000001\tStored session\tfake/stored-model",
-			},
+			outcome: { kind: "resume-picker" },
 		});
 		expect(await coding.handleCommand("/theme", services)).toEqual({
 			handled: true,
@@ -718,6 +785,43 @@ describe("CodingSession commands and queues", () => {
 			outcome: {
 				kind: "unavailable",
 				missingCapability: "session-controller",
+			},
+		});
+	});
+
+	test("enables model commands only with a concrete reconstruction service", async () => {
+		const session = await createMemorySession();
+		const coding = await CodingSession.load(
+			config(session, new FakeProvider([]), { tools: [] }),
+		);
+		const services = {
+			modelController: {
+				listModels: () => [
+					{ provider: "fake", model: "default-model" },
+					{ provider: "other", model: "org/model-b" },
+				],
+			},
+		};
+
+		expect(await coding.handleCommand("/model", services)).toEqual({
+			handled: true,
+			outcome: { kind: "model-picker" },
+		});
+		expect(
+			await coding.handleCommand("/model other/org/model-b", services),
+		).toEqual({
+			handled: true,
+			outcome: {
+				kind: "set-model",
+				provider: "other",
+				model: "org/model-b",
+			},
+		});
+		expect(await coding.handleCommand("/model")).toEqual({
+			handled: true,
+			outcome: {
+				kind: "unavailable",
+				missingCapability: "model-selection",
 			},
 		});
 	});

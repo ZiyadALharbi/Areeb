@@ -7,6 +7,7 @@ import type {
 	AgentEvent,
 	AgentMessage,
 	AgentRunStream,
+	QueuedMessages,
 } from "../../../src/agent/types.ts";
 import { EventStream } from "../../../src/ai/event-stream.ts";
 import type { UserMessage } from "../../../src/ai/types.ts";
@@ -18,7 +19,10 @@ import type {
 	CreateTuiAppOptions,
 	TuiApp,
 } from "../../../src/coding/tui/app.ts";
-import type { TuiCommandResult } from "../../../src/coding/tui/controller.ts";
+import type {
+	TuiCommandResult,
+	TuiTransitionOutcome,
+} from "../../../src/coding/tui/controller.ts";
 import {
 	type InteractiveController,
 	runInteractiveMode,
@@ -40,12 +44,22 @@ class ManualSession implements InteractiveController {
 		cwd: "/project",
 	};
 	readonly model = "fake-model";
+	readonly provider = "fake";
 	readonly completionCatalog = {
 		commands: createDefaultCommandRegistry().list(),
 		skillNames: ["review"],
 		templateNames: ["explain"],
-		availableCapabilities: ["session-controller", "tui"] as const,
+		availableCapabilities: [
+			"session-controller",
+			"model-selection",
+			"tui",
+		] as const,
 		cwd: this.metadata.cwd,
+		listSessions: async () => [],
+		models: [
+			{ provider: "fake", model: "fake-model" },
+			{ provider: "other", model: "model-b" },
+		],
 	};
 	state = createTuiState({
 		sessionId: this.metadata.id,
@@ -55,6 +69,7 @@ class ManualSession implements InteractiveController {
 	adapter = new TuiEventAdapter(this.state);
 	readonly promptCalls: string[] = [];
 	readonly commandCalls: string[] = [];
+	readonly followUpCalls: string[] = [];
 	abortCount = 0;
 	isRunning = false;
 	commandHandler: (input: string) => Promise<TuiCommandResult> = async () => ({
@@ -64,6 +79,7 @@ class ManualSession implements InteractiveController {
 	private stream: AgentRunStream | undefined;
 	private idle = Promise.resolve();
 	private resolveIdle: (() => void) | undefined;
+	private followUps: AgentMessage[] = [];
 
 	constructor(readonly messages: readonly AgentMessage[] = []) {
 		this.adapter.restore(messages);
@@ -89,6 +105,48 @@ class ManualSession implements InteractiveController {
 			() => [],
 		);
 		return this.stream;
+	}
+
+	get queuedMessages(): QueuedMessages {
+		return {
+			steering: [],
+			followUp: [...this.followUps],
+			count: this.followUps.length,
+		};
+	}
+
+	followUp(input: string): QueuedMessages {
+		if (!this.isRunning) {
+			throw new Error("idle");
+		}
+		this.followUpCalls.push(input);
+		this.followUps.push({
+			role: "user",
+			content: [{ type: "text", text: input }],
+			timestamp: 2,
+		});
+		return this.queuedMessages;
+	}
+
+	clearQueues(): QueuedMessages {
+		this.followUps = [];
+		return this.queuedMessages;
+	}
+
+	drainFollowUps(): void {
+		this.followUps = [];
+	}
+
+	async listSessions() {
+		return [];
+	}
+
+	async resumeSession(): Promise<TuiTransitionOutcome> {
+		return { kind: "none" };
+	}
+
+	async setModel(): Promise<TuiTransitionOutcome> {
+		return { kind: "none" };
 	}
 
 	emit(event: AgentEvent): void {
@@ -130,6 +188,8 @@ function createAppController(): {
 	readonly editor: {
 		disableSubmit: boolean;
 		onSubmit?: (text: string) => void;
+		text: string;
+		setText(text: string): void;
 	};
 	readonly started: () => number;
 	readonly stopped: () => number;
@@ -138,6 +198,8 @@ function createAppController(): {
 	readonly toolToggles: () => number;
 	readonly paletteOpens: () => number;
 	readonly completionAccepts: () => number;
+	readonly sessionPickerOpens: () => number;
+	readonly modelPickerOpens: () => number;
 	setInlineCompletion(open: boolean, changes?: boolean): void;
 	submit(text: string): void;
 	input(data: string): TuiInputListenerResult | undefined;
@@ -159,10 +221,20 @@ function createAppController(): {
 	let inlineCompletionOpen = false;
 	let inlineCompletionChanges = false;
 	let completionAcceptCount = 0;
+	let sessionPickerOpenCount = 0;
+	let modelPickerOpenCount = 0;
 	const editor: {
 		disableSubmit: boolean;
 		onSubmit?: (text: string) => void;
-	} = { disableSubmit: false };
+		text: string;
+		setText(text: string): void;
+	} = {
+		disableSubmit: false,
+		text: "",
+		setText(text) {
+			this.text = text;
+		},
+	};
 	const tui = {
 		start() {
 			startCount += 1;
@@ -191,7 +263,7 @@ function createAppController(): {
 				refresh(state?: TuiState) {
 					if (state !== undefined) {
 						states.push(structuredClone(state));
-						editor.disableSubmit = state.running;
+						editor.disableSubmit = state.inputMode === "locked";
 					}
 				},
 				presentCommand(text: string, level: CommandNoticeLevel) {
@@ -213,6 +285,17 @@ function createAppController(): {
 					paletteOpen = true;
 					paletteOpenCount += 1;
 					return true;
+				},
+				async openSessionPicker() {
+					sessionPickerOpenCount += 1;
+					return true;
+				},
+				openModelPicker() {
+					modelPickerOpenCount += 1;
+					return true;
+				},
+				dismissPicker() {
+					return false;
 				},
 				dismissCommandPalette() {
 					if (!paletteOpen) {
@@ -252,6 +335,8 @@ function createAppController(): {
 		toolToggles: () => toolToggleCount,
 		paletteOpens: () => paletteOpenCount,
 		completionAccepts: () => completionAcceptCount,
+		sessionPickerOpens: () => sessionPickerOpenCount,
+		modelPickerOpens: () => modelPickerOpenCount,
 		setInlineCompletion(open, changes = false) {
 			inlineCompletionOpen = open;
 			inlineCompletionChanges = changes;
@@ -296,7 +381,7 @@ describe("runInteractiveMode", () => {
 		expect(controller.editor.disableSubmit).toBe(false);
 		controller.submit("/help");
 		controller.submit("ignored while command is pending");
-		await waitUntil(() => controller.states.at(-1)?.running === false);
+		await waitUntil(() => controller.states.at(-1)?.inputMode === "idle");
 		expect(session.commandCalls).toEqual(["/help"]);
 		expect(session.lastTuiService?.getThemeName()).toBe("areeb-dark");
 		expect(
@@ -336,7 +421,10 @@ describe("runInteractiveMode", () => {
 		const running = runInteractiveMode(session, { createApp: app.createApp });
 
 		app.submit("/session");
-		await waitUntil(() => app.presentations.length === 1);
+		await waitUntil(
+			() =>
+				app.presentations.length === 1 && session.state.inputMode === "idle",
+		);
 		expect(session.state.items).toEqual([]);
 		app.input("\u001b");
 		expect(app.dismissedOverlays()).toBe(1);
@@ -361,6 +449,10 @@ describe("runInteractiveMode", () => {
 		expect(app.paletteOpens()).toBe(1);
 		expect(app.input("\u001b")).toEqual({ consume: true });
 		expect(session.abortCount).toBe(0);
+		expect(app.input("\u0013")).toEqual({ consume: true });
+		expect(app.sessionPickerOpens()).toBe(1);
+		expect(app.input("\u001b[109;5u")).toEqual({ consume: true });
+		expect(app.modelPickerOpens()).toBe(1);
 
 		app.setInlineCompletion(true, true);
 		expect(app.input("\r")).toEqual({ consume: true });
@@ -371,6 +463,59 @@ describe("runInteractiveMode", () => {
 		expect(app.completionAccepts()).toBe(2);
 
 		app.submit("/quit");
+		expect(await running).toBe(0);
+	});
+
+	test("queues live submissions without dispatching commands or starting another prompt", async () => {
+		const session = new ManualSession();
+		session.commandHandler = async (input) =>
+			input === "/quit"
+				? { handled: true, outcome: { kind: "quit" } }
+				: { handled: false };
+		const app = createAppController();
+		const running = runInteractiveMode(session, { createApp: app.createApp });
+
+		app.submit("first");
+		await waitUntil(() => session.promptCalls.length === 1);
+		expect(app.editor.disableSubmit).toBe(false);
+		app.submit("/new");
+		app.submit("   ");
+		expect(session.promptCalls).toEqual(["first"]);
+		expect(session.commandCalls).toEqual(["first"]);
+		expect(session.followUpCalls).toEqual(["/new"]);
+		expect(session.state.queuedCount).toBe(1);
+
+		session.drainFollowUps();
+		session.emit({ type: "turn_start" });
+		await waitUntil(() => session.state.queuedCount === 0);
+		session.emit({ type: "agent_end", messages: [], reason: "completed" });
+		session.complete();
+		await waitUntil(() => session.state.inputMode === "idle");
+
+		app.submit("/quit");
+		expect(await running).toBe(0);
+	});
+
+	test("restores a live draft after enqueue failure", async () => {
+		const session = new ManualSession();
+		const app = createAppController();
+		const running = runInteractiveMode(session, { createApp: app.createApp });
+
+		app.submit("first");
+		await waitUntil(() => session.promptCalls.length === 1);
+		session.followUp = () => {
+			throw new Error("queue unavailable");
+		};
+		app.submit("keep this draft");
+		expect(app.editor.text).toBe("keep this draft");
+		expect(app.presentations.at(-1)).toEqual({
+			text: "Failed to queue follow-up: queue unavailable",
+			level: "error",
+		});
+
+		app.input("\u0003");
+		session.emit({ type: "agent_end", messages: [], reason: "aborted" });
+		session.complete();
 		expect(await running).toBe(0);
 	});
 
@@ -397,7 +542,7 @@ describe("runInteractiveMode", () => {
 			() =>
 				app.states.at(-1)?.sessionId ===
 					"00000000-0000-4000-8000-000000000002" &&
-				app.states.at(-1)?.running === false,
+				app.states.at(-1)?.inputMode === "idle",
 		);
 		expect(app.states.at(-1)).toMatchObject({
 			model: "replacement-model",
@@ -417,10 +562,14 @@ describe("runInteractiveMode", () => {
 
 		controller.submit("hello");
 		await waitUntil(() => session.promptCalls.length === 1);
+		controller.submit("queued follow-up");
+		expect(session.state.queuedCount).toBe(1);
+		controller.editor.setText("unfinished draft");
 		controller.input("\u001b");
 		controller.input("\u001b");
 		controller.input("\u0003");
 		expect(session.abortCount).toBe(1);
+		expect(controller.editor.text).toBe("unfinished draft");
 		expect(controller.stopped()).toBe(0);
 
 		session.emit({ type: "agent_start" });
@@ -431,6 +580,7 @@ describe("runInteractiveMode", () => {
 			role: "status",
 			text: "Interrupted",
 		});
+		expect(session.state.queuedCount).toBe(0);
 		expect(controller.stopped()).toBe(1);
 		expect(controller.listenerCount()).toBe(0);
 	});

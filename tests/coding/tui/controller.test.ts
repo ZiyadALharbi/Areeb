@@ -11,6 +11,7 @@ import type {
 	AgentEvent,
 	AgentMessage,
 	AgentRunStream,
+	QueuedMessages,
 } from "../../../src/agent/types.ts";
 import { EventStream } from "../../../src/ai/event-stream.ts";
 import type { ReasoningLevel, UserMessage } from "../../../src/ai/types.ts";
@@ -40,12 +41,14 @@ function user(text: string): UserMessage {
 
 class StubSession implements TuiControllerSession {
 	readonly promptCalls: string[] = [];
+	readonly followUpCalls: string[] = [];
 	readonly commands = [];
 	readonly skills: { readonly name: string }[] = [];
 	readonly promptTemplates: { readonly name: string }[] = [];
 	abortCount = 0;
 	isRunning = false;
 	lastServices: CodingSessionHostServices | undefined;
+	private followUps: AgentMessage[] = [];
 
 	constructor(
 		readonly metadata: { readonly id: string; readonly cwd: string },
@@ -63,6 +66,25 @@ class StubSession implements TuiControllerSession {
 		);
 		stream.end([]);
 		return stream;
+	}
+
+	get queuedMessages(): QueuedMessages {
+		return {
+			steering: [],
+			followUp: [...this.followUps],
+			count: this.followUps.length,
+		};
+	}
+
+	followUp(input: string): QueuedMessages {
+		this.followUpCalls.push(input);
+		this.followUps.push(user(input));
+		return this.queuedMessages;
+	}
+
+	clearQueues(): QueuedMessages {
+		this.followUps = [];
+		return this.queuedMessages;
 	}
 
 	async handleCommand(
@@ -89,16 +111,15 @@ class StubSession implements TuiControllerSession {
 				: { handled: true, outcome: { kind: "new-session" } };
 		}
 		if (trimmed === "/resume") {
-			const sessions = await services.sessionController?.listSessions();
-			return {
-				handled: true,
-				outcome: {
-					kind: "message",
-					level: "info",
-					text:
-						sessions?.map((session) => session.id).join("\n") ?? "unavailable",
-				},
-			};
+			return services.sessionController === undefined
+				? {
+						handled: true,
+						outcome: {
+							kind: "unavailable",
+							missingCapability: "session-controller",
+						},
+					}
+				: { handled: true, outcome: { kind: "resume-picker" } };
 		}
 		const resumed = /^\/resume\s+(\S+)$/.exec(trimmed);
 		if (resumed?.[1] !== undefined) {
@@ -261,6 +282,12 @@ describe("TuiController", () => {
 			kind: "message",
 			text: "Cannot resume a session while the current session is running",
 		});
+		expect(await controller.handleCommand("/resume")).toMatchObject({
+			outcome: {
+				kind: "message",
+				text: "Cannot resume a session while the current session is running",
+			},
+		});
 		expect(initial.abortCount).toBe(0);
 		initial.isRunning = false;
 		expect(await controller.resumeSession(FIRST_ID)).toEqual({
@@ -356,9 +383,9 @@ describe("TuiController", () => {
 		const { manager, controller } = await createFixture();
 		await manager.add(SECOND_ID, null, "Uninitialized");
 
-		expect(await controller.handleCommand("/resume")).toMatchObject({
-			outcome: { text: `${SECOND_ID}\n${FIRST_ID}` },
-		});
+		expect(
+			(await controller.listSessions()).map((session) => session.id),
+		).toEqual([SECOND_ID, FIRST_ID]);
 		expect(await controller.resumeSession(SECOND_ID)).toEqual({
 			kind: "message",
 			level: "error",
@@ -401,6 +428,103 @@ describe("TuiController", () => {
 		});
 		release();
 		expect(await loading).toEqual({ kind: "none" });
+	});
+
+	test("stages model changes and preserves the active bundle on load or commit failure", async () => {
+		const { manager, initial } = await createFixture();
+		const models = [
+			{ provider: "fake", model: "model-a" },
+			{ provider: "other", model: "org/model-b" },
+		];
+		let commitFailure: Error | undefined;
+		let commits = 0;
+		const controller = new TuiController({
+			session: initial,
+			manager,
+			async loadSession({ handle, selection, reasoning }) {
+				return new StubSession(
+					await handle.getMetadata(),
+					[],
+					selection.provider,
+					selection.model,
+					reasoning,
+				);
+			},
+			models,
+			async prepareModelSession({ handle, selection, reasoning }) {
+				return {
+					session: new StubSession(
+						await handle.getMetadata(),
+						[user("replacement")],
+						selection.provider,
+						selection.model,
+						reasoning,
+					),
+					async commit() {
+						commits += 1;
+						if (commitFailure !== undefined) {
+							throw commitFailure;
+						}
+					},
+				};
+			},
+		});
+
+		expect(await controller.setModel("fake", "model-a")).toMatchObject({
+			kind: "message",
+			text: "fake/model-a is already active",
+		});
+		expect(commits).toBe(0);
+		const original = {
+			session: controller.session,
+			state: controller.state,
+			adapter: controller.adapter,
+		};
+		commitFailure = new Error("durable commit failed");
+		expect(await controller.setModel("other", "org/model-b")).toMatchObject({
+			kind: "message",
+			level: "error",
+			text: "Failed to switch to other/org/model-b: durable commit failed",
+		});
+		expect(controller.session).toBe(original.session);
+		expect(controller.state).toBe(original.state);
+		expect(controller.adapter).toBe(original.adapter);
+
+		commitFailure = undefined;
+		expect(await controller.setModel("other", "org/model-b")).toEqual({
+			kind: "none",
+		});
+		expect(controller).toMatchObject({
+			provider: "other",
+			model: "org/model-b",
+		});
+		expect(controller.state.items).toEqual([
+			{ role: "user", text: "replacement" },
+		]);
+	});
+
+	test("blocks model changes while running and delegates queue operations", async () => {
+		const { manager, initial } = await createFixture();
+		const controller = new TuiController({
+			session: initial,
+			manager,
+			async loadSession() {
+				throw new Error("not used");
+			},
+			models: [{ provider: "other", model: "model-b" }],
+			async prepareModelSession() {
+				throw new Error("not used");
+			},
+		});
+		initial.isRunning = true;
+
+		expect(await controller.setModel("other", "model-b")).toMatchObject({
+			kind: "message",
+			text: "Cannot switch models while the current session is running",
+		});
+		expect(controller.followUp("queued").count).toBe(1);
+		expect(initial.followUpCalls).toEqual(["queued"]);
+		expect(controller.clearQueues().count).toBe(0);
 	});
 
 	test("keeps the previous JSONL file after starting a new session", async () => {

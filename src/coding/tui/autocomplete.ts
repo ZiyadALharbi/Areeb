@@ -1,6 +1,16 @@
-import type { CommandCapability, SlashCommand } from "../commands.ts";
+import type {
+	CommandCapability,
+	CommandModelListItem,
+	CommandSessionListItem,
+	SlashCommand,
+} from "../commands.ts";
 
-export type CompletionSource = "builtin" | "skill" | "template";
+export type CompletionSource =
+	| "builtin"
+	| "skill"
+	| "template"
+	| "session"
+	| "model";
 
 export interface CompletionItem {
 	readonly value: string;
@@ -33,6 +43,8 @@ export interface BuildCompletionStateOptions {
 	readonly cursorLine: number;
 	readonly cursorCol: number;
 	readonly availableCapabilities: readonly CommandCapability[];
+	readonly sessionIds?: readonly string[];
+	readonly modelValues?: readonly string[];
 }
 
 export interface CompletionCatalog {
@@ -41,6 +53,8 @@ export interface CompletionCatalog {
 	readonly templateNames: readonly string[];
 	readonly availableCapabilities: readonly CommandCapability[];
 	readonly cwd: string;
+	readonly listSessions: () => Promise<readonly CommandSessionListItem[]>;
+	readonly models: readonly CommandModelListItem[];
 }
 
 interface RankedItem {
@@ -71,7 +85,7 @@ export function buildCompletionState(
 	const whitespaceIndex = line.search(/\s/);
 	const tokenEnd = whitespaceIndex === -1 ? line.length : whitespaceIndex;
 	if (options.cursorCol > tokenEnd) {
-		return null;
+		return buildArgumentCompletion(options, line, tokenEnd);
 	}
 
 	const tokenBeforeCursor = line.slice(0, options.cursorCol);
@@ -196,6 +210,70 @@ export function buildCompletionState(
 		`/${query}`,
 		replacement,
 	);
+}
+
+function buildArgumentCompletion(
+	options: BuildCompletionStateOptions,
+	line: string,
+	tokenEnd: number,
+): CompletionState | null {
+	const command = line.slice(0, tokenEnd);
+	const values =
+		command === "/resume"
+			? options.sessionIds
+			: command === "/model"
+				? options.modelValues
+				: undefined;
+	if (values === undefined) {
+		return null;
+	}
+
+	let argumentStart = tokenEnd;
+	while (argumentStart < line.length && /\s/.test(line[argumentStart] ?? "")) {
+		argumentStart += 1;
+	}
+	if (options.cursorCol < argumentStart) {
+		argumentStart = options.cursorCol;
+	}
+	const argumentBeforeCursor = line.slice(argumentStart, options.cursorCol);
+	if (/\s/.test(argumentBeforeCursor)) {
+		return null;
+	}
+	let argumentEnd = options.cursorCol;
+	while (argumentEnd < line.length && !/\s/.test(line[argumentEnd] ?? "")) {
+		argumentEnd += 1;
+	}
+
+	const source = command === "/resume" ? "session" : "model";
+	const description =
+		source === "session" ? "Stored session" : "Usable provider model";
+	const items = [...new Set(values)]
+		.map((value, index) =>
+			rankItem(
+				{
+					value,
+					label: value,
+					description,
+					source,
+					aliases: [],
+					missingCapabilities: [],
+					planned: false,
+				},
+				argumentBeforeCursor,
+				[],
+				[],
+				index,
+			),
+		)
+		.filter((candidate): candidate is RankedItem => candidate !== undefined)
+		.sort(compareRankedItems)
+		.map((candidate) => candidate.item);
+
+	return freezeState(items, argumentBeforeCursor, {
+		line: 0,
+		start: argumentStart,
+		end: argumentEnd,
+	});
 }
 
 function rankItem(

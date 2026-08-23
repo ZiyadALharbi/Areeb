@@ -41,6 +41,11 @@ export interface CommandSessionListItem {
 	readonly model: SessionModel | null;
 }
 
+export interface CommandModelListItem {
+	readonly provider: string;
+	readonly model: string;
+}
+
 export interface CommandHotkey {
 	readonly keys: string;
 	readonly description: string;
@@ -54,6 +59,7 @@ export interface CommandTuiInfo {
 export interface CommandContext {
 	readonly hasCapability: (capability: CommandCapability) => boolean;
 	readonly listSessions: () => Promise<readonly CommandSessionListItem[]>;
+	readonly listModels: () => readonly CommandModelListItem[];
 	readonly getSessionInfo: () => Promise<CommandSessionInfo>;
 	readonly getResourceSummary: () => CommandResourceSummary;
 	readonly getContextFiles: () => readonly string[];
@@ -72,7 +78,14 @@ export type CommandOutcome =
 	| { readonly kind: "quit" }
 	| { readonly kind: "none" }
 	| { readonly kind: "new-session" }
+	| { readonly kind: "resume-picker" }
 	| { readonly kind: "resume"; readonly sessionId: string }
+	| { readonly kind: "model-picker" }
+	| {
+			readonly kind: "set-model";
+			readonly provider: string;
+			readonly model: string;
+	  }
 	| {
 			readonly kind: "unavailable";
 			readonly missingCapability: CommandCapability;
@@ -319,25 +332,9 @@ export function createDefaultCommandRegistry(): CommandRegistry {
 		description: "Resume a previous session",
 		usage: "/resume [session-id]",
 		requirements: ["session-controller"],
-		async handler(context, argumentsText) {
+		async handler(_context, argumentsText) {
 			if (argumentsText.length === 0) {
-				try {
-					const sessions = await context.listSessions();
-					return {
-						kind: "message",
-						level: "info",
-						text:
-							sessions.length === 0
-								? "No sessions found"
-								: sessions.map(formatSessionListItem).join("\n"),
-					};
-				} catch (error) {
-					return {
-						kind: "message",
-						level: "error",
-						text: `Failed to list sessions: ${errorMessage(error)}`,
-					};
-				}
+				return { kind: "resume-picker" };
 			}
 
 			if (/\s/.test(argumentsText)) {
@@ -354,10 +351,34 @@ export function createDefaultCommandRegistry(): CommandRegistry {
 	registry.register({
 		name: "model",
 		description: "Show or switch the current model",
-		usage: "/model [model]",
-		// Model switching needs a catalog plus safe provider/runtime reconstruction,
-		// rather than mutating the persisted selection beneath the active harness.
+		usage: "/model [provider/model]",
 		requirements: ["model-selection"],
+		async handler(context, argumentsText) {
+			if (argumentsText.length === 0) {
+				return { kind: "model-picker" };
+			}
+
+			const selection = parseModelSelection(argumentsText);
+			if (selection === undefined) {
+				return usageError("/model [provider/model]");
+			}
+			if (
+				!context
+					.listModels()
+					.some(
+						(entry) =>
+							entry.provider === selection.provider &&
+							entry.model === selection.model,
+					)
+			) {
+				return {
+					kind: "message",
+					level: "error",
+					text: `Unknown or unavailable model: ${argumentsText}`,
+				};
+			}
+			return { kind: "set-model", ...selection };
+		},
 	});
 	registry.register({
 		name: "login",
@@ -607,20 +628,18 @@ function formatResourceDiagnostic(diagnostic: ResourceDiagnostic): string {
 	return `- ${identity}: ${diagnostic.message}${locations.length === 0 ? "" : ` (${locations.join("; ")})`}`;
 }
 
-function formatSessionListItem(session: CommandSessionListItem): string {
-	return [
-		cleanDisplayField(session.id),
-		cleanDisplayField(session.title),
-		session.model === null
-			? "-"
-			: `${cleanDisplayField(session.model.provider)}/${cleanDisplayField(session.model.model)}`,
-	].join("\t");
-}
-
-function cleanDisplayField(value: string): string {
-	return value.replace(/[\t\r\n]+/g, " ");
-}
-
-function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
+function parseModelSelection(
+	value: string,
+): { readonly provider: string; readonly model: string } | undefined {
+	if (/\s/.test(value)) {
+		return undefined;
+	}
+	const separator = value.indexOf("/");
+	if (separator <= 0 || separator === value.length - 1) {
+		return undefined;
+	}
+	return {
+		provider: value.slice(0, separator),
+		model: value.slice(separator + 1),
+	};
 }

@@ -23,6 +23,8 @@ export interface TuiState {
 	readonly cwd: string;
 	assistantBuffer?: string;
 	running: boolean;
+	inputMode: "idle" | "locked" | "running";
+	queuedCount: number;
 	terminalReason?: AgentEndReason;
 }
 
@@ -39,5 +41,11 @@ export function createTuiState(
 		cwd: ".",
 	},
 ): TuiState {
-	return { items: [], ...display, running: false };
+	return {
+		items: [],
+		...display,
+		running: false,
+		inputMode: "idle",
+		queuedCount: 0,
+	};
 }

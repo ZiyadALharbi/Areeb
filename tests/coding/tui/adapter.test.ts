@@ -70,6 +70,8 @@ describe("TuiEventAdapter", () => {
 			model: "unknown model",
 			cwd: ".",
 			running: false,
+			inputMode: "idle",
+			queuedCount: 0,
 		});
 	});
 

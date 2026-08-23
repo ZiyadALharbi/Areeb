@@ -362,6 +362,9 @@ describe("CLI interactive mode", () => {
 						expect(controller.metadata.cwd).toBe(storedCwd);
 						expect(controller.model).toBe("stored-model");
 						expect(controller.messages).toEqual([]);
+						expect(controller.completionCatalog.models).toMatchObject([
+							{ provider: "openai", model: "stored-model" },
+						]);
 						expect(await controller.handleCommand("/new")).toMatchObject({
 							outcome: { kind: "message", level: "warning" },
 						});
@@ -409,6 +412,75 @@ describe("CLI interactive mode", () => {
 				}),
 			).toBe(1);
 			expect(failureOutput.value).toBe("areeb: interactive runner failed\n");
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	test("reconstructs the active session across providers before persisting the switch", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "areeb-cli-model-switch-"));
+		try {
+			const userRoot = join(directory, "user");
+			const cwd = join(directory, "project");
+			await setupOpenAICompatibleProvider({
+				userRoot,
+				env: { OPENAI_API_KEY: "test-key" },
+				provider: "openai",
+				models: ["model-a"],
+				defaultModel: "model-a",
+			});
+			await setupOpenAICompatibleProvider({
+				userRoot,
+				env: { OPENAI_API_KEY: "test-key" },
+				provider: "local",
+				baseUrl: "http://localhost:11434/v1",
+				models: ["org/model-b"],
+				defaultModel: "org/model-b",
+				timeoutSeconds: 45,
+			});
+			const providerConfigs: OpenAICompatibleConfig[] = [];
+
+			expect(
+				await runCli([], {
+					cwd,
+					userRoot,
+					agentsRoot: join(directory, "agents"),
+					env: { OPENAI_API_KEY: "test-key" },
+					stdin: { isTTY: true },
+					stdout: new BufferOutput(true),
+					stderr: new BufferOutput(),
+					createProvider(config) {
+						providerConfigs.push(config);
+						return new FakeProvider([], { providerId: config.providerId });
+					},
+					async runInteractive(controller) {
+						expect(controller.completionCatalog.models).toMatchObject([
+							{ provider: "local", model: "org/model-b" },
+							{ provider: "openai", model: "model-a" },
+						]);
+						expect(await controller.setModel("local", "org/model-b")).toEqual({
+							kind: "none",
+						});
+						expect(controller).toMatchObject({
+							provider: "local",
+							model: "org/model-b",
+						});
+						return 0;
+					},
+				}),
+			).toBe(0);
+			expect(providerConfigs).toMatchObject([
+				{ providerId: "openai" },
+				{
+					providerId: "local",
+					baseUrl: "http://localhost:11434/v1",
+				},
+			]);
+			const [record] = await new CodingSessionManager({ cwd, userRoot }).list();
+			expect(record?.model).toEqual({
+				provider: "local",
+				model: "org/model-b",
+			});
 		} finally {
 			await rm(directory, { recursive: true, force: true });
 		}
