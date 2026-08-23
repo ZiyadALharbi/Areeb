@@ -3,6 +3,7 @@ import type {
 	SessionContext,
 	SessionHandle,
 	SessionMetadata,
+	SessionModel,
 } from "../agent/session/types.ts";
 import type {
 	AgentMessage,
@@ -17,6 +18,7 @@ import type { ReasoningLevel } from "../ai/types.ts";
 import {
 	type CommandContext,
 	type CommandHotkey,
+	type CommandModelListItem,
 	type CommandRegistry,
 	type CommandResourceReloadResult,
 	type CommandResult,
@@ -73,6 +75,10 @@ export interface CodingSessionControllerService {
 	listSessions(): Promise<readonly CommandSessionListItem[]>;
 }
 
+export interface CodingSessionModelService {
+	listModels(): readonly CommandModelListItem[];
+}
+
 export interface CodingSessionTuiService {
 	getThemeName(): string;
 	getHotkeys(): readonly CommandHotkey[];
@@ -80,7 +86,15 @@ export interface CodingSessionTuiService {
 
 export interface CodingSessionHostServices {
 	readonly sessionController?: CodingSessionControllerService;
+	readonly modelController?: CodingSessionModelService;
 	readonly tui?: CodingSessionTuiService;
+}
+
+export interface PreparedCodingSession<
+	TMetadata extends SessionMetadata = SessionMetadata,
+> {
+	readonly session: CodingSession<TMetadata>;
+	commit(): Promise<void>;
 }
 
 /**
@@ -112,6 +126,63 @@ export class CodingSession<
 	static async load<TMetadata extends SessionMetadata = SessionMetadata>(
 		config: CodingSessionConfig<TMetadata>,
 	): Promise<CodingSession<TMetadata>> {
+		const { session } = await CodingSession.construct(config, {
+			initialize: true,
+		});
+		session.attachPersistence();
+		return session;
+	}
+
+	/** Build a replacement runtime before durably changing the active model. */
+	static async prepareModelChange<
+		TMetadata extends SessionMetadata = SessionMetadata,
+	>(
+		config: CodingSessionConfig<TMetadata>,
+	): Promise<PreparedCodingSession<TMetadata>> {
+		const prepared = await CodingSession.construct(config, {
+			initialize: false,
+			selection: {
+				provider: config.provider.providerId,
+				model: config.model,
+			},
+		});
+		let committed = false;
+
+		return Object.freeze({
+			session: prepared.session,
+			async commit() {
+				if (committed) {
+					throw new Error("Prepared model change has already been committed");
+				}
+				const latest = requireStoredModel(await config.session.buildContext());
+				if (!sameModel(latest, prepared.storedModel)) {
+					throw new Error(
+						"Session model changed while the replacement runtime was being prepared",
+					);
+				}
+				await config.session.appendEntry({
+					type: "model_change",
+					provider: config.provider.providerId,
+					model: config.model,
+				});
+				prepared.session.attachPersistence();
+				committed = true;
+			},
+		});
+	}
+
+	private static async construct<
+		TMetadata extends SessionMetadata = SessionMetadata,
+	>(
+		config: CodingSessionConfig<TMetadata>,
+		options: {
+			readonly initialize: boolean;
+			readonly selection?: SessionModel;
+		},
+	): Promise<{
+		readonly session: CodingSession<TMetadata>;
+		readonly storedModel: SessionModel;
+	}> {
 		validateConfig(config);
 
 		const metadata = await config.session.getMetadata();
@@ -162,7 +233,7 @@ export class CodingSession<
 			).length > 0;
 		let initialized = false;
 
-		if (context.model === null) {
+		if (options.initialize && context.model === null) {
 			await config.session.appendEntry({
 				type: "model_change",
 				provider: config.provider.providerId,
@@ -171,7 +242,7 @@ export class CodingSession<
 			initialized = true;
 		}
 
-		if (!hasReasoningEntry) {
+		if (options.initialize && !hasReasoningEntry) {
 			await config.session.appendEntry({
 				type: "reasoning_change",
 				reasoning: config.reasoning,
@@ -179,7 +250,7 @@ export class CodingSession<
 			initialized = true;
 		}
 
-		if (context.activeToolNames === null) {
+		if (options.initialize && context.activeToolNames === null) {
 			await config.session.appendEntry({
 				type: "active_tools_change",
 				activeToolNames: availableToolDefinitions.map((tool) => tool.name),
@@ -191,10 +262,20 @@ export class CodingSession<
 			context = await config.session.buildContext();
 		}
 
-		const model = requireStoredModel(context);
-		if (model.provider !== config.provider.providerId) {
+		if (
+			!options.initialize &&
+			(!hasReasoningEntry || context.activeToolNames === null)
+		) {
 			throw new Error(
-				`Stored provider "${model.provider}" does not match configured provider "${config.provider.providerId}"`,
+				"Cannot stage a model change for an uninitialized session",
+			);
+		}
+
+		const storedModel = requireStoredModel(context);
+		const runtimeModel = options.selection ?? storedModel;
+		if (runtimeModel.provider !== config.provider.providerId) {
+			throw new Error(
+				`Stored provider "${runtimeModel.provider}" does not match configured provider "${config.provider.providerId}"`,
 			);
 		}
 
@@ -213,7 +294,7 @@ export class CodingSession<
 		const harness = new AgentHarness(
 			{
 				provider: config.provider,
-				model: model.model,
+				model: runtimeModel.model,
 				systemPrompt,
 				tools,
 				streamOptions: {
@@ -235,6 +316,11 @@ export class CodingSession<
 		);
 
 		const repairs = harness.repairInterruptedToolCalls();
+		if (!options.initialize && repairs.length > 0) {
+			throw new Error(
+				"Cannot stage a model change while the transcript needs repair",
+			);
+		}
 		for (const repair of repairs) {
 			await config.session.appendMessage(repair);
 		}
@@ -243,8 +329,8 @@ export class CodingSession<
 			config.session,
 			harness,
 			metadata,
-			model.provider,
-			model.model,
+			runtimeModel.provider,
+			runtimeModel.model,
 			context.reasoning,
 			systemPrompt,
 			tools,
@@ -252,8 +338,7 @@ export class CodingSession<
 			resourceSnapshot,
 			commandRegistry,
 		);
-		codingSession.attachPersistence();
-		return codingSession;
+		return { session: codingSession, storedModel: { ...storedModel } };
 	}
 
 	get messages(): readonly AgentMessage[] {
@@ -316,6 +401,10 @@ export class CodingSession<
 
 	get isRunning(): boolean {
 		return this.harness.isRunning;
+	}
+
+	get queuedMessages(): QueuedMessages {
+		return this.harness.queuedMessages;
 	}
 
 	prompt(
@@ -386,6 +475,12 @@ export class CodingSession<
 		return typeof input === "string"
 			? this.harness.followUp(this.expandPrompt(input))
 			: this.harness.followUp(input);
+	}
+
+	clearQueues(): QueuedMessages {
+		this.assertPersistenceHealthy();
+		this.harness.clearQueues();
+		return this.harness.queuedMessages;
 	}
 
 	async handleCommand(
@@ -475,6 +570,7 @@ export class CodingSession<
 		services: CodingSessionHostServices,
 	): CommandContext {
 		const sessionController = services.sessionController;
+		const modelController = services.modelController;
 		const tui = services.tui;
 		return {
 			hasCapability: (capability) => {
@@ -483,9 +579,10 @@ export class CodingSession<
 						return sessionController !== undefined;
 					case "tui":
 						return tui !== undefined;
+					case "model-selection":
+						return modelController !== undefined;
 					case "compaction":
 					case "session-export":
-					case "model-selection":
 					case "provider-auth":
 						return false;
 				}
@@ -495,6 +592,12 @@ export class CodingSession<
 					throw new Error("Session controller is unavailable");
 				}
 				return sessionController.listSessions();
+			},
+			listModels: () => {
+				if (modelController === undefined) {
+					throw new Error("Model controller is unavailable");
+				}
+				return modelController.listModels();
 			},
 			getResourceSummary: () => ({
 				skillCount: this.resourceSnapshot.skills.length,
@@ -623,6 +726,10 @@ function sameToolSelection(
 		left.length === right.length &&
 		left.every((tool, index) => tool.name === right[index]?.name)
 	);
+}
+
+function sameModel(left: SessionModel, right: SessionModel): boolean {
+	return left.provider === right.provider && left.model === right.model;
 }
 
 function isReasoningLevel(value: unknown): value is ReasoningLevel {

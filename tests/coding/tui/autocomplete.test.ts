@@ -32,6 +32,8 @@ function complete(
 		readonly cursorLine?: number;
 		readonly cursorCol?: number;
 		readonly lines?: readonly string[];
+		readonly sessionIds?: readonly string[];
+		readonly modelValues?: readonly string[];
 	} = {},
 ) {
 	return buildCompletionState({
@@ -42,6 +44,8 @@ function complete(
 		cursorLine: options.cursorLine ?? 0,
 		cursorCol: options.cursorCol ?? text.length,
 		availableCapabilities: ["session-controller", "tui"],
+		sessionIds: options.sessionIds ?? [],
+		modelValues: options.modelValues ?? [],
 	});
 }
 
@@ -152,5 +156,31 @@ describe("buildCompletionState", () => {
 		});
 
 		expect(values(state?.items ?? [])).toEqual(["/quit", "/review"]);
+	});
+
+	test("completes session and canonical model arguments in place", () => {
+		const sessions = [
+			"00000000-0000-4000-8000-000000000002",
+			"00000000-0000-4000-8000-000000000001",
+		];
+		const resume = complete("/resume 0000", { sessionIds: sessions });
+		expect(values(resume?.items ?? [])).toEqual(sessions);
+		expect(resume?.replacement).toEqual({
+			line: 0,
+			start: "/resume ".length,
+			end: "/resume 0000".length,
+		});
+
+		const models = ["openai/shared", "local/shared", "local/org/model/version"];
+		const model = complete("/model local/o trailing", {
+			modelValues: models,
+			cursorCol: "/model local/o".length,
+		});
+		expect(values(model?.items ?? [])).toEqual(["local/org/model/version"]);
+		expect(model?.replacement).toEqual({
+			line: 0,
+			start: "/model ".length,
+			end: "/model local/o".length,
+		});
 	});
 });
