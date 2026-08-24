@@ -374,6 +374,25 @@ describe("createTuiApp pickers", () => {
 		expect(app.editor.disableSubmit).toBe(false);
 	});
 
+	test("does not render a separate activity line above the composer", () => {
+		const state = createTuiState({
+			sessionId: SESSION_ID,
+			model: "model-a",
+			cwd: "/project",
+			reasoning: "high",
+		});
+		state.running = true;
+		state.inputMode = "running";
+		state.assistantBlocks = [{ role: "thinking", text: "Inspecting files" }];
+		const app = createTuiApp(appOptions({ state }));
+		const lines = stripTerminalSequences(app.tui.render(100).join("\n"))
+			.split("\n")
+			.map((line) => line.trim());
+
+		expect(lines).not.toContain("Thinking");
+		expect(lines.some((line) => line.startsWith("Thinking..."))).toBe(true);
+	});
+
 	test("keeps the dark theme as the only selectable theme", async () => {
 		const saved: string[] = [];
 		const app = createTuiApp(

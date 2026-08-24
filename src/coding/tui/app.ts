@@ -7,7 +7,6 @@ import {
 	Editor,
 	fuzzyFilter,
 	Key,
-	Loader,
 	matchesKey,
 	type OverlayHandle,
 	type AutocompleteItem as PiAutocompleteItem,
@@ -37,6 +36,7 @@ import {
 import {
 	MessageBlock,
 	ThinkingBlock,
+	TOOL_SPINNER_INTERVAL,
 	ToolBlock,
 	ToolGroupBlock,
 } from "./blocks.ts";
@@ -171,7 +171,6 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 	editor.disableSubmit = options.state?.inputMode === "locked";
 	const composerSurface = new ComposerSurface(editor, theme, options.state);
 	const composer = new VStack([composerSurface]);
-	const activity = new ComposerActivityLine(tui, theme, options.state);
 	const status = new VStack();
 	const shortcutLine = new VStack();
 	const root = new VStack(
@@ -182,7 +181,6 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 				grow: 1,
 				minSize: 1,
 			},
-			{ component: activity, basis: "auto" },
 			{ component: composer, basis: "auto" },
 			{ component: status, basis: "auto" },
 			{
@@ -219,10 +217,28 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		| { readonly text: string; readonly level: CommandNoticeLevel }
 		| undefined;
 	let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+	let toolSpinnerTimer: ReturnType<typeof setInterval> | undefined;
 	const expandedToolCallIds = new Set<string>();
 	let thinkingExpanded = false;
 	let blocksByItem = new WeakMap<object, Component>();
 	const toolGroupsById = new Map<string, ToolGroupBlock>();
+
+	const syncToolSpinner = (state: TuiState): void => {
+		const hasActiveTool =
+			state.running &&
+			state.items.some(
+				(item) => item.role === "tool" && item.isError === undefined,
+			);
+		if (hasActiveTool && toolSpinnerTimer === undefined) {
+			toolSpinnerTimer = setInterval(
+				() => tui.requestRender(),
+				TOOL_SPINNER_INTERVAL,
+			);
+		} else if (!hasActiveTool && toolSpinnerTimer !== undefined) {
+			clearInterval(toolSpinnerTimer);
+			toolSpinnerTimer = undefined;
+		}
+	};
 
 	const restoreComposer = (): void => {
 		composerSurface.setSelector(undefined);
@@ -956,7 +972,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		currentState = state;
 		currentSessionId = state.sessionId;
 		composerSurface.setState(state);
-		activity.setState(state);
+		syncToolSpinner(state);
 		if (state.running) {
 			dismissCommandPalette();
 			dismissPicker();
@@ -1100,7 +1116,10 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 	};
 
 	const dispose = (): void => {
-		activity.stop();
+		if (toolSpinnerTimer !== undefined) {
+			clearInterval(toolSpinnerTimer);
+			toolSpinnerTimer = undefined;
+		}
 		if (noticeTimer !== undefined) {
 			clearTimeout(noticeTimer);
 			noticeTimer = undefined;
@@ -1234,61 +1253,6 @@ class ComposerSurface extends Container {
 	}
 }
 
-class ComposerActivityLine implements Component {
-	private readonly loader: Loader;
-	private active = false;
-	private description: string | undefined;
-
-	constructor(
-		tui: TuiAltScreen,
-		private readonly theme: TuiTheme,
-		state: TuiState | undefined,
-	) {
-		this.loader = new Loader(tui, theme.assistant, theme.muted, "Working");
-		this.loader.stop();
-		this.setState(state);
-	}
-
-	setState(state: TuiState | undefined): void {
-		const description = agentActivityDescription(state);
-		if (description === undefined) {
-			this.active = false;
-			this.description = undefined;
-			this.loader.stop();
-			return;
-		}
-		if (description !== this.description) {
-			this.description = description;
-			this.loader.setMessage(description);
-		}
-		if (!this.active) {
-			this.active = true;
-			this.loader.start();
-		}
-	}
-
-	stop(): void {
-		this.active = false;
-		this.description = undefined;
-		this.loader.stop();
-	}
-
-	invalidate(): void {
-		this.loader.invalidate();
-	}
-
-	render(width: number): string[] {
-		const availableWidth = normalizeWidth(width);
-		if (!this.active || availableWidth === 0) {
-			return [];
-		}
-		const line = this.loader.render(availableWidth).at(-1) ?? "";
-		return [
-			truncateToWidth(`${this.theme.muted("  ")}${line}`, availableWidth, "…"),
-		];
-	}
-}
-
 class ComposerStatusLine implements Component {
 	constructor(
 		private readonly state: TuiState | undefined,
@@ -1335,55 +1299,6 @@ class ComposerStatusLine implements Component {
 			);
 		}
 		return undefined;
-	}
-}
-
-function agentActivityDescription(
-	state: TuiState | undefined,
-): string | undefined {
-	if (state === undefined) {
-		return undefined;
-	}
-	if (state.inputMode === "locked") {
-		return "Starting";
-	}
-	if (!state.running) {
-		return undefined;
-	}
-	for (let index = state.items.length - 1; index >= 0; index -= 1) {
-		const item = state.items[index];
-		if (item?.role === "tool" && item.isError === undefined) {
-			return toolActivityDescription(item.toolName);
-		}
-	}
-	const latestBlock = state.assistantBlocks?.at(-1);
-	if (latestBlock?.role === "thinking") {
-		return "Thinking";
-	}
-	if (
-		latestBlock?.role === "assistant" ||
-		(state.assistantBuffer !== undefined && state.assistantBuffer.length > 0)
-	) {
-		return "Responding";
-	}
-	return "Working";
-}
-
-function toolActivityDescription(toolName: string): string {
-	switch (toolName.toLocaleLowerCase()) {
-		case "read":
-			return "Reading";
-		case "edit":
-		case "write":
-			return "Editing";
-		case "bash":
-			return "Running";
-		default: {
-			const word = cleanPickerText(toolName).trim().split(/\s+/, 1)[0];
-			return word === undefined || word.length === 0
-				? "Working"
-				: `${word[0]?.toLocaleUpperCase() ?? ""}${word.slice(1)}`;
-		}
 	}
 }
 

@@ -15,7 +15,7 @@ describe("TUI transcript blocks", () => {
 		const user = new MessageBlock("user", "hello", theme);
 		const assistant = new MessageBlock("assistant", "welcome", theme);
 		const status = new MessageBlock("status", "waiting", theme);
-		const tool = new ToolBlock("bash", theme);
+		const tool = new ToolBlock("bash", theme, { isError: false });
 
 		const userLines = user.render(40).map(stripTerminalSequences);
 		expect(userLines).toHaveLength(3);
@@ -31,7 +31,7 @@ describe("TUI transcript blocks", () => {
 			"│  waiting",
 		]);
 		expect(tool.render(40).map(stripTerminalSequences)).toEqual([
-			"● Ran 1 command (Ctrl+O to Expand)",
+			"■ Ran 1 command (Ctrl+O to Expand)",
 		]);
 	});
 
@@ -82,6 +82,17 @@ describe("TUI transcript blocks", () => {
 		]);
 		expect(plain[0]).not.toContain("●");
 		expect(rendered[0]).toContain("38;2;138;190;183");
+	});
+
+	test("shows only the latest complete thinking summary when collapsed", () => {
+		const rendered = new ThinkingBlock(
+			"Outlining key files\n\nExplaining startup flow\n\nChecking lifecycle cleanup",
+			theme,
+		).render(100);
+
+		expect(rendered.map(stripTerminalSequences)).toEqual([
+			"Thinking... · Checking lifecycle cleanup (Ctrl+T to Expand)",
+		]);
 	});
 
 	test("renders assistant Markdown while leaving user Markdown literal", () => {
@@ -189,13 +200,13 @@ describe("TUI transcript blocks", () => {
 	});
 
 	test("keeps tool headers to one truncated line", () => {
-		const lines = new ToolBlock("a-very-long-tool-name\nignored", theme).render(
-			12,
-		);
+		const lines = new ToolBlock("a-very-long-tool-name\nignored", theme, {
+			isError: false,
+		}).render(12);
 
 		expect(lines).toHaveLength(1);
 		expect(visibleWidth(lines[0] ?? "")).toBeLessThanOrEqual(12);
-		expect(stripTerminalSequences(lines[0] ?? "")).toBe("● Ran 1 com…");
+		expect(stripTerminalSequences(lines[0] ?? "")).toBe("■ Ran 1 com…");
 	});
 
 	test("keeps tool output collapsed until expanded and bounds its lines", () => {
@@ -297,7 +308,7 @@ describe("TUI transcript blocks", () => {
 			{ toolName: "edit", isError: false },
 		]);
 		expect(group.render(60).map(stripTerminalSequences)).toEqual([
-			"● Ran 2 commands (Ctrl+O to Expand)",
+			"■ Ran 2 commands (Ctrl+O to Expand)",
 		]);
 	});
 

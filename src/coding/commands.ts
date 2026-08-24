@@ -528,9 +528,9 @@ export function createDefaultCommandRegistry(): CommandRegistry {
 		},
 	});
 	registry.register({
-		name: "skill",
+		name: "skills",
 		description: "Choose and invoke a loaded skill",
-		usage: "/skill [instructions]",
+		usage: "/skills [instructions]",
 		requirements: ["tui"],
 		async handler(_context, argumentsText) {
 			return { kind: "skill-picker", argumentsText };

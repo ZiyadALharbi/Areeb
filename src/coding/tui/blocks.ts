@@ -6,6 +6,7 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import cliSpinners from "cli-spinners";
 import type { TuiTheme } from "./theme.ts";
 
 const MESSAGE_GLYPH = "│";
@@ -15,8 +16,9 @@ const USER_PADDING = 2;
 const TOOL_PREVIEW_MAX_LINES = 16;
 const DETAIL_INSET = 2;
 const HIDDEN_CODE_FENCE = "\u{e000}";
+const TOOL_SPINNER = cliSpinners.toggle4;
 
-export const ACTIVITY_SPINNER_FRAMES = Object.freeze([
+const THINKING_SPINNER_FRAMES = Object.freeze([
 	"⠋",
 	"⠙",
 	"⠹",
@@ -28,6 +30,8 @@ export const ACTIVITY_SPINNER_FRAMES = Object.freeze([
 	"⠇",
 	"⠏",
 ]);
+
+export const TOOL_SPINNER_INTERVAL = TOOL_SPINNER.interval;
 
 export type MessageBlockKind = "user" | "assistant" | "status" | "error";
 
@@ -277,12 +281,12 @@ export class ToolGroupBlock implements Component {
 		const failed = this.tools.some((tool) => tool.isError === true);
 		const incomplete = this.tools.some((tool) => tool.isError === undefined);
 		const marker = active
-			? this.theme.assistant(activitySpinnerFrame())
+			? this.theme.assistant(toolSpinnerFrame())
 			: failed
 				? this.theme.error("●")
 				: incomplete
 					? this.theme.muted("●")
-					: this.theme.success("●");
+					: this.theme.success(TOOL_SPINNER.frames[0] ?? "■");
 		const count = this.tools.length;
 		const summary = `Ran ${count} command${count === 1 ? "" : "s"}`;
 		const shortcut = `(Ctrl+O to ${this.expanded ? "Collapse" : "Expand"})`;
@@ -564,9 +568,15 @@ function stripThinkingMarkdown(text: string): string {
 		.trim();
 }
 
-function activitySpinnerFrame(): string {
-	const index = Math.floor(Date.now() / 80) % ACTIVITY_SPINNER_FRAMES.length;
-	return ACTIVITY_SPINNER_FRAMES[index] ?? ACTIVITY_SPINNER_FRAMES[0] ?? "⠋";
+function toolSpinnerFrame(): string {
+	const index =
+		Math.floor(Date.now() / TOOL_SPINNER.interval) % TOOL_SPINNER.frames.length;
+	return TOOL_SPINNER.frames[index] ?? TOOL_SPINNER.frames[0] ?? "■";
+}
+
+function thinkingSpinnerFrame(): string {
+	const index = Math.floor(Date.now() / 80) % THINKING_SPINNER_FRAMES.length;
+	return THINKING_SPINNER_FRAMES[index] ?? THINKING_SPINNER_FRAMES[0] ?? "⠋";
 }
 
 function renderThinkingHeader(
@@ -576,7 +586,7 @@ function renderThinkingHeader(
 	width: number,
 	theme: TuiTheme,
 ): string {
-	const marker = active ? `${theme.assistant(activitySpinnerFrame())} ` : "";
+	const marker = active ? `${theme.assistant(thinkingSpinnerFrame())} ` : "";
 	const label = theme.assistant("Thinking...");
 	const shortcut = theme.shortcut(
 		`(Ctrl+T to ${expanded ? "Collapse" : "Expand"})`,
@@ -593,6 +603,8 @@ function renderThinkingHeader(
 	if (previewWidth <= 0) {
 		return withoutPreview;
 	}
-	const preview = truncateToWidth(text.replace(/\s+/g, " "), previewWidth, "…");
+	const summaries = text.split(/\n\s*\n/);
+	const previewText = (summaries.at(-1) ?? text).replace(/\s+/g, " ").trim();
+	const preview = truncateToWidth(previewText, previewWidth, "…");
 	return `${leading}${theme.muted(`${separator}${preview}`)} ${shortcut}`;
 }
