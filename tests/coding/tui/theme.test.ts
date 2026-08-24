@@ -23,13 +23,16 @@ describe("TUI themes", () => {
 	test("keeps captured callbacks live when the palette changes", () => {
 		const binding = createTuiThemeBinding(AREEB_DARK_THEME);
 		const primary = binding.primary;
+		const userBorder = binding.userBorder;
 		const markdownHeading = binding.markdown.heading;
 		const dark = primary("text");
+		const darkUserBorder = userBorder("border");
 		const darkHeading = markdownHeading("heading");
 
 		binding.setTheme(AREEB_LIGHT_THEME);
 		expect(binding.name).toBe("areeb-light");
 		expect(primary("text")).not.toBe(dark);
+		expect(userBorder("border")).not.toBe(darkUserBorder);
 		expect(markdownHeading("heading")).not.toBe(darkHeading);
 		expect(stripTerminalSequences(primary("text"))).toBe("text");
 	});

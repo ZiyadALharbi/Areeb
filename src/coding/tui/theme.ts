@@ -14,6 +14,7 @@ export interface TuiTheme {
 	readonly primary: TextStyle;
 	readonly muted: TextStyle;
 	readonly user: TextStyle;
+	readonly userBorder: TextStyle;
 	readonly assistant: TextStyle;
 	readonly tool: TextStyle;
 	readonly error: TextStyle;
@@ -56,6 +57,7 @@ interface ThemePalette {
 	readonly primary: `#${string}`;
 	readonly muted: `#${string}`;
 	readonly user: `#${string}`;
+	readonly userBorder: `#${string}`;
 	readonly assistant: `#${string}`;
 	readonly tool: `#${string}`;
 	readonly error: `#${string}`;
@@ -82,6 +84,7 @@ function createTheme(
 		primary: foreground(palette.primary),
 		muted: foreground(palette.muted),
 		user: foreground(palette.user),
+		userBorder: foreground(palette.userBorder),
 		assistant: foreground(palette.assistant),
 		tool: foreground(palette.tool),
 		error: foreground(palette.error),
@@ -105,6 +108,7 @@ function createTheme(
 		primary: styles.primary,
 		muted: styles.muted,
 		user: styles.user,
+		userBorder: styles.userBorder,
 		assistant: styles.assistant,
 		tool: styles.tool,
 		error: styles.error,
@@ -146,31 +150,33 @@ function createTheme(
 	});
 }
 
-export const AREEB_DARK_THEME = createTheme("areeb-dark", "#141414", {
-	primary: "#e1e1e1",
-	muted: "#6c6c6c",
-	user: "#c8c8c8",
-	assistant: "#bb9af7",
-	tool: "#787878",
-	error: "#f7768e",
-	warning: "#e0af68",
-	composerBorder: "#505058",
-	shortcut: "#6c6c6c",
-	heading: "#bb9af7",
-	link: "#7aa2f7",
-	code: "#e0af68",
-	quote: "#9aa5ce",
-	diffAdded: "#9ece6a",
-	diffRemoved: "#f7768e",
-	diffContext: "#a9b1d6",
-	diffHunk: "#7aa2f7",
-	diffMeta: "#787878",
+export const AREEB_DARK_THEME = createTheme("areeb-dark", "#0a0a0a", {
+	primary: "#f5f5f5",
+	muted: "#707070",
+	user: "#f1c674",
+	userBorder: "#39765e",
+	assistant: "#8abeb7",
+	tool: "#707070",
+	error: "#fc424b",
+	warning: "#f1c674",
+	composerBorder: "#4b4b4b",
+	shortcut: "#707070",
+	heading: "#f1c674",
+	link: "#8abeb7",
+	code: "#b6bd68",
+	quote: "#8abeb7",
+	diffAdded: "#00bd7d",
+	diffRemoved: "#fc424b",
+	diffContext: "#c0c0c0",
+	diffHunk: "#8abeb7",
+	diffMeta: "#707070",
 });
 
 export const AREEB_LIGHT_THEME = createTheme("areeb-light", "#f7f7f5", {
 	primary: "#242424",
 	muted: "#767676",
 	user: "#444444",
+	userBorder: "#0b7f68",
 	assistant: "#6f42c1",
 	tool: "#666666",
 	error: "#c62828",
@@ -223,6 +229,7 @@ export function createTuiThemeBinding(initial: TuiTheme): TuiThemeBinding {
 		primary: bind((theme) => theme.primary),
 		muted: bind((theme) => theme.muted),
 		user: bind((theme) => theme.user),
+		userBorder: bind((theme) => theme.userBorder),
 		assistant: bind((theme) => theme.assistant),
 		tool: bind((theme) => theme.tool),
 		error: bind((theme) => theme.error),

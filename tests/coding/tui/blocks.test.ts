@@ -22,6 +22,7 @@ describe("TUI transcript blocks", () => {
 		expect(userLines[1]).toStartWith("│  › hello");
 		expect(userLines[2]).toBe(`╰${"─".repeat(38)}╯`);
 		expect(userLines.every((line) => visibleWidth(line) === 40)).toBe(true);
+		expect(user.render(40).join("\n")).toContain("38;2;57;118;94");
 		expect(assistant.render(40).map(stripTerminalSequences)).toEqual([
 			" welcome",
 		]);
@@ -57,8 +58,8 @@ describe("TUI transcript blocks", () => {
 		expect(plain.join("\n")).toContain("wraps");
 		expect(plain.join("\n")).toContain("second");
 		expect(rendered.every((line) => visibleWidth(line) <= 18)).toBe(true);
-		expect(rendered[0]).toContain("38;2;187;154;247");
-		expect(rendered.join("\n")).toContain("38;2;108;108;108");
+		expect(rendered[0]).toContain("38;2;138;190;183");
+		expect(rendered.join("\n")).toContain("38;2;112;112;112");
 		expect(rendered.join("\n")).toContain("\u001b[3m");
 		expect(rendered.join("\n")).not.toContain("\u001b[31m");
 	});
@@ -190,7 +191,7 @@ describe("TUI transcript blocks", () => {
 		tool.update({ preview: "new preview", isError: true });
 		const rendered = tool.render(40);
 		expect(rendered.map(stripTerminalSequences)).toContain("   new preview");
-		expect(rendered[0]).toContain("38;2;247;118;142");
+		expect(rendered[0]).toContain("38;2;252;66;75");
 	});
 
 	test("prefers a literal edit patch and uses the error accent", () => {
@@ -208,7 +209,7 @@ describe("TUI transcript blocks", () => {
 			"   -old",
 			"   +new",
 		]);
-		expect(rendered[0]).toContain("38;2;247;118;142");
+		expect(rendered[0]).toContain("38;2;252;66;75");
 	});
 
 	test("styles every unified-diff category before wrapping", () => {
@@ -235,14 +236,14 @@ describe("TUI transcript blocks", () => {
 
 		expect(plain).toContain("   --- a/file");
 		expect(plain).toContain("   +++ b/file");
-		expect(styledLine("diff --git")).toContain("38;2;120;120;120");
-		expect(styledLine("@@ -1")).toContain("38;2;122;162;247");
-		expect(styledLine("context")).toContain("38;2;169;177;214");
-		expect(styledLine("removed")).toContain("38;2;247;118;142");
+		expect(styledLine("diff --git")).toContain("38;2;112;112;112");
+		expect(styledLine("@@ -1")).toContain("38;2;138;190;183");
+		expect(styledLine("context")).toContain("38;2;192;192;192");
+		expect(styledLine("removed")).toContain("38;2;252;66;75");
 		const addedIndex = plain.findIndex((line) => line.includes("+added"));
 		expect(addedIndex).toBeGreaterThan(0);
-		expect(rendered[addedIndex]).toContain("38;2;158;206;106");
-		expect(rendered[addedIndex + 1]).toContain("38;2;158;206;106");
+		expect(rendered[addedIndex]).toContain("38;2;0;189;125");
+		expect(rendered[addedIndex + 1]).toContain("38;2;0;189;125");
 	});
 
 	test("strips injected terminal styling and adds no labels, boxes, or backgrounds", () => {

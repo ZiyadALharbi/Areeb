@@ -147,12 +147,12 @@ export class MessageBlock implements Component {
 		const body = this.renderUserBody(text, contentWidth, glyph);
 
 		return [
-			this.theme.composerBorder(`╭${"─".repeat(innerWidth)}╮`),
+			this.theme.userBorder(`╭${"─".repeat(innerWidth)}╮`),
 			...body.map(
 				(line) =>
-					`${this.theme.composerBorder("│")}${" ".repeat(padding)}${fitLine(line, contentWidth)}${" ".repeat(padding)}${this.theme.composerBorder("│")}`,
+					`${this.theme.userBorder("│")}${" ".repeat(padding)}${fitLine(line, contentWidth)}${" ".repeat(padding)}${this.theme.userBorder("│")}`,
 			),
-			this.theme.composerBorder(`╰${"─".repeat(innerWidth)}╯`),
+			this.theme.userBorder(`╰${"─".repeat(innerWidth)}╯`),
 		];
 	}
 
