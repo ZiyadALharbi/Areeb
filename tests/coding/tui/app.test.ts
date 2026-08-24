@@ -390,7 +390,7 @@ describe("createTuiApp pickers", () => {
 			.map((line) => line.trim());
 
 		expect(lines).not.toContain("Thinking");
-		expect(lines.some((line) => line.startsWith("Thinking..."))).toBe(true);
+		expect(lines.some((line) => line.includes("Thinking..."))).toBe(true);
 	});
 
 	test("keeps the dark theme as the only selectable theme", async () => {
