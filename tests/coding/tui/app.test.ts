@@ -162,9 +162,10 @@ describe("createTuiApp pickers", () => {
 
 		expect(app.openEffortPicker()).toBe(true);
 		expect(app.tui.hasOverlay()).toBe(false);
-		expect(stripTerminalSequences(app.tui.render(80).join("\n"))).toContain(
-			"╭",
-		);
+		const surface = stripTerminalSequences(app.tui.render(80).join("\n"));
+		expect(surface).toMatch(/│.*high.*│/);
+		expect(surface.indexOf("╭")).toBeLessThan(surface.indexOf("high"));
+		expect(surface.indexOf("high")).toBeLessThan(surface.indexOf("╰"));
 		const picker = app.tui.getFocusedComponent();
 		expect(picker).not.toBe(app.editor);
 		const rendered = stripTerminalSequences(
@@ -210,6 +211,10 @@ describe("createTuiApp pickers", () => {
 
 		expect(app.openSkillPicker("src/app.ts carefully")).toBe(true);
 		expect(app.tui.hasOverlay()).toBe(false);
+		const surface = stripTerminalSequences(app.tui.render(80).join("\n"));
+		expect(surface).toMatch(/│.*implement.*│/);
+		expect(surface.indexOf("╭")).toBeLessThan(surface.indexOf("implement"));
+		expect(surface.indexOf("implement")).toBeLessThan(surface.indexOf("╰"));
 		const picker = app.tui.getFocusedComponent();
 		const output = stripTerminalSequences(picker?.render(80).join("\n") ?? "");
 		expect(output).toContain("implement");

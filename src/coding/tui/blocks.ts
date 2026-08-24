@@ -14,6 +14,7 @@ const ASSISTANT_MARGIN = 1;
 const USER_PADDING = 2;
 const TOOL_PREVIEW_MAX_LINES = 16;
 const DETAIL_INSET = 2;
+const HIDDEN_CODE_FENCE = "\u{e000}";
 
 export const ACTIVITY_SPINNER_FRAMES = Object.freeze([
 	"⠋",
@@ -47,7 +48,10 @@ export class MessageBlock implements Component {
 			"",
 			0,
 			0,
-			theme.markdown,
+			{
+				...theme.markdown,
+				codeBlockBorder: () => HIDDEN_CODE_FENCE,
+			},
 			{
 				color: theme.primary,
 			},
@@ -129,7 +133,11 @@ export class MessageBlock implements Component {
 		const contentWidth = width - margin * 2;
 		try {
 			this.markdown.setText(text);
-			const markdownLines = this.markdown.render(contentWidth);
+			const markdownLines = this.markdown
+				.render(contentWidth)
+				.filter(
+					(line) => stripTerminalSequences(line).trim() !== HIDDEN_CODE_FENCE,
+				);
 			if (markdownLines.length === 0) {
 				return [""];
 			}
@@ -277,8 +285,8 @@ export class ToolGroupBlock implements Component {
 					: this.theme.success("●");
 		const count = this.tools.length;
 		const summary = `Ran ${count} command${count === 1 ? "" : "s"}`;
-		const shortcut = `Ctrl+O: ${this.expanded ? "collapse" : "expand"}`;
-		const header = `${marker} ${this.theme.primary(summary)}  ${this.theme.shortcut(shortcut)}`;
+		const shortcut = `(Ctrl+O to ${this.expanded ? "Collapse" : "Expand"})`;
+		const header = `${marker} ${this.theme.primary(summary)} ${this.theme.shortcut(shortcut)}`;
 		const rendered = [truncateToWidth(header, availableWidth, "…")];
 		if (!this.expanded) {
 			return rendered;
@@ -368,12 +376,14 @@ export class ThinkingBlock implements Component {
 			return [];
 		}
 
-		const marker = this.active
-			? this.theme.assistant(activitySpinnerFrame())
-			: this.theme.success("●");
-		const shortcut = `Ctrl+T: ${this.expanded ? "collapse" : "expand"} thinking`;
-		const header = `${marker} ${this.theme.assistant("Thinking")}  ${this.theme.shortcut(shortcut)}`;
-		const rendered = [truncateToWidth(header, availableWidth, "…")];
+		const header = renderThinkingHeader(
+			cleanText,
+			this.active,
+			this.expanded,
+			availableWidth,
+			this.theme,
+		);
+		const rendered = [header];
 		if (!this.expanded) {
 			return rendered;
 		}
@@ -557,4 +567,32 @@ function stripThinkingMarkdown(text: string): string {
 function activitySpinnerFrame(): string {
 	const index = Math.floor(Date.now() / 80) % ACTIVITY_SPINNER_FRAMES.length;
 	return ACTIVITY_SPINNER_FRAMES[index] ?? ACTIVITY_SPINNER_FRAMES[0] ?? "⠋";
+}
+
+function renderThinkingHeader(
+	text: string,
+	active: boolean,
+	expanded: boolean,
+	width: number,
+	theme: TuiTheme,
+): string {
+	const marker = active ? `${theme.assistant(activitySpinnerFrame())} ` : "";
+	const label = theme.assistant("Thinking...");
+	const shortcut = theme.shortcut(
+		`(Ctrl+T to ${expanded ? "Collapse" : "Expand"})`,
+	);
+	const leading = `${marker}${label}`;
+	const withoutPreview = `${leading} ${shortcut}`;
+	if (expanded || visibleWidth(withoutPreview) >= width) {
+		return truncateToWidth(withoutPreview, width, "…");
+	}
+
+	const separator = " · ";
+	const previewWidth =
+		width - visibleWidth(withoutPreview) - visibleWidth(separator);
+	if (previewWidth <= 0) {
+		return withoutPreview;
+	}
+	const preview = truncateToWidth(text.replace(/\s+/g, " "), previewWidth, "…");
+	return `${leading}${theme.muted(`${separator}${preview}`)} ${shortcut}`;
 }

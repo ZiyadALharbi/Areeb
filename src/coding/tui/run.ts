@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, open, rename, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
+	isKeyRelease,
 	Key,
 	matchesKey,
 	ProcessTerminal,
@@ -552,6 +553,9 @@ export async function runInteractiveMode(
 	};
 
 	removeInputListener = app.tui.addInputListener((data) => {
+		if (isKeyRelease(data)) {
+			return { consume: true };
+		}
 		if (matchesKey(data, Key.ctrl("c"))) {
 			if (app.cancelAuthDialog?.()) {
 				return { consume: true };

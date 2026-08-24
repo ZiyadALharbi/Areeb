@@ -225,14 +225,11 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 	const toolGroupsById = new Map<string, ToolGroupBlock>();
 
 	const restoreComposer = (): void => {
-		composer.clear();
-		composer.addChild(composerSurface);
+		composerSurface.setSelector(undefined);
 	};
 
 	const mountBottomSelector = (selector: Component): void => {
-		composer.clear();
-		composer.addChild(selector);
-		composer.addChild(composerSurface);
+		composerSurface.setSelector(selector);
 	};
 
 	const renderShortcuts = (): void => {
@@ -1148,6 +1145,8 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 }
 
 class ComposerSurface extends Container {
+	private selector: Component | undefined;
+
 	constructor(
 		private readonly editor: Editor,
 		private readonly theme: TuiTheme,
@@ -1161,10 +1160,23 @@ class ComposerSurface extends Container {
 		this.state = state;
 	}
 
+	setSelector(selector: Component | undefined): void {
+		if (this.selector !== undefined) {
+			this.removeChild(this.selector);
+		}
+		this.selector = selector;
+		if (selector !== undefined) {
+			this.addChild(selector);
+		}
+	}
+
 	override render(width: number): string[] {
 		const availableWidth = normalizeWidth(width);
-		if (availableWidth < 12) {
-			return this.editor.render(availableWidth);
+		if (availableWidth < 4) {
+			return [
+				...this.editor.render(availableWidth),
+				...(this.selector?.render(availableWidth) ?? []),
+			];
 		}
 
 		const innerWidth = availableWidth - 2;
@@ -1179,7 +1191,19 @@ class ComposerSurface extends Container {
 						editorLines.slice(1, bottomBorderIndex),
 						editorLines.slice(bottomBorderIndex + 1),
 					].flat();
-		const content = body.length === 0 ? [""] : body;
+		const selectorPadding = innerWidth >= 3 ? 1 : 0;
+		const selectorWidth = Math.max(1, innerWidth - selectorPadding * 2);
+		const selectorLines =
+			this.selector
+				?.render(selectorWidth)
+				.map(
+					(line) =>
+						`${" ".repeat(selectorPadding)}${fitLine(line, selectorWidth)}${" ".repeat(selectorPadding)}`,
+				) ?? [];
+		const content =
+			body.length === 0 && selectorLines.length === 0
+				? [""]
+				: [...body, ...selectorLines];
 
 		return [
 			this.theme.composerBorder(`╭${"─".repeat(innerWidth)}╮`),

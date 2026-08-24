@@ -31,7 +31,7 @@ describe("TUI transcript blocks", () => {
 			"│  waiting",
 		]);
 		expect(tool.render(40).map(stripTerminalSequences)).toEqual([
-			"● Ran 1 command  Ctrl+O: expand",
+			"● Ran 1 command (Ctrl+O to Expand)",
 		]);
 	});
 
@@ -56,7 +56,8 @@ describe("TUI transcript blocks", () => {
 		).render(18);
 		const plain = rendered.map(stripTerminalSequences);
 
-		expect(plain[0]).toStartWith("● Thinking");
+		expect(plain[0]).toStartWith("Thinking...");
+		expect(plain[0]).not.toContain("●");
 		expect(plain.join("\n")).toContain("first");
 		expect(plain.join("\n")).toContain("thought");
 		expect(plain.join("\n")).toContain("wraps");
@@ -67,6 +68,20 @@ describe("TUI transcript blocks", () => {
 		expect(rendered.join("\n")).toContain("\u001b[3m");
 		expect(rendered.join("\n")).not.toContain("\u001b[31m");
 		expect(plain.join("\n")).not.toContain("**");
+	});
+
+	test("summarizes collapsed thinking without a completed-state circle", () => {
+		const rendered = new ThinkingBlock(
+			"**Examining** header utilities and provider integrations",
+			theme,
+		).render(100);
+		const plain = rendered.map(stripTerminalSequences);
+
+		expect(plain).toEqual([
+			"Thinking... · Examining header utilities and provider integrations (Ctrl+T to Expand)",
+		]);
+		expect(plain[0]).not.toContain("●");
+		expect(rendered[0]).toContain("38;2;138;190;183");
 	});
 
 	test("renders assistant Markdown while leaving user Markdown literal", () => {
@@ -83,6 +98,7 @@ describe("TUI transcript blocks", () => {
 
 		expect(assistant.join("\n")).toContain("Heading");
 		expect(assistant.join("\n")).not.toContain("######");
+		expect(assistant.join("\n")).not.toContain("```");
 		expect(assistant.join("\n")).toContain("- bold and code");
 		expect(assistant.join("\n")).toContain("const answer: number = 42;");
 		expect(
@@ -107,6 +123,9 @@ describe("TUI transcript blocks", () => {
 		);
 
 		expect(() => block.render(20)).not.toThrow();
+		expect(
+			block.render(20).map(stripTerminalSequences).join("\n"),
+		).not.toContain("```");
 		expect(block.render(20).every((line) => visibleWidth(line) <= 20)).toBe(
 			true,
 		);
@@ -220,7 +239,7 @@ describe("TUI transcript blocks", () => {
 		const rendered = tool.render(30);
 
 		expect(rendered.map(stripTerminalSequences)).toEqual([
-			"● Ran 1 command  Ctrl+O: collapse",
+			"● Ran 1 command (Ctrl+O to Co…",
 			"  └ edit",
 			"    @@ -1 +1 @@",
 			"    - old",
@@ -270,7 +289,7 @@ describe("TUI transcript blocks", () => {
 		]);
 		const active = group.render(60).map(stripTerminalSequences);
 		expect(active).toHaveLength(1);
-		expect(active[0]).toContain("Ran 2 commands  Ctrl+O: expand");
+		expect(active[0]).toContain("Ran 2 commands (Ctrl+O to Expand)");
 		expect(active[0]).not.toStartWith("●");
 
 		group.update([
@@ -278,7 +297,7 @@ describe("TUI transcript blocks", () => {
 			{ toolName: "edit", isError: false },
 		]);
 		expect(group.render(60).map(stripTerminalSequences)).toEqual([
-			"● Ran 2 commands  Ctrl+O: expand",
+			"● Ran 2 commands (Ctrl+O to Expand)",
 		]);
 	});
 

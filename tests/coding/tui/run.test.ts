@@ -236,6 +236,7 @@ function createAppController(): {
 	readonly listenerCount: () => number;
 	readonly dismissedOverlays: () => number;
 	readonly toolToggles: () => number;
+	readonly thinkingToggles: () => number;
 	readonly paletteOpens: () => number;
 	readonly completionAccepts: () => number;
 	readonly sessionPickerOpens: () => number;
@@ -257,6 +258,7 @@ function createAppController(): {
 	let overlayOpen = false;
 	let dismissedOverlayCount = 0;
 	let toolToggleCount = 0;
+	let thinkingToggleCount = 0;
 	let paletteOpen = false;
 	let paletteOpenCount = 0;
 	let inlineCompletionOpen = false;
@@ -374,6 +376,9 @@ function createAppController(): {
 				toggleToolPreviews() {
 					toolToggleCount += 1;
 				},
+				toggleThinking() {
+					thinkingToggleCount += 1;
+				},
 			} as unknown as TuiApp;
 		},
 		states,
@@ -385,6 +390,7 @@ function createAppController(): {
 		listenerCount: () => (inputListener === undefined ? 0 : 1),
 		dismissedOverlays: () => dismissedOverlayCount,
 		toolToggles: () => toolToggleCount,
+		thinkingToggles: () => thinkingToggleCount,
 		paletteOpens: () => paletteOpenCount,
 		completionAccepts: () => completionAcceptCount,
 		sessionPickerOpens: () => sessionPickerOpenCount,
@@ -484,7 +490,7 @@ describe("runInteractiveMode", () => {
 		expect(controller.listenerCount()).toBe(0);
 	});
 
-	test("dismisses command overlays before aborting and toggles tool previews", async () => {
+	test("dismisses command overlays and toggles details once per key press", async () => {
 		const session = new ManualSession();
 		session.commandHandler = async (input) =>
 			input === "/quit"
@@ -512,8 +518,14 @@ describe("runInteractiveMode", () => {
 		app.input("\u001b");
 		expect(app.dismissedOverlays()).toBe(1);
 		expect(session.abortCount).toBe(0);
-		app.input("\u000f");
+		expect(app.input("\u000f")).toEqual({ consume: true });
 		expect(app.toolToggles()).toBe(1);
+		expect(app.input("\u001b[111;5:3u")).toEqual({ consume: true });
+		expect(app.toolToggles()).toBe(1);
+		expect(app.input("\u0014")).toEqual({ consume: true });
+		expect(app.thinkingToggles()).toBe(1);
+		expect(app.input("\u001b[116;5:3u")).toEqual({ consume: true });
+		expect(app.thinkingToggles()).toBe(1);
 
 		app.submit("/quit");
 		expect(await running).toBe(0);
