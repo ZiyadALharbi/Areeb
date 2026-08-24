@@ -14,7 +14,7 @@ import type {
 	QueuedMessages,
 } from "../../../src/agent/types.ts";
 import { EventStream } from "../../../src/ai/event-stream.ts";
-import type { UserMessage } from "../../../src/ai/types.ts";
+import type { ReasoningLevel, UserMessage } from "../../../src/ai/types.ts";
 import { createDefaultCommandRegistry } from "../../../src/coding/commands.ts";
 import type { ResourceDiagnostic } from "../../../src/coding/resources.ts";
 import type { CodingSessionTuiService } from "../../../src/coding/session.ts";
@@ -99,6 +99,7 @@ class ManualSession implements InteractiveController {
 		sessionId: this.metadata.id,
 		model: this.model,
 		cwd: this.metadata.cwd,
+		reasoning: "off",
 	});
 	adapter = new TuiEventAdapter(this.state);
 	readonly promptCalls: string[] = [];
@@ -183,6 +184,11 @@ class ManualSession implements InteractiveController {
 		return { kind: "none" };
 	}
 
+	async setReasoning(reasoning: ReasoningLevel): Promise<TuiTransitionOutcome> {
+		this.state.reasoning = reasoning;
+		return { kind: "none" };
+	}
+
 	emit(event: AgentEvent): void {
 		this.requireStream().push(event);
 	}
@@ -234,6 +240,7 @@ function createAppController(): {
 	readonly completionAccepts: () => number;
 	readonly sessionPickerOpens: () => number;
 	readonly modelPickerOpens: () => number;
+	readonly effortPickerOpens: () => number;
 	setInlineCompletion(open: boolean, changes?: boolean): void;
 	submit(text: string): void;
 	input(data: string): TuiInputListenerResult | undefined;
@@ -257,6 +264,7 @@ function createAppController(): {
 	let completionAcceptCount = 0;
 	let sessionPickerOpenCount = 0;
 	let modelPickerOpenCount = 0;
+	let effortPickerOpenCount = 0;
 	const editor: {
 		disableSubmit: boolean;
 		onSubmit?: (text: string) => void;
@@ -328,6 +336,10 @@ function createAppController(): {
 					modelPickerOpenCount += 1;
 					return true;
 				},
+				openEffortPicker() {
+					effortPickerOpenCount += 1;
+					return true;
+				},
 				openThemePicker() {
 					return true;
 				},
@@ -377,6 +389,7 @@ function createAppController(): {
 		completionAccepts: () => completionAcceptCount,
 		sessionPickerOpens: () => sessionPickerOpenCount,
 		modelPickerOpens: () => modelPickerOpenCount,
+		effortPickerOpens: () => effortPickerOpenCount,
 		setInlineCompletion(open, changes = false) {
 			inlineCompletionOpen = open;
 			inlineCompletionChanges = changes;
@@ -401,6 +414,31 @@ async function waitUntil(condition: () => boolean): Promise<void> {
 }
 
 describe("runInteractiveMode", () => {
+	test("opens the inline effort picker for an idle effort command", async () => {
+		const session = new ManualSession();
+		session.commandHandler = async (input) => {
+			if (input === "/effort") {
+				return { handled: true, outcome: { kind: "effort-picker" } };
+			}
+			return { handled: true, outcome: { kind: "quit" } };
+		};
+		const app = createAppController();
+		const running = runInteractiveMode(session, {
+			createApp: app.createApp,
+			theme: AREEB_DARK_THEME,
+		});
+
+		app.submit("/effort");
+		await waitUntil(
+			() => app.effortPickerOpens() === 1 && session.state.inputMode === "idle",
+		);
+		expect(session.promptCalls).toEqual([]);
+		expect(session.followUpCalls).toEqual([]);
+
+		app.submit("/quit");
+		expect(await running).toBe(0);
+	});
+
 	test("restores before input and keeps command output local", async () => {
 		const session = new ManualSession([restoredUser]);
 		session.commandHandler = async (input) =>
@@ -513,6 +551,47 @@ describe("runInteractiveMode", () => {
 		expect(await running).toBe(0);
 	});
 
+	test("copies only assistant answers when thinking rows are present", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "areeb-thinking-copy-"));
+		try {
+			const session = new ManualSession();
+			session.state.items.push(
+				{ role: "thinking", text: "private reasoning" },
+				{ role: "assistant", text: "public answer" },
+			);
+			session.commandHandler = async (input) =>
+				input === "/copy"
+					? { handled: true, outcome: { kind: "copy-last-assistant" } }
+					: { handled: true, outcome: { kind: "quit" } };
+			const terminal = new CopyTerminal();
+			const app = createAppController();
+			const userRoot = join(directory, "user");
+			const running = runInteractiveMode(session, {
+				createApp: app.createApp,
+				theme: AREEB_DARK_THEME,
+				terminal,
+				userRoot,
+			});
+
+			app.submit("/copy");
+			await waitUntil(() => session.state.inputMode === "idle");
+			expect(await readFile(join(userRoot, "last-copy.txt"), "utf8")).toBe(
+				"public answer",
+			);
+			expect(terminal.writes.join("\n")).toContain(
+				Buffer.from("public answer").toString("base64"),
+			);
+			expect(terminal.writes.join("\n")).not.toContain(
+				Buffer.from("private reasoning").toString("base64"),
+			);
+
+			app.submit("/quit");
+			expect(await running).toBe(0);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	test("opens the shared palette and consumes Enter only when completion changes", async () => {
 		const session = new ManualSession();
 		session.commandHandler = async () => ({
@@ -579,6 +658,47 @@ describe("runInteractiveMode", () => {
 		expect(await running).toBe(0);
 	});
 
+	test("shows blocked effort commands during a response without queuing model input", async () => {
+		const session = new ManualSession();
+		session.commandHandler = async (input) => {
+			if (input.startsWith("/effort")) {
+				return {
+					handled: true,
+					outcome: {
+						kind: "message",
+						level: "warning",
+						text: "Cannot change thinking effort while the current session is running",
+					},
+				};
+			}
+			if (input === "/quit") {
+				return { handled: true, outcome: { kind: "quit" } };
+			}
+			return { handled: false };
+		};
+		const app = createAppController();
+		const running = runInteractiveMode(session, {
+			createApp: app.createApp,
+			theme: AREEB_DARK_THEME,
+		});
+
+		app.submit("first");
+		await waitUntil(() => session.promptCalls.length === 1);
+		app.submit("/effort max");
+		await waitUntil(() => session.commandCalls.includes("/effort max"));
+		expect(session.followUpCalls).toEqual([]);
+		expect(session.promptCalls).toEqual(["first"]);
+		expect(app.presentations.at(-1)).toEqual({
+			text: "Cannot change thinking effort while the current session is running",
+			level: "warning",
+		});
+
+		app.input("\u0003");
+		session.emit({ type: "agent_end", messages: [], reason: "aborted" });
+		session.complete();
+		expect(await running).toBe(0);
+	});
+
 	test("restores a live draft after enqueue failure", async () => {
 		const session = new ManualSession();
 		const app = createAppController();
@@ -613,6 +733,7 @@ describe("runInteractiveMode", () => {
 					sessionId: "00000000-0000-4000-8000-000000000002",
 					model: "replacement-model",
 					cwd: "/project",
+					reasoning: "off",
 				});
 				session.adapter = new TuiEventAdapter(session.state);
 				session.adapter.restore([restoredUser]);

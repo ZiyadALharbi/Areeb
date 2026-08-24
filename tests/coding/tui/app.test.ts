@@ -43,6 +43,7 @@ function appOptions(
 		sessionId: SESSION_ID,
 		model: "model-a",
 		cwd: "/project",
+		reasoning: "off",
 	});
 	return {
 		terminal: new TestTerminal(),
@@ -67,6 +68,7 @@ function appOptions(
 		getCurrentModel: () => ({ provider: "fake", model: "model-a" }),
 		onResume: async () => true,
 		onSetModel: async () => true,
+		onSetEffort: async () => true,
 		state,
 		...overrides,
 	};
@@ -78,6 +80,94 @@ async function flush(): Promise<void> {
 }
 
 describe("createTuiApp pickers", () => {
+	test("renders the effort selector inline and restores the exact draft and focus", async () => {
+		const selected: string[] = [];
+		const state = createTuiState({
+			sessionId: SESSION_ID,
+			model: "model-a",
+			cwd: "/project",
+			reasoning: "high",
+		});
+		const app = createTuiApp(
+			appOptions({
+				state,
+				async onSetEffort(effort) {
+					selected.push(effort);
+					return true;
+				},
+			}),
+		);
+		app.editor.setText("  exact draft\nsecond line  ");
+
+		expect(app.openEffortPicker()).toBe(true);
+		expect(app.tui.hasOverlay()).toBe(false);
+		const picker = app.tui.getFocusedComponent();
+		expect(picker).not.toBe(app.editor);
+		const rendered = stripTerminalSequences(
+			picker?.render(80).join("\n") ?? "",
+		);
+		for (const label of ["off", "low", "medium", "high", "xhigh", "max"]) {
+			expect(
+				rendered.split("\n").some((line) => line.trim().endsWith(label)),
+			).toBe(true);
+		}
+		expect(rendered.split("\n")).toHaveLength(6);
+		expect(rendered).not.toContain("Filter:");
+		expect(rendered).not.toContain("Thinking effort");
+		expect(rendered).not.toMatch(/[┌┐└┘╭╮╰╯]/);
+
+		picker?.handleInput?.("\u001b");
+		expect(app.tui.getFocusedComponent()).toBe(app.editor);
+		expect(app.editor.getText()).toBe("  exact draft\nsecond line  ");
+
+		expect(app.openEffortPicker()).toBe(true);
+		app.tui.getFocusedComponent()?.handleInput?.("\r");
+		await flush();
+		expect(selected).toEqual(["high"]);
+		expect(app.tui.hasOverlay()).toBe(false);
+		expect(app.tui.getFocusedComponent()).toBe(app.editor);
+		expect(app.editor.getText()).toBe("  exact draft\nsecond line  ");
+	});
+
+	test("keeps a failed effort selector open and safely replaces it with other pickers", async () => {
+		const failing = createTuiApp(
+			appOptions({
+				async onSetEffort() {
+					throw new Error("effort storage failed");
+				},
+			}),
+		);
+		failing.editor.setText("preserved");
+		expect(failing.openEffortPicker()).toBe(true);
+		const picker = failing.tui.getFocusedComponent();
+		picker?.handleInput?.("\r");
+		await flush();
+		expect(failing.tui.hasOverlay()).toBe(false);
+		expect(failing.tui.getFocusedComponent()).toBe(picker);
+		expect(failing.editor.getText()).toBe("preserved");
+		expect(
+			stripTerminalSequences(failing.tui.render(100).join("\n")),
+		).toContain("effort storage failed");
+
+		expect(failing.openModelPicker()).toBe(true);
+		expect(failing.tui.hasOverlay()).toBe(true);
+		expect(failing.dismissPicker()).toBe(true);
+		expect(failing.tui.getFocusedComponent()).toBe(failing.editor);
+		expect(failing.editor.getText()).toBe("preserved");
+
+		expect(failing.openEffortPicker()).toBe(true);
+		failing.refresh(
+			createTuiState({
+				sessionId: "00000000-0000-4000-8000-000000000002",
+				model: "model-b",
+				cwd: "/project",
+				reasoning: "max",
+			}),
+		);
+		expect(failing.tui.getFocusedComponent()).toBe(failing.editor);
+		expect(failing.editor.getText()).toBe("preserved");
+	});
+
 	test("ignores stale async session results after a newer picker opens", async () => {
 		let resolveSessions!: (sessions: readonly CommandSessionListItem[]) => void;
 		const sessions = new Promise<readonly CommandSessionListItem[]>(
@@ -151,6 +241,7 @@ describe("createTuiApp pickers", () => {
 			sessionId: SESSION_ID,
 			model: "model-a",
 			cwd: "/project",
+			reasoning: "off",
 		});
 		const app = createTuiApp(
 			appOptions({
@@ -237,6 +328,7 @@ describe("createTuiApp pickers", () => {
 			sessionId: SESSION_ID,
 			model: "model-a",
 			cwd: "/project",
+			reasoning: "off",
 		});
 		state.lastUsage = {
 			inputTokens: 12_400,
@@ -252,11 +344,36 @@ describe("createTuiApp pickers", () => {
 		expect(output).not.toContain("%");
 	});
 
+	test("shows the exact thinking level in wide and narrow footers", () => {
+		const state = createTuiState({
+			sessionId: SESSION_ID,
+			model: "model-a",
+			cwd: "/project",
+			reasoning: "off",
+		});
+		const app = createTuiApp(appOptions({ state }));
+
+		expect(stripTerminalSequences(app.tui.render(120).join("\n"))).toContain(
+			"thinking: off",
+		);
+		state.reasoning = "high";
+		app.refresh(state);
+		expect(stripTerminalSequences(app.tui.render(32).join("\n"))).toContain(
+			"thinking: high",
+		);
+		state.reasoning = "max";
+		app.refresh(state);
+		expect(stripTerminalSequences(app.tui.render(24).join("\n"))).toContain(
+			"thinking: max",
+		);
+	});
+
 	test("reconciles a same-session refresh without clearing the transcript", () => {
 		const state = createTuiState({
 			sessionId: SESSION_ID,
 			model: "model-a",
 			cwd: "/project",
+			reasoning: "off",
 		});
 		state.items.push({ role: "user", text: "stable" });
 		const app = createTuiApp(appOptions({ state }));

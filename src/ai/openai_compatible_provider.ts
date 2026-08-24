@@ -393,7 +393,17 @@ export class OpenAICompatibleProvider implements ModelProvider {
 				}
 				break;
 			case "zai":
-				Object.assign(request, { enable_thinking: reasoning !== "off" });
+				Object.assign(request, {
+					thinking: { type: reasoning === "off" ? "disabled" : "enabled" },
+				});
+				if (
+					reasoning !== "off" &&
+					this.compat.supportsReasoningEffort === true &&
+					mappedReasoning !== null
+				) {
+					request.reasoning_effort =
+						mappedReasoning as ChatCompletionReasoningEffort;
+				}
 				break;
 			case "openai":
 				if (

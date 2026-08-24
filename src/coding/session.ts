@@ -14,7 +14,7 @@ import type {
 	QueueMode,
 } from "../agent/types.ts";
 import type { ModelProvider } from "../ai/provider_protocol.ts";
-import type { ReasoningLevel } from "../ai/types.ts";
+import { isReasoningLevel, type ReasoningLevel } from "../ai/types.ts";
 import {
 	type CommandContext,
 	type CommandHotkey,
@@ -117,6 +117,7 @@ export class CodingSession<
 > {
 	private persistenceFailure: unknown;
 	private resourceReload: Promise<CommandResourceReloadResult> | undefined;
+	private reasoningMutation: Promise<void> | undefined;
 
 	private constructor(
 		private readonly session: SessionHandle<TMetadata>,
@@ -124,7 +125,7 @@ export class CodingSession<
 		private readonly sessionMetadata: TMetadata,
 		private readonly sessionProvider: string,
 		private readonly sessionModel: string,
-		private readonly sessionReasoning: ReasoningLevel,
+		private sessionReasoning: ReasoningLevel,
 		private readonly sessionUnavailableReason: string | undefined,
 		private assembledSystemPrompt: string,
 		private readonly activeTools: readonly AgentTool[],
@@ -427,6 +428,7 @@ export class CodingSession<
 	): AgentRunStream {
 		this.assertPersistenceHealthy();
 		this.assertResourceReloadIdle();
+		this.assertReasoningMutationIdle();
 		return this.harness.prompt(
 			typeof input === "string" ? this.expandPrompt(input) : input,
 		);
@@ -435,7 +437,46 @@ export class CodingSession<
 	continue(): AgentRunStream {
 		this.assertPersistenceHealthy();
 		this.assertResourceReloadIdle();
+		this.assertReasoningMutationIdle();
 		return this.harness.continue();
+	}
+
+	setReasoning(reasoning: ReasoningLevel): Promise<void> {
+		this.assertPersistenceHealthy();
+		if (!isReasoningLevel(reasoning)) {
+			return Promise.reject(
+				new Error(`Invalid reasoning level: ${String(reasoning)}`),
+			);
+		}
+		if (this.harness.isRunning) {
+			return Promise.reject(
+				new Error("Cannot change reasoning effort while the agent is running"),
+			);
+		}
+		if (this.reasoningMutation !== undefined) {
+			return Promise.reject(
+				new Error("Another reasoning effort change is already in progress"),
+			);
+		}
+		if (reasoning === this.sessionReasoning) {
+			return Promise.resolve();
+		}
+
+		const mutation = this.persistReasoning(reasoning);
+		this.reasoningMutation = mutation;
+		void mutation.then(
+			() => {
+				if (this.reasoningMutation === mutation) {
+					this.reasoningMutation = undefined;
+				}
+			},
+			() => {
+				if (this.reasoningMutation === mutation) {
+					this.reasoningMutation = undefined;
+				}
+			},
+		);
+		return mutation;
 	}
 
 	reloadResources(): Promise<CommandResourceReloadResult> {
@@ -539,6 +580,23 @@ export class CodingSession<
 				"Cannot start an agent run while resources are reloading",
 			);
 		}
+	}
+
+	private assertReasoningMutationIdle(): void {
+		if (this.reasoningMutation !== undefined) {
+			throw new Error(
+				"Cannot start an agent run while reasoning effort is changing",
+			);
+		}
+	}
+
+	private async persistReasoning(reasoning: ReasoningLevel): Promise<void> {
+		await this.session.appendEntry({
+			type: "reasoning_change",
+			reasoning,
+		});
+		this.harness.setReasoning(reasoning);
+		this.sessionReasoning = reasoning;
 	}
 
 	private async performResourceReload(): Promise<CommandResourceReloadResult> {
@@ -756,15 +814,4 @@ function sameToolSelection(
 
 function sameModel(left: SessionModel, right: SessionModel): boolean {
 	return left.provider === right.provider && left.model === right.model;
-}
-
-function isReasoningLevel(value: unknown): value is ReasoningLevel {
-	return (
-		value === "off" ||
-		value === "minimal" ||
-		value === "low" ||
-		value === "medium" ||
-		value === "high" ||
-		value === "xhigh"
-	);
 }

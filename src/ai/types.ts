@@ -1,8 +1,23 @@
 import type { ZodType } from "zod";
 
-export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh";
+export const REASONING_LEVELS = Object.freeze([
+	"off",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+] as const);
 
-export type ReasoningLevel = "off" | ThinkingLevel;
+export type ReasoningLevel = (typeof REASONING_LEVELS)[number];
+export type ThinkingLevel = Exclude<ReasoningLevel, "off">;
+
+export function isReasoningLevel(value: unknown): value is ReasoningLevel {
+	return (
+		typeof value === "string" &&
+		(REASONING_LEVELS as readonly string[]).includes(value)
+	);
+}
 
 export interface TextContent {
 	type: "text";

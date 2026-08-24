@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { REASONING_LEVELS } from "../../../ai/types.ts";
 import { SessionError } from "../errors.ts";
 import { assertJsonValue } from "../session.ts";
 import type { JsonValue, SessionMetadata, SessionMutation } from "../types.ts";
@@ -178,7 +179,7 @@ const sessionEntrySchema = z.discriminatedUnion("type", [
 	entryBaseSchema
 		.extend({
 			type: z.literal("reasoning_change"),
-			reasoning: z.enum(["off", "minimal", "low", "medium", "high", "xhigh"]),
+			reasoning: z.enum(REASONING_LEVELS),
 		})
 		.strict(),
 	entryBaseSchema

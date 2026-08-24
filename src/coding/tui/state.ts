@@ -1,9 +1,15 @@
 import type { AgentEndReason } from "../../agent/types.ts";
-import type { Usage } from "../../ai/types.ts";
+import type { ReasoningLevel, Usage } from "../../ai/types.ts";
+
+export interface StreamingAssistantBlock {
+	readonly role: "assistant" | "thinking";
+	readonly text: string;
+}
 
 export type ChatItem =
 	| { readonly role: "user"; readonly text: string }
 	| { readonly role: "assistant"; readonly text: string }
+	| { readonly role: "thinking"; readonly text: string }
 	| {
 			readonly role: "tool";
 			readonly text: string;
@@ -23,6 +29,8 @@ export interface TuiState {
 	readonly model: string;
 	readonly cwd: string;
 	assistantBuffer?: string;
+	assistantBlocks?: readonly StreamingAssistantBlock[];
+	reasoning: ReasoningLevel;
 	running: boolean;
 	inputMode: "idle" | "locked" | "running";
 	queuedCount: number;
@@ -34,6 +42,7 @@ export interface TuiSessionDisplay {
 	readonly sessionId: string;
 	readonly model: string;
 	readonly cwd: string;
+	readonly reasoning: ReasoningLevel;
 }
 
 export function createTuiState(
@@ -41,6 +50,7 @@ export function createTuiState(
 		sessionId: "unknown",
 		model: "unknown model",
 		cwd: ".",
+		reasoning: "off",
 	},
 ): TuiState {
 	return {

@@ -365,12 +365,54 @@ describe("OpenAICompatibleProvider", () => {
 			.result();
 		await new OpenAICompatibleProvider({
 			...baseConfig,
-			compat: { thinkingFormat: "zai" },
+			compat: {
+				thinkingFormat: "zai",
+				supportsReasoningEffort: true,
+			},
 		})
 			.streamResponse("model", { messages: [] }, { reasoning: "off" })
 			.result();
+		await new OpenAICompatibleProvider({
+			...baseConfig,
+			compat: {
+				thinkingFormat: "zai",
+				supportsReasoningEffort: true,
+			},
+		})
+			.streamResponse("model", { messages: [] }, { reasoning: "high" })
+			.result();
+		await new OpenAICompatibleProvider({
+			...baseConfig,
+			compat: {
+				thinkingFormat: "zai",
+				supportsReasoningEffort: true,
+				thinkingLevelMap: { xhigh: "max" },
+			},
+		})
+			.streamResponse("model", { messages: [] }, { reasoning: "xhigh" })
+			.result();
+		await new OpenAICompatibleProvider({
+			...baseConfig,
+			compat: {
+				thinkingFormat: "zai",
+				supportsReasoningEffort: true,
+				thinkingLevelMap: { medium: null },
+			},
+		})
+			.streamResponse("model", { messages: [] }, { reasoning: "medium" })
+			.result();
+		await new OpenAICompatibleProvider({
+			...baseConfig,
+			compat: {
+				thinkingFormat: "zai",
+				supportsReasoningEffort: false,
+				thinkingLevelMap: { max: "provider-max" },
+			},
+		})
+			.streamResponse("model", { messages: [] }, { reasoning: "max" })
+			.result();
 
-		expect(requestBodies).toHaveLength(3);
+		expect(requestBodies).toHaveLength(7);
 		expect(requestBodies[0]).toMatchObject({
 			reasoning: { effort: "none" },
 		});
@@ -378,7 +420,30 @@ describe("OpenAICompatibleProvider", () => {
 			thinking: { type: "enabled" },
 			reasoning_effort: "custom-medium",
 		});
-		expect(requestBodies[2]).toMatchObject({ enable_thinking: false });
+		expect(requestBodies[2]).toMatchObject({
+			thinking: { type: "disabled" },
+		});
+		expect(requestBodies[2]).not.toHaveProperty("reasoning_effort");
+		expect(requestBodies[3]).toMatchObject({
+			thinking: { type: "enabled" },
+			reasoning_effort: "high",
+		});
+		expect(requestBodies[4]).toMatchObject({
+			thinking: { type: "enabled" },
+			reasoning_effort: "max",
+		});
+		expect(requestBodies[5]).toMatchObject({
+			thinking: { type: "enabled" },
+		});
+		expect(requestBodies[5]).not.toHaveProperty("reasoning_effort");
+		expect(requestBodies[6]).toMatchObject({
+			thinking: { type: "enabled" },
+		});
+		expect(requestBodies[6]).not.toHaveProperty("reasoning_effort");
+		for (const body of requestBodies.slice(2)) {
+			expect(body).not.toHaveProperty("enable_thinking");
+			expect(body).not.toHaveProperty("clear_thinking");
+		}
 	});
 
 	test("retries transient request failures before exposing the stream", async () => {

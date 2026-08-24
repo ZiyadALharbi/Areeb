@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { CodexProviderConfig } from "../../src/ai/codex_provider.ts";
 import { FakeProvider } from "../../src/ai/fake_provider.ts";
+import type { OpenAICompatibleConfig } from "../../src/ai/openai_compatible_provider.ts";
 import { MemoryCredentialStore } from "../../src/coding/auth-store.ts";
 import {
 	createDefaultProviderAuthRegistry,
@@ -18,6 +19,45 @@ function jwt(accountId: string): string {
 }
 
 describe("ProviderRuntimeService", () => {
+	test("forwards provider thinking compatibility through authenticated runtimes", async () => {
+		const settings = parseProviderSettings(
+			{
+				version: 1,
+				default_provider: "local",
+				providers: {
+					local: {
+						type: "openai-compatible",
+						base_url: "https://api.example/v1",
+						models: ["model-a"],
+						default_model: "model-a",
+						thinking_format: "zai",
+						supports_reasoning_effort: true,
+						thinking_level_map: { off: null, max: "maximum" },
+					},
+				},
+			},
+			{ path: "/tmp/providers.json", env: {} },
+		);
+		let providerConfig: OpenAICompatibleConfig | undefined;
+		const service = new ProviderRuntimeService({
+			settings,
+			store: new MemoryCredentialStore(),
+			registry: createDefaultProviderAuthRegistry(),
+			env: {},
+			createProvider(config) {
+				providerConfig = config;
+				return new FakeProvider([], { providerId: config.providerId });
+			},
+		});
+
+		await service.createRuntime({ provider: "local", model: "model-a" });
+		expect(providerConfig?.compat).toEqual({
+			thinkingFormat: "zai",
+			supportsReasoningEffort: true,
+			thinkingLevelMap: { off: null, max: "maximum" },
+		});
+	});
+
 	test("uses environment before stored OpenAI keys and gates the model catalog", async () => {
 		const settings = parseProviderSettings(
 			{ version: 1 },

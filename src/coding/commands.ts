@@ -1,7 +1,7 @@
 import { assertUuid } from "../agent/session/session.ts";
 import type { SessionModel } from "../agent/session/types.ts";
 import type { AuthType } from "../ai/auth.ts";
-import type { ReasoningLevel } from "../ai/types.ts";
+import { isReasoningLevel, type ReasoningLevel } from "../ai/types.ts";
 import type { ResourceDiagnostic } from "./resources.ts";
 
 const COMMAND_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -101,6 +101,8 @@ export type CommandOutcome =
 	| { readonly kind: "logout"; readonly provider: string }
 	| { readonly kind: "theme-picker" }
 	| { readonly kind: "set-theme"; readonly theme: string }
+	| { readonly kind: "effort-picker" }
+	| { readonly kind: "set-effort"; readonly effort: ReasoningLevel }
 	| { readonly kind: "copy-last-assistant" }
 	| {
 			readonly kind: "set-model";
@@ -399,6 +401,21 @@ export function createDefaultCommandRegistry(): CommandRegistry {
 				};
 			}
 			return { kind: "set-model", ...selection };
+		},
+	});
+	registry.register({
+		name: "effort",
+		description: "Show or change thinking effort",
+		usage: "/effort [level]",
+		requirements: ["tui"],
+		async handler(_context, argumentsText) {
+			if (argumentsText.length === 0) {
+				return { kind: "effort-picker" };
+			}
+			if (/\s/.test(argumentsText) || !isReasoningLevel(argumentsText)) {
+				return usageError("/effort [level]");
+			}
+			return { kind: "set-effort", effort: argumentsText };
 		},
 	});
 	registry.register({

@@ -150,6 +150,20 @@ function config<TMetadata extends SessionMetadata>(
 	};
 }
 
+function deferred<T = void>(): {
+	readonly promise: Promise<T>;
+	readonly resolve: (value: T) => void;
+	readonly reject: (error: unknown) => void;
+} {
+	let resolve!: (value: T) => void;
+	let reject!: (error: unknown) => void;
+	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+		resolve = resolvePromise;
+		reject = rejectPromise;
+	});
+	return { promise, resolve, reject };
+}
+
 async function seedRuntime(
 	session: SessionHandle,
 	options: {
@@ -321,7 +335,7 @@ describe("CodingSession loading", () => {
 		const coding = await CodingSession.load(
 			config(session, provider, {
 				model: "ignored-default",
-				reasoning: "minimal",
+				reasoning: "max",
 				systemPrompt: undefined,
 				tools: [alpha, beta],
 				timeout: 50,
@@ -428,6 +442,165 @@ describe("CodingSession loading", () => {
 			provider: "fake",
 			model: "stored-model",
 		});
+	});
+});
+
+describe("CodingSession reasoning changes", () => {
+	test("persists one actual change, updates the next request, and restores it", async () => {
+		const handle = await createMemorySession();
+		const provider = new FakeProvider([textScript("updated")]);
+		const coding = await CodingSession.load(
+			config(handle, provider, { tools: [] }),
+		);
+
+		await coding.setReasoning("max");
+		await coding.setReasoning("max");
+		expect(coding.reasoning).toBe("max");
+		expect(
+			(await handle.findEntries({ type: "reasoning_change" })).filter(
+				(entry) => entry.type === "reasoning_change",
+			),
+		).toHaveLength(2);
+
+		await coding.prompt("use max").result();
+		expect(provider.calls[0]?.options?.reasoning).toBe("max");
+
+		const reopened = await CodingSession.load(
+			config(handle, new FakeProvider([]), {
+				reasoning: "off",
+				tools: [],
+			}),
+		);
+		expect(reopened.reasoning).toBe("max");
+	});
+
+	test("restores the latest reasoning change from only the reopened branch", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "areeb-reasoning-branch-"));
+		try {
+			const firstRepository = new JsonlSessionRepository(directory);
+			const firstHandle = await firstRepository.create({ cwd: "/workspace" });
+			await seedRuntime(firstHandle, { reasoning: "low" });
+			const branchPoint = await firstHandle.getLeafId();
+			if (branchPoint === null) {
+				throw new Error("Expected a branch point");
+			}
+
+			await firstHandle.appendEntry({
+				type: "reasoning_change",
+				reasoning: "high",
+			});
+			const highLeaf = await firstHandle.getLeafId();
+			if (highLeaf === null) {
+				throw new Error("Expected a high-effort branch leaf");
+			}
+			await firstHandle.moveLeaf(branchPoint);
+			await firstHandle.appendEntry({
+				type: "reasoning_change",
+				reasoning: "max",
+			});
+
+			const secondRepository = new JsonlSessionRepository(directory);
+			const metadata = (await secondRepository.list())[0];
+			if (metadata === undefined) {
+				throw new Error("Expected stored session metadata");
+			}
+			const reopenedHandle = await secondRepository.open(metadata);
+			const maxBranch = await CodingSession.load(
+				config(reopenedHandle, new FakeProvider([]), { tools: [] }),
+			);
+			expect(maxBranch.reasoning).toBe("max");
+
+			await reopenedHandle.moveLeaf(highLeaf);
+			const highBranch = await CodingSession.load(
+				config(reopenedHandle, new FakeProvider([]), { tools: [] }),
+			);
+			expect(highBranch.reasoning).toBe("high");
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
+	test("keeps runtime unchanged when persistence fails", async () => {
+		const handle = await createMemorySession();
+		await seedRuntime(handle, { reasoning: "low" });
+		const failingHandle = new Proxy(handle, {
+			get(target, property) {
+				if (property === "appendEntry") {
+					return async (entry: { type: string }) => {
+						if (entry.type === "reasoning_change") {
+							throw new Error("reasoning storage failed");
+						}
+						return target.appendEntry(entry as never);
+					};
+				}
+				const value = Reflect.get(target, property, target);
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
+		const provider = new FakeProvider([textScript("unchanged")]);
+		const coding = await CodingSession.load(
+			config(failingHandle, provider, { tools: [] }),
+		);
+
+		await expect(coding.setReasoning("high")).rejects.toThrow(
+			"reasoning storage failed",
+		);
+		expect(coding.reasoning).toBe("low");
+		await coding.prompt("still low").result();
+		expect(provider.calls[0]?.options?.reasoning).toBe("low");
+	});
+
+	test("blocks prompts, continuation, and overlapping changes while append is pending", async () => {
+		const handle = await createMemorySession();
+		await seedRuntime(handle, { reasoning: "low" });
+		const appendStarted = deferred();
+		const releaseAppend = deferred();
+		const delayedHandle = new Proxy(handle, {
+			get(target, property) {
+				if (property === "appendEntry") {
+					return async (entry: { type: string }) => {
+						if (entry.type === "reasoning_change") {
+							appendStarted.resolve();
+							await releaseAppend.promise;
+						}
+						return target.appendEntry(entry as never);
+					};
+				}
+				const value = Reflect.get(target, property, target);
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
+		const coding = await CodingSession.load(
+			config(delayedHandle, new FakeProvider([]), { tools: [] }),
+		);
+
+		const changing = coding.setReasoning("high");
+		await appendStarted.promise;
+		expect(coding.reasoning).toBe("low");
+		expect(() => coding.prompt("blocked")).toThrow();
+		expect(() => coding.continue()).toThrow();
+		await expect(coding.setReasoning("max")).rejects.toThrow();
+
+		releaseAppend.resolve();
+		await changing;
+		expect(coding.reasoning).toBe("high");
+	});
+
+	test("rejects reasoning changes while a response is active", async () => {
+		const handle = await createMemorySession();
+		const provider = new ControlledProvider();
+		const coding = await CodingSession.load(
+			config(handle, provider, { tools: [] }),
+		);
+		const stream = coding.prompt("running");
+		await waitUntil(() => provider.calls.length === 1, "provider request");
+
+		await expect(coding.setReasoning("max")).rejects.toThrow(
+			"agent is running",
+		);
+		expect(coding.reasoning).toBe("low");
+		provider.finish();
+		await stream.result();
 	});
 });
 

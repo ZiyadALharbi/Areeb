@@ -54,16 +54,20 @@ describe("CodexProvider", () => {
 			}) as unknown as typeof fetch,
 		});
 
-		const stream = provider.streamResponse("gpt-5.6-sol", {
-			systemPrompt: "System",
-			messages: [
-				{
-					role: "user",
-					content: [{ type: "text", text: "Hi" }],
-					timestamp: 1,
-				},
-			],
-		});
+		const stream = provider.streamResponse(
+			"gpt-5.6-sol",
+			{
+				systemPrompt: "System",
+				messages: [
+					{
+						role: "user",
+						content: [{ type: "text", text: "Hi" }],
+						timestamp: 1,
+					},
+				],
+			},
+			{ reasoning: "max" },
+		);
 		const eventTypes: string[] = [];
 		for await (const event of stream) {
 			eventTypes.push(event.type);
@@ -97,6 +101,7 @@ describe("CodexProvider", () => {
 			store: false,
 			stream: true,
 			instructions: "System",
+			reasoning: { effort: "max", summary: "auto" },
 		});
 	});
 });

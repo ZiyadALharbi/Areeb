@@ -14,6 +14,7 @@ import type {
 	QueuedMessages,
 } from "../../agent/types.ts";
 import type { AuthInteraction, AuthPrompt, AuthType } from "../../ai/auth.ts";
+import type { ReasoningLevel } from "../../ai/types.ts";
 import type { CommandHotkey, CommandSessionListItem } from "../commands.ts";
 import { areebPaths } from "../paths.ts";
 import type { ProviderAuthView } from "../provider-runtime.ts";
@@ -64,6 +65,7 @@ export interface InteractiveController {
 	listSessions(): Promise<readonly CommandSessionListItem[]>;
 	resumeSession(id: string): Promise<TuiTransitionOutcome>;
 	setModel(provider: string, model: string): Promise<TuiTransitionOutcome>;
+	setReasoning(reasoning: ReasoningLevel): Promise<TuiTransitionOutcome>;
 	waitForIdle(): Promise<void>;
 	listAuthProviders?(savedOnly?: boolean): Promise<readonly ProviderAuthView[]>;
 	login?(
@@ -188,6 +190,12 @@ export async function runInteractiveMode(
 		onSetModel: async (provider, model) =>
 			applyPickerOutcome(
 				await controller.setModel(provider, model),
+				app,
+				controller.state,
+			),
+		onSetEffort: async (effort) =>
+			applyPickerOutcome(
+				await controller.setReasoning(effort),
 				app,
 				controller.state,
 			),
@@ -484,6 +492,21 @@ export async function runInteractiveMode(
 			return;
 		}
 		if (controller.isRunning || controller.state.inputMode === "running") {
+			if (isEffortCommand(input)) {
+				void controller.handleCommand(input, tuiService).then(
+					(result) => {
+						if (result.handled && result.outcome.kind === "message") {
+							app.presentCommand(result.outcome.text, result.outcome.level);
+						}
+						app.refresh(controller.state);
+					},
+					(error) => {
+						app.presentCommand(errorMessage(error), "error");
+						app.refresh(controller.state);
+					},
+				);
+				return;
+			}
 			try {
 				const queued = controller.followUp(input);
 				controller.state.queuedCount = queued.count;
@@ -653,6 +676,9 @@ async function applyCommandResult(
 		case "model-picker":
 			app.openModelPicker();
 			return;
+		case "effort-picker":
+			app.openEffortPicker();
+			return;
 		case "login-picker":
 			await auth.openPicker("login");
 			return;
@@ -703,6 +729,7 @@ function applyPickerOutcome(
 		case "quit":
 		case "resume-picker":
 		case "model-picker":
+		case "effort-picker":
 		case "theme-picker":
 		case "set-theme":
 		case "copy-last-assistant":
@@ -827,6 +854,10 @@ function isExplicitCtrlM(data: string): boolean {
 		parseKey(data) === Key.ctrl("m") &&
 		matchesKey(data, Key.ctrl("m"))
 	);
+}
+
+function isEffortCommand(input: string): boolean {
+	return /^\/effort(?:\s|$)/.test(input.trim());
 }
 
 function errorMessage(error: unknown): string {

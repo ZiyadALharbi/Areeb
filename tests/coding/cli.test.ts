@@ -53,6 +53,13 @@ describe("CLI parsing", () => {
 				parseCli(["--prompt", "hello", "--model", "fake", "--output", output]),
 			).toMatchObject({ kind: "prompt", output });
 		}
+		expect(
+			parseCli(["-p", "hello", "--model", "fake", "--effort", "max"]),
+		).toMatchObject({ kind: "prompt", effort: "max" });
+		expect(parseCli(["--effort", "high"])).toMatchObject({
+			kind: "interactive",
+			effort: "high",
+		});
 	});
 
 	test("parses session listing, resume, project trust, and help", () => {
@@ -139,6 +146,19 @@ describe("CLI parsing", () => {
 		expect(() => parseCli(["sessions", "--model", "fake"])).toThrow(
 			"Option --model is not valid with sessions",
 		);
+		for (const effort of ["minimal", "High", "unknown"]) {
+			expect(() => parseCli(["-p", "hello", "--effort", effort])).toThrow();
+		}
+		for (const command of ["sessions", "providers", "setup"] as const) {
+			expect(() =>
+				parseCli([
+					command,
+					...(command === "setup" ? ["--provider", "local"] : []),
+					"--effort",
+					"high",
+				]),
+			).toThrow(`Option --effort is not valid with ${command}`);
+		}
 		expect(() => parseCli(["setup", "--provider", "local"])).not.toThrow();
 		expect(() => parseCli(["setup", "--provider", "local", "-p", "x"])).toThrow(
 			"Option --prompt is not valid with setup",
@@ -150,6 +170,120 @@ describe("CLI parsing", () => {
 });
 
 describe("CLI session persistence", () => {
+	test("defaults new sessions to off and persists explicit effort overrides on resume", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "areeb-cli-effort-"));
+		try {
+			const cwd = join(directory, "project");
+			const createRuntime = (userRoot: string, providers: FakeProvider[]) => ({
+				cwd,
+				userRoot,
+				agentsRoot: join(directory, "agents"),
+				env: { OPENAI_API_KEY: "test-key" },
+				stdout: new BufferOutput(),
+				stderr: new BufferOutput(),
+				createProvider() {
+					const provider = providers.shift();
+					if (provider === undefined) {
+						throw new Error("Provider sequence exhausted");
+					}
+					return provider;
+				},
+				async runPrint(session: PrintModeSession, prompt: string) {
+					await session.prompt(prompt).result();
+					return 0;
+				},
+			});
+
+			const defaultRoot = join(directory, "default-user");
+			await setupOpenAICompatibleProvider({
+				userRoot: defaultRoot,
+				env: { OPENAI_API_KEY: "test-key" },
+				provider: "openai",
+				models: ["stored-model"],
+				defaultModel: "stored-model",
+			});
+			expect(
+				await runCli(
+					["-p", "default", "--model", "stored-model"],
+					createRuntime(defaultRoot, [
+						new FakeProvider([textScript("answer")], {
+							providerId: "openai",
+						}),
+					]),
+				),
+			).toBe(0);
+			const [defaultRecord] = await new CodingSessionManager({
+				cwd,
+				userRoot: defaultRoot,
+			}).list();
+			if (defaultRecord === undefined) {
+				throw new Error("Expected default effort session");
+			}
+			await expect(
+				(
+					await new CodingSessionManager({ cwd, userRoot: defaultRoot }).open(
+						defaultRecord.id,
+					)
+				).buildContext(),
+			).resolves.toMatchObject({ reasoning: "off" });
+
+			const explicitRoot = join(directory, "explicit-user");
+			await setupOpenAICompatibleProvider({
+				userRoot: explicitRoot,
+				env: { OPENAI_API_KEY: "test-key" },
+				provider: "openai",
+				models: ["stored-model"],
+				defaultModel: "stored-model",
+			});
+			const first = new FakeProvider([textScript("first")], {
+				providerId: "openai",
+			});
+			const resumed = new FakeProvider([textScript("resumed")], {
+				providerId: "openai",
+			});
+			const overridden = new FakeProvider([textScript("overridden")], {
+				providerId: "openai",
+			});
+			const runtime = createRuntime(explicitRoot, [first, resumed, overridden]);
+			expect(
+				await runCli(
+					["-p", "first", "--model", "stored-model", "--effort", "high"],
+					runtime,
+				),
+			).toBe(0);
+			const manager = new CodingSessionManager({ cwd, userRoot: explicitRoot });
+			const [record] = await manager.list();
+			if (record === undefined) {
+				throw new Error("Expected explicit effort session");
+			}
+			const initialHandle = await manager.open(record.id);
+			expect((await initialHandle.buildContext()).reasoning).toBe("high");
+			expect(
+				await initialHandle.findEntries({ type: "reasoning_change" }),
+			).toHaveLength(1);
+
+			expect(
+				await runCli(["-p", "resume", "--resume", record.id], runtime),
+			).toBe(0);
+			expect(resumed.calls[0]?.options?.reasoning).toBe("high");
+
+			expect(
+				await runCli(
+					["-p", "override", "--resume", record.id, "--effort", "max"],
+					runtime,
+				),
+			).toBe(0);
+			expect(overridden.calls[0]?.options?.reasoning).toBe("max");
+			const finalHandle = await manager.open(record.id);
+			expect((await finalHandle.buildContext()).reasoning).toBe("max");
+			expect(
+				await finalHandle.findEntries({ type: "reasoning_change" }),
+			).toHaveLength(2);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	test("creates, resumes, and lists sessions without using launch cwd on resume", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "areeb-cli-session-"));
 		try {
@@ -301,6 +435,46 @@ describe("CLI session persistence", () => {
 });
 
 describe("CLI interactive mode", () => {
+	test("applies explicit effort when creating an interactive session", async () => {
+		const directory = await mkdtemp(
+			join(tmpdir(), "areeb-cli-interactive-effort-"),
+		);
+		try {
+			const cwd = join(directory, "project");
+			const userRoot = join(directory, "user");
+			expect(
+				await runCli(["--effort", "max"], {
+					cwd,
+					userRoot,
+					agentsRoot: join(directory, "agents"),
+					env: { OPENAI_API_KEY: "test-key" },
+					stdin: { isTTY: true },
+					stdout: new BufferOutput(true),
+					stderr: new BufferOutput(),
+					createProvider: () => new FakeProvider([], { providerId: "openai" }),
+					async runInteractive(controller) {
+						expect(controller.state.reasoning).toBe("max");
+						return 0;
+					},
+				}),
+			).toBe(0);
+
+			const [record] = await new CodingSessionManager({ cwd, userRoot }).list();
+			if (record === undefined) {
+				throw new Error("Expected interactive effort session");
+			}
+			const handle = await new CodingSessionManager({ cwd, userRoot }).open(
+				record.id,
+			);
+			expect((await handle.buildContext()).reasoning).toBe("max");
+			expect(
+				await handle.findEntries({ type: "reasoning_change" }),
+			).toHaveLength(1);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
+
 	test("rejects non-TTY invocation before provider bootstrap", async () => {
 		const stderr = new BufferOutput();
 		let providerCreated = false;
