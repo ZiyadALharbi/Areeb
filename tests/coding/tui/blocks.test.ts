@@ -4,6 +4,7 @@ import {
 	MessageBlock,
 	ThinkingBlock,
 	ToolBlock,
+	ToolGroupBlock,
 } from "../../../src/coding/tui/blocks.ts";
 import { AREEB_DARK_THEME } from "../../../src/coding/tui/theme.ts";
 
@@ -29,7 +30,9 @@ describe("TUI transcript blocks", () => {
 		expect(status.render(40).map(stripTerminalSequences)).toEqual([
 			"│  waiting",
 		]);
-		expect(tool.render(40).map(stripTerminalSequences)).toEqual(["◆  bash"]);
+		expect(tool.render(40).map(stripTerminalSequences)).toEqual([
+			"● Ran 1 command  Ctrl+O: expand",
+		]);
 	});
 
 	test("wraps assistant text naturally within the requested width", () => {
@@ -45,14 +48,15 @@ describe("TUI transcript blocks", () => {
 		expect(lines.map(stripTerminalSequences).join(" ")).not.toContain("│");
 	});
 
-	test("renders sanitized multiline thinking with an accented label and muted italic body", () => {
+	test("renders compact thinking with a shortcut and sanitized expanded content", () => {
 		const rendered = new ThinkingBlock(
-			"\u001b[31mfirst thought that wraps\u001b[0m\nsecond",
+			"\u001b[31m**first thought** that wraps\u001b[0m\nsecond",
 			theme,
+			{ expanded: true },
 		).render(18);
 		const plain = rendered.map(stripTerminalSequences);
 
-		expect(plain[0]).toStartWith("Thinking · ");
+		expect(plain[0]).toStartWith("● Thinking");
 		expect(plain.join("\n")).toContain("first");
 		expect(plain.join("\n")).toContain("thought");
 		expect(plain.join("\n")).toContain("wraps");
@@ -62,12 +66,13 @@ describe("TUI transcript blocks", () => {
 		expect(rendered.join("\n")).toContain("38;2;112;112;112");
 		expect(rendered.join("\n")).toContain("\u001b[3m");
 		expect(rendered.join("\n")).not.toContain("\u001b[31m");
+		expect(plain.join("\n")).not.toContain("**");
 	});
 
 	test("renders assistant Markdown while leaving user Markdown literal", () => {
 		const assistant = new MessageBlock(
 			"assistant",
-			"## Heading\n\n- **bold** and `code`",
+			"###### Heading\n\n- **bold** and `code`\n\n```typescript\nconst answer: number = 42;\n```",
 			theme,
 		)
 			.render(30)
@@ -77,7 +82,18 @@ describe("TUI transcript blocks", () => {
 			.map(stripTerminalSequences);
 
 		expect(assistant.join("\n")).toContain("Heading");
+		expect(assistant.join("\n")).not.toContain("######");
 		expect(assistant.join("\n")).toContain("- bold and code");
+		expect(assistant.join("\n")).toContain("const answer: number = 42;");
+		expect(
+			new MessageBlock(
+				"assistant",
+				"```typescript\nconst answer: number = 42;\n```",
+				theme,
+			)
+				.render(40)
+				.join("\n"),
+		).toContain("38;2;79;193;255");
 		expect(user).toHaveLength(3);
 		expect(user[1]).toContain("› **bold** and `code`");
 		expect(assistant.every((line) => visibleWidth(line) <= 30)).toBe(true);
@@ -160,7 +176,7 @@ describe("TUI transcript blocks", () => {
 
 		expect(lines).toHaveLength(1);
 		expect(visibleWidth(lines[0] ?? "")).toBeLessThanOrEqual(12);
-		expect(stripTerminalSequences(lines[0] ?? "")).toBe("◆  a-very-lo");
+		expect(stripTerminalSequences(lines[0] ?? "")).toBe("● Ran 1 com…");
 	});
 
 	test("keeps tool output collapsed until expanded and bounds its lines", () => {
@@ -173,7 +189,7 @@ describe("TUI transcript blocks", () => {
 		expect(tool.render(24)).toHaveLength(1);
 		tool.setExpanded(true);
 		const expanded = tool.render(24).map(stripTerminalSequences);
-		expect(expanded.length).toBeLessThanOrEqual(17);
+		expect(expanded.length).toBeLessThanOrEqual(18);
 		expect(expanded.join("\n")).toContain("lines omitted");
 		expect(expanded.join("\n")).toContain("**literal**");
 		expect(expanded.every((line) => visibleWidth(line) <= 24)).toBe(true);
@@ -186,11 +202,11 @@ describe("TUI transcript blocks", () => {
 		});
 
 		expect(tool.render(40).map(stripTerminalSequences)).toContain(
-			"   old preview",
+			"    old preview",
 		);
 		tool.update({ preview: "new preview", isError: true });
 		const rendered = tool.render(40);
-		expect(rendered.map(stripTerminalSequences)).toContain("   new preview");
+		expect(rendered.map(stripTerminalSequences)).toContain("    new preview");
 		expect(rendered[0]).toContain("38;2;252;66;75");
 	});
 
@@ -204,10 +220,11 @@ describe("TUI transcript blocks", () => {
 		const rendered = tool.render(30);
 
 		expect(rendered.map(stripTerminalSequences)).toEqual([
-			"◆  edit",
-			"   @@ -1 +1 @@",
-			"   -old",
-			"   +new",
+			"● Ran 1 command  Ctrl+O: collapse",
+			"  └ edit",
+			"    @@ -1 +1 @@",
+			"    - old",
+			"    + new",
 		]);
 		expect(rendered[0]).toContain("38;2;252;66;75");
 	});
@@ -234,16 +251,35 @@ describe("TUI transcript blocks", () => {
 			return rendered[index] ?? "";
 		};
 
-		expect(plain).toContain("   --- a/file");
-		expect(plain).toContain("   +++ b/file");
-		expect(styledLine("diff --git")).toContain("38;2;112;112;112");
+		expect(plain).toContain("    file");
+		expect(plain.join("\n")).not.toContain("diff --git");
+		expect(plain.join("\n")).not.toContain("--- a/file");
 		expect(styledLine("@@ -1")).toContain("38;2;138;190;183");
 		expect(styledLine("context")).toContain("38;2;192;192;192");
 		expect(styledLine("removed")).toContain("38;2;252;66;75");
-		const addedIndex = plain.findIndex((line) => line.includes("+added"));
+		const addedIndex = plain.findIndex((line) => line.includes("+ added"));
 		expect(addedIndex).toBeGreaterThan(0);
 		expect(rendered[addedIndex]).toContain("38;2;0;189;125");
 		expect(rendered[addedIndex + 1]).toContain("38;2;0;189;125");
+	});
+
+	test("groups consecutive tool activity under one command summary", () => {
+		const group = new ToolGroupBlock(theme, [
+			{ toolName: "read", isError: false },
+			{ toolName: "edit", active: true },
+		]);
+		const active = group.render(60).map(stripTerminalSequences);
+		expect(active).toHaveLength(1);
+		expect(active[0]).toContain("Ran 2 commands  Ctrl+O: expand");
+		expect(active[0]).not.toStartWith("●");
+
+		group.update([
+			{ toolName: "read", isError: false },
+			{ toolName: "edit", isError: false },
+		]);
+		expect(group.render(60).map(stripTerminalSequences)).toEqual([
+			"● Ran 2 commands  Ctrl+O: expand",
+		]);
 	});
 
 	test("strips injected terminal styling and adds no labels, boxes, or backgrounds", () => {

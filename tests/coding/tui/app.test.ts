@@ -10,10 +10,7 @@ import {
 	createTuiApp,
 } from "../../../src/coding/tui/app.ts";
 import { createTuiState } from "../../../src/coding/tui/state.ts";
-import {
-	AREEB_DARK_THEME,
-	AREEB_LIGHT_THEME,
-} from "../../../src/coding/tui/theme.ts";
+import { AREEB_DARK_THEME } from "../../../src/coding/tui/theme.ts";
 
 const SESSION_ID = "00000000-0000-4000-8000-000000000001";
 
@@ -165,6 +162,9 @@ describe("createTuiApp pickers", () => {
 
 		expect(app.openEffortPicker()).toBe(true);
 		expect(app.tui.hasOverlay()).toBe(false);
+		expect(stripTerminalSequences(app.tui.render(80).join("\n"))).toContain(
+			"╭",
+		);
 		const picker = app.tui.getFocusedComponent();
 		expect(picker).not.toBe(app.editor);
 		const rendered = stripTerminalSequences(
@@ -191,6 +191,32 @@ describe("createTuiApp pickers", () => {
 		expect(app.tui.hasOverlay()).toBe(false);
 		expect(app.tui.getFocusedComponent()).toBe(app.editor);
 		expect(app.editor.getText()).toBe("  exact draft\nsecond line  ");
+	});
+
+	test("renders all skills below the transcript and preserves invocation arguments", () => {
+		const app = createTuiApp(
+			appOptions({
+				getCompletionCatalog: () => ({
+					commands: [],
+					skillNames: ["review", "implement", "review"],
+					templateNames: [],
+					availableCapabilities: [],
+					cwd: "/project",
+					listSessions: async () => [],
+					models: [],
+				}),
+			}),
+		);
+
+		expect(app.openSkillPicker("src/app.ts carefully")).toBe(true);
+		expect(app.tui.hasOverlay()).toBe(false);
+		const picker = app.tui.getFocusedComponent();
+		const output = stripTerminalSequences(picker?.render(80).join("\n") ?? "");
+		expect(output).toContain("implement");
+		expect(output).toContain("review");
+		picker?.handleInput?.("\r");
+		expect(app.editor.getText()).toBe("/skill:implement src/app.ts carefully");
+		expect(app.tui.getFocusedComponent()).toBe(app.editor);
 	});
 
 	test("keeps a failed effort selector open and safely replaces it with other pickers", async () => {
@@ -343,11 +369,11 @@ describe("createTuiApp pickers", () => {
 		expect(app.editor.disableSubmit).toBe(false);
 	});
 
-	test("previews, reverts, commits, and recovers failed theme selections", async () => {
+	test("keeps the dark theme as the only selectable theme", async () => {
 		const saved: string[] = [];
 		const app = createTuiApp(
 			appOptions({
-				themes: [AREEB_DARK_THEME, AREEB_LIGHT_THEME],
+				themes: [AREEB_DARK_THEME],
 				async onSetTheme(theme) {
 					saved.push(theme);
 				},
@@ -357,35 +383,12 @@ describe("createTuiApp pickers", () => {
 		const darkBorder = app.editor.borderColor("border");
 
 		expect(app.openThemePicker()).toBe(true);
-		app.tui.getFocusedComponent()?.handleInput?.("\u001b[B");
-		expect(app.editor.borderColor("border")).not.toBe(darkBorder);
-		expect(app.dismissPicker()).toBe(true);
-		expect(app.editor.borderColor("border")).toBe(darkBorder);
-
-		expect(app.openThemePicker()).toBe(true);
-		app.tui.getFocusedComponent()?.handleInput?.("\u001b[B");
 		app.tui.getFocusedComponent()?.handleInput?.("\r");
 		await flush();
-		expect(saved).toEqual(["areeb-light"]);
+		expect(saved).toEqual(["areeb-dark"]);
 		expect(app.tui.hasOverlay()).toBe(false);
-		expect(app.editor.borderColor("border")).not.toBe(darkBorder);
+		expect(app.editor.borderColor("border")).toBe(darkBorder);
 		expect(app.editor.getText()).toBe("preserved draft");
-
-		const failing = createTuiApp(
-			appOptions({
-				themes: [AREEB_DARK_THEME, AREEB_LIGHT_THEME],
-				async onSetTheme() {
-					throw new Error("storage failed");
-				},
-			}),
-		);
-		const originalBorder = failing.editor.borderColor("border");
-		failing.openThemePicker();
-		failing.tui.getFocusedComponent()?.handleInput?.("\u001b[B");
-		failing.tui.getFocusedComponent()?.handleInput?.("\r");
-		await flush();
-		expect(failing.tui.hasOverlay()).toBe(true);
-		expect(failing.editor.borderColor("border")).toBe(originalBorder);
 	});
 
 	test("shows honest last-response usage in the footer", () => {

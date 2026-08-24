@@ -50,7 +50,7 @@ export function createTuiState(
 		sessionId: "unknown",
 		model: "unknown model",
 		cwd: ".",
-		reasoning: "off",
+		reasoning: "high",
 	},
 ): TuiState {
 	return {

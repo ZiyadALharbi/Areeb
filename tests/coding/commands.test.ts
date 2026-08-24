@@ -440,6 +440,15 @@ describe("default slash commands", () => {
 			outcome: { kind: "theme-picker" },
 		});
 		expect(
+			await registry.dispatch("/skill inspect this", commandContext),
+		).toEqual({
+			handled: true,
+			outcome: {
+				kind: "skill-picker",
+				argumentsText: "inspect this",
+			},
+		});
+		expect(
 			await registry.dispatch("/theme areeb-light", commandContext),
 		).toEqual({
 			handled: true,

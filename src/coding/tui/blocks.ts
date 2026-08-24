@@ -9,11 +9,24 @@ import {
 import type { TuiTheme } from "./theme.ts";
 
 const MESSAGE_GLYPH = "│";
-const TOOL_GLYPH = "◆";
 const NORMAL_INSET = 2;
 const ASSISTANT_MARGIN = 1;
 const USER_PADDING = 2;
 const TOOL_PREVIEW_MAX_LINES = 16;
+const DETAIL_INSET = 2;
+
+export const ACTIVITY_SPINNER_FRAMES = Object.freeze([
+	"⠋",
+	"⠙",
+	"⠹",
+	"⠸",
+	"⠼",
+	"⠴",
+	"⠦",
+	"⠧",
+	"⠇",
+	"⠏",
+]);
 
 export type MessageBlockKind = "user" | "assistant" | "status" | "error";
 
@@ -30,9 +43,18 @@ export class MessageBlock implements Component {
 		private readonly theme: TuiTheme,
 	) {
 		this.text = text;
-		this.markdown = new Markdown("", 0, 0, theme.markdown, {
-			color: theme.primary,
-		});
+		this.markdown = new Markdown(
+			"",
+			0,
+			0,
+			theme.markdown,
+			{
+				color: theme.primary,
+			},
+			{
+				transform: normalizeMarkdownHeadings,
+			},
+		);
 	}
 
 	setText(text: string): void {
@@ -177,99 +199,163 @@ export class MessageBlock implements Component {
 
 export interface ToolBlockOptions {
 	readonly expanded?: boolean;
+	readonly active?: boolean;
 	readonly preview?: string;
 	readonly patch?: string;
 	readonly isError?: boolean;
 }
 
 export class ToolBlock implements Component {
-	private expanded: boolean;
-	private preview?: string;
-	private patch?: string;
-	private isError?: boolean;
+	private readonly group: ToolGroupBlock;
 
 	constructor(
 		private readonly toolName: string,
-		private readonly theme: TuiTheme,
+		theme: TuiTheme,
 		options: ToolBlockOptions = {},
 	) {
-		this.expanded = options.expanded ?? false;
-		this.preview = options.preview;
-		this.patch = options.patch;
-		this.isError = options.isError;
+		this.group = new ToolGroupBlock(theme, [{ toolName, ...options }]);
+		this.group.setExpanded(options.expanded ?? false);
+	}
+
+	setExpanded(expanded: boolean): void {
+		this.group.setExpanded(expanded);
+	}
+
+	update(options: ToolBlockOptions): void {
+		this.group.update([{ toolName: this.toolName, ...options }]);
+	}
+
+	invalidate(): void {
+		this.group.invalidate();
+	}
+
+	render(width: number): string[] {
+		return this.group.render(width);
+	}
+}
+
+export interface ToolActivity extends ToolBlockOptions {
+	readonly toolName: string;
+}
+
+export class ToolGroupBlock implements Component {
+	private expanded = false;
+	private tools: readonly ToolActivity[];
+
+	constructor(
+		private readonly theme: TuiTheme,
+		tools: readonly ToolActivity[],
+	) {
+		this.tools = [...tools];
 	}
 
 	setExpanded(expanded: boolean): void {
 		this.expanded = expanded;
 	}
 
-	update(options: ToolBlockOptions): void {
-		this.preview = options.preview;
-		this.patch = options.patch;
-		this.isError = options.isError;
+	update(tools: readonly ToolActivity[]): void {
+		this.tools = [...tools];
 	}
 
 	invalidate(): void {}
 
 	render(width: number): string[] {
 		const availableWidth = normalizeWidth(width);
-		if (availableWidth === 0) {
+		if (availableWidth === 0 || this.tools.length === 0) {
 			return [];
 		}
 
-		const accent = this.isError ? this.theme.error : this.theme.tool;
-		const glyph = accent(TOOL_GLYPH);
-		const cleanName =
-			stripTerminalSequences(this.toolName).split(/\r\n|\r|\n/, 1)[0] ?? "";
-
-		const inset = Math.min(
-			NORMAL_INSET,
-			Math.max(0, availableWidth - visibleWidth(TOOL_GLYPH) - 1),
-		);
-		const contentWidth = availableWidth - visibleWidth(TOOL_GLYPH) - inset;
-		const name =
-			contentWidth > 0 ? truncateToWidth(cleanName, contentWidth, "") : "";
-		const header = name
-			? `${glyph}${" ".repeat(inset)}${this.theme.primary(name)}`
-			: glyph;
-		const detail = this.patch ?? this.preview;
-		if (!this.expanded || !detail || contentWidth <= 0) {
-			return [header];
+		const active = this.tools.some((tool) => tool.active === true);
+		const failed = this.tools.some((tool) => tool.isError === true);
+		const incomplete = this.tools.some((tool) => tool.isError === undefined);
+		const marker = active
+			? this.theme.assistant(activitySpinnerFrame())
+			: failed
+				? this.theme.error("●")
+				: incomplete
+					? this.theme.muted("●")
+					: this.theme.success("●");
+		const count = this.tools.length;
+		const summary = `Ran ${count} command${count === 1 ? "" : "s"}`;
+		const shortcut = `Ctrl+O: ${this.expanded ? "collapse" : "expand"}`;
+		const header = `${marker} ${this.theme.primary(summary)}  ${this.theme.shortcut(shortcut)}`;
+		const rendered = [truncateToWidth(header, availableWidth, "…")];
+		if (!this.expanded) {
+			return rendered;
 		}
 
-		const cleanDetail = stripTerminalSequences(detail);
-		const detailLines = limitPhysicalLines(
-			this.patch === undefined
-				? wrapLiteralText(cleanDetail, contentWidth).map((text) => ({ text }))
-				: wrapDiffText(cleanDetail, contentWidth, this.theme),
-			contentWidth,
+		const detailPrefixWidth = Math.min(
+			DETAIL_INSET * 2,
+			Math.max(0, availableWidth - 1),
 		);
-		const prefix = " ".repeat(visibleWidth(TOOL_GLYPH) + inset);
-		return [
-			header,
-			...detailLines.map((line) =>
-				line.text
-					? `${prefix}${line.style?.(line.text) ?? this.theme.primary(line.text)}`
-					: "",
-			),
-		];
+		const detailWidth = Math.max(1, availableWidth - detailPrefixWidth);
+		for (const [index, tool] of this.tools.entries()) {
+			const branch = index === this.tools.length - 1 ? "└" : "├";
+			const cleanName =
+				stripTerminalSequences(tool.toolName).split(/\r\n|\r|\n/, 1)[0] ?? "";
+			rendered.push(
+				truncateToWidth(
+					`${" ".repeat(DETAIL_INSET)}${this.theme.tool(branch)} ${this.theme.primary(cleanName)}`,
+					availableWidth,
+					"…",
+				),
+			);
+			const detail = tool.patch ?? tool.preview;
+			if (detail === undefined || detail.length === 0) {
+				continue;
+			}
+			const cleanDetail = stripTerminalSequences(detail);
+			const detailLines = limitPhysicalLines(
+				tool.patch === undefined
+					? wrapLiteralText(cleanDetail, detailWidth).map((text) => ({ text }))
+					: wrapDiffText(cleanDetail, detailWidth, this.theme),
+				detailWidth,
+			);
+			const prefix = " ".repeat(detailPrefixWidth);
+			for (const line of detailLines) {
+				rendered.push(
+					line.text
+						? `${prefix}${line.style?.(line.text) ?? this.theme.primary(line.text)}`
+						: "",
+				);
+			}
+		}
+		return rendered;
 	}
+}
+
+export interface ThinkingBlockOptions {
+	readonly active?: boolean;
+	readonly expanded?: boolean;
 }
 
 export class ThinkingBlock implements Component {
 	private text: string;
+	private active: boolean;
+	private expanded: boolean;
 
 	constructor(
 		text: string,
 		private readonly theme: TuiTheme,
+		options: ThinkingBlockOptions = {},
 	) {
 		this.text = text;
+		this.active = options.active ?? false;
+		this.expanded = options.expanded ?? false;
 	}
 
 	setText(text: string): void {
 		this.text = text;
 	}
 
+	setActive(active: boolean): void {
+		this.active = active;
+	}
+
+	setExpanded(expanded: boolean): void {
+		this.expanded = expanded;
+	}
+
 	invalidate(): void {}
 
 	render(width: number): string[] {
@@ -277,26 +363,34 @@ export class ThinkingBlock implements Component {
 		if (availableWidth === 0) {
 			return [];
 		}
-		const cleanText = stripTerminalSequences(this.text);
+		const cleanText = stripThinkingMarkdown(stripTerminalSequences(this.text));
 		if (cleanText.trim().length === 0) {
 			return [];
 		}
 
-		const label = "Thinking";
-		const separator = " · ";
-		const prefixWidth = visibleWidth(label) + visibleWidth(separator);
-		if (availableWidth <= prefixWidth) {
-			return [truncateToWidth(this.theme.assistant(label), availableWidth, "")];
+		const marker = this.active
+			? this.theme.assistant(activitySpinnerFrame())
+			: this.theme.success("●");
+		const shortcut = `Ctrl+T: ${this.expanded ? "collapse" : "expand"} thinking`;
+		const header = `${marker} ${this.theme.assistant("Thinking")}  ${this.theme.shortcut(shortcut)}`;
+		const rendered = [truncateToWidth(header, availableWidth, "…")];
+		if (!this.expanded) {
+			return rendered;
 		}
 
-		const contentWidth = availableWidth - prefixWidth;
-		const lines = wrapLiteralText(cleanText, contentWidth);
-		const prefix = `${this.theme.assistant(label)}${this.theme.muted(separator)}`;
-		const indent = " ".repeat(prefixWidth);
-		return lines.map((line, index) => {
-			const body = this.theme.markdown.italic(this.theme.muted(line));
-			return `${index === 0 ? prefix : indent}${body}`;
-		});
+		const contentInset = Math.min(
+			DETAIL_INSET,
+			Math.max(0, availableWidth - 1),
+		);
+		const contentWidth = Math.max(1, availableWidth - contentInset);
+		return [
+			...rendered,
+			...wrapLiteralText(cleanText, contentWidth).map((line) =>
+				line
+					? `${" ".repeat(contentInset)}${this.theme.markdown.italic(this.theme.muted(line))}`
+					: "",
+			),
+		];
 	}
 }
 
@@ -344,36 +438,68 @@ function wrapDiffText(
 	theme: TuiTheme,
 ): StyledLine[] {
 	const lines: StyledLine[] = [];
-	for (const logicalLine of text.split(/\r\n|\r|\n/)) {
-		const style = diffStyle(logicalLine, theme);
-		const wrapped = wrapLiteralText(logicalLine, width);
+	for (const logicalLine of formatDiffLines(text)) {
+		const style = diffStyle(logicalLine.kind, theme);
+		const wrapped = wrapLiteralText(logicalLine.text, width);
 		lines.push(...wrapped.map((fragment) => ({ text: fragment, style })));
 	}
 	return lines;
 }
 
-function diffStyle(line: string, theme: TuiTheme): TuiTheme["primary"] {
-	if (line.startsWith("@@")) {
-		return theme.diffHunk;
+type DiffLineKind = "file" | "hunk" | "added" | "removed" | "context" | "meta";
+
+interface DiffLine {
+	readonly kind: DiffLineKind;
+	readonly text: string;
+}
+
+function formatDiffLines(text: string): DiffLine[] {
+	const lines: DiffLine[] = [];
+	for (const line of text.split(/\r\n|\r|\n/)) {
+		if (
+			line.startsWith("diff ") ||
+			line.startsWith("index ") ||
+			line.startsWith("--- ")
+		) {
+			continue;
+		}
+		if (line.startsWith("+++ ")) {
+			const path = line.slice(4).replace(/^b\//, "");
+			if (path !== "/dev/null") {
+				lines.push({ kind: "file", text: path });
+			}
+			continue;
+		}
+		if (line.startsWith("@@")) {
+			lines.push({ kind: "hunk", text: line });
+		} else if (line.startsWith("+")) {
+			lines.push({ kind: "added", text: `+ ${line.slice(1)}` });
+		} else if (line.startsWith("-")) {
+			lines.push({ kind: "removed", text: `- ${line.slice(1)}` });
+		} else if (line.startsWith(" ")) {
+			lines.push({ kind: "context", text: `  ${line.slice(1)}` });
+		} else {
+			lines.push({ kind: "meta", text: line });
+		}
 	}
-	if (
-		line.startsWith("---") ||
-		line.startsWith("+++") ||
-		line.startsWith("diff ") ||
-		line.startsWith("index ") ||
-		line.startsWith("\\ No newline") ||
-		line.includes("output omitted") ||
-		line.includes("lines omitted")
-	) {
-		return theme.diffMeta;
+	return lines;
+}
+
+function diffStyle(kind: DiffLineKind, theme: TuiTheme): TuiTheme["primary"] {
+	switch (kind) {
+		case "file":
+			return (text) => theme.markdown.bold(theme.primary(text));
+		case "hunk":
+			return theme.diffHunk;
+		case "added":
+			return theme.diffAdded;
+		case "removed":
+			return theme.diffRemoved;
+		case "context":
+			return theme.diffContext;
+		case "meta":
+			return theme.diffMeta;
 	}
-	if (line.startsWith("+")) {
-		return theme.diffAdded;
-	}
-	if (line.startsWith("-")) {
-		return theme.diffRemoved;
-	}
-	return line.startsWith(" ") ? theme.diffContext : theme.primary;
 }
 
 function limitPhysicalLines(lines: StyledLine[], width: number): StyledLine[] {
@@ -393,4 +519,42 @@ function limitPhysicalLines(lines: StyledLine[], width: number): StyledLine[] {
 		},
 		...lines.slice(-tailCount),
 	];
+}
+
+function normalizeMarkdownHeadings(markdown: string): string {
+	const lines = markdown.split("\n");
+	let fence: string | undefined;
+	return lines
+		.map((line) => {
+			const fenceMatch = /^\s{0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+			if (fenceMatch !== undefined) {
+				if (fence === undefined) {
+					fence = fenceMatch;
+				} else if (
+					fenceMatch[0] === fence[0] &&
+					fenceMatch.length >= fence.length
+				) {
+					fence = undefined;
+				}
+				return line;
+			}
+			return fence === undefined
+				? line.replace(/^(\s{0,3})#{3,6}(\s+)/, "$1##$2")
+				: line;
+		})
+		.join("\n");
+}
+
+function stripThinkingMarkdown(text: string): string {
+	return text
+		.replaceAll("**", "")
+		.replaceAll("__", "")
+		.replace(/`([^`]*)`/g, "$1")
+		.replace(/^\s{0,3}#{1,6}\s+/gm, "")
+		.trim();
+}
+
+function activitySpinnerFrame(): string {
+	const index = Math.floor(Date.now() / 80) % ACTIVITY_SPINNER_FRAMES.length;
+	return ACTIVITY_SPINNER_FRAMES[index] ?? ACTIVITY_SPINNER_FRAMES[0] ?? "⠋";
 }

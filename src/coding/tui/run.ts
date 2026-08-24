@@ -18,7 +18,7 @@ import type { ReasoningLevel } from "../../ai/types.ts";
 import type { CommandHotkey, CommandSessionListItem } from "../commands.ts";
 import { areebPaths } from "../paths.ts";
 import type { ProviderAuthView } from "../provider-runtime.ts";
-import type { ResourceDiagnostic } from "../resources.ts";
+import { type ResourceDiagnostic, ResourceError } from "../resources.ts";
 import type { CodingSessionTuiService } from "../session.ts";
 import type { TuiEventAdapter } from "./adapter.ts";
 import {
@@ -111,6 +111,11 @@ export const INTERACTIVE_HOTKEYS: readonly InteractiveHotkey[] = Object.freeze([
 		keys: "Ctrl+O",
 		description: "Toggle tool previews",
 		footerLabel: "tools",
+	},
+	{
+		keys: "Ctrl+T",
+		description: "Toggle thinking details",
+		footerLabel: "thinking",
 	},
 	{ keys: "/theme", description: "Preview or switch the interface theme" },
 	{ keys: "/copy", description: "Copy the latest assistant response" },
@@ -230,6 +235,7 @@ export async function runInteractiveMode(
 		app.dismissInlineCompletion();
 		app.closeAuthDialog?.();
 		app.clearCommandPresentation();
+		app.dispose?.();
 	};
 
 	const settle = (error?: unknown): void => {
@@ -478,6 +484,10 @@ export async function runInteractiveMode(
 		} catch (error) {
 			failure ??= error;
 		}
+		if (failure instanceof ResourceError) {
+			app.presentCommand(errorMessage(failure), "error");
+			failure = undefined;
+		}
 		if (failure !== undefined) {
 			fail(failure);
 			return;
@@ -570,6 +580,10 @@ export async function runInteractiveMode(
 		}
 		if (matchesKey(data, Key.ctrl("o"))) {
 			app.toggleToolPreviews();
+			return { consume: true };
+		}
+		if (matchesKey(data, Key.ctrl("t"))) {
+			app.toggleThinking();
 			return { consume: true };
 		}
 		if (matchesKey(data, Key.ctrl("p"))) {
@@ -683,6 +697,9 @@ async function applyCommandResult(
 		case "effort-picker":
 			app.openEffortPicker();
 			return;
+		case "skill-picker":
+			app.openSkillPicker(result.outcome.argumentsText);
+			return;
 		case "login-picker":
 			await auth.openPicker("login");
 			return;
@@ -734,6 +751,7 @@ function applyPickerOutcome(
 		case "resume-picker":
 		case "model-picker":
 		case "effort-picker":
+		case "skill-picker":
 		case "theme-picker":
 		case "set-theme":
 		case "copy-last-assistant":

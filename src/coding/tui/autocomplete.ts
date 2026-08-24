@@ -161,7 +161,7 @@ export function buildCompletionState(
 		}
 	}
 
-	if (options.skillNames.length > 0) {
+	if (options.skillNames.length > 0 && !executableNames.has("skill")) {
 		const candidate = rankItem(
 			{
 				value: SKILL_PREFIX,

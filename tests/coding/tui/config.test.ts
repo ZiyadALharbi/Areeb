@@ -31,9 +31,9 @@ describe("TUI config", () => {
 		expect(await loadTuiConfig(path)).toEqual({
 			config: { theme: "areeb-dark" },
 		});
-		await Bun.write(path, '{"theme":"areeb-light","future":true}');
+		await Bun.write(path, '{"theme":"areeb-dark","future":true}');
 		expect(await loadTuiConfig(path)).toEqual({
-			config: { theme: "areeb-light" },
+			config: { theme: "areeb-dark" },
 		});
 	});
 
@@ -57,9 +57,9 @@ describe("TUI config", () => {
 		const directory = await createTempDirectory();
 		const path = join(directory, "user", "tui.json");
 
-		await saveTuiConfig(path, { theme: "areeb-light" });
+		await saveTuiConfig(path, { theme: "areeb-dark" });
 		expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
-			theme: "areeb-light",
+			theme: "areeb-dark",
 		});
 		expect((await stat(join(directory, "user"))).mode & 0o777).toBe(0o700);
 		expect((await stat(path)).mode & 0o777).toBe(0o600);

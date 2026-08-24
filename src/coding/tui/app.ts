@@ -7,6 +7,7 @@ import {
 	Editor,
 	fuzzyFilter,
 	Key,
+	Loader,
 	matchesKey,
 	type OverlayHandle,
 	type AutocompleteItem as PiAutocompleteItem,
@@ -33,7 +34,12 @@ import {
 	type CompletionCatalog,
 	type CompletionItem,
 } from "./autocomplete.ts";
-import { MessageBlock, ThinkingBlock, ToolBlock } from "./blocks.ts";
+import {
+	MessageBlock,
+	ThinkingBlock,
+	ToolBlock,
+	ToolGroupBlock,
+} from "./blocks.ts";
 import {
 	CommandOverlayContent,
 	OverlayFrame,
@@ -86,6 +92,7 @@ export interface CreateTuiAppOptions {
 export interface TuiApp {
 	readonly tui: TuiAltScreen;
 	readonly editor: Editor;
+	dispose?(): void;
 	refresh(state?: TuiState): void;
 	presentCommand(
 		text: string,
@@ -99,12 +106,14 @@ export interface TuiApp {
 	openSessionPicker(): Promise<boolean>;
 	openModelPicker(): boolean;
 	openEffortPicker(): boolean;
+	openSkillPicker(argumentsText?: string): boolean;
 	openThemePicker(): boolean;
 	setTheme(name: string): Promise<boolean>;
 	dismissPicker(): boolean;
 	dismissInlineCompletion(): boolean;
 	acceptInlineCompletion(): boolean;
 	toggleToolPreviews(): void;
+	toggleThinking(): void;
 	openProviderPicker?(
 		mode: ProviderPickerMode,
 		providers: readonly ProviderAuthView[],
@@ -148,7 +157,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 				}),
 	});
 	const initialTranscript = [...options.transcript];
-	const transcript = new VStack(initialTranscript, { gap: 1 });
+	const transcript = new VStack(initialTranscript, { gap: 0 });
 	const mountedTranscript = [...initialTranscript];
 	const scrollView = new ScrollView(transcript, {
 		follow: "end",
@@ -162,6 +171,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 	editor.disableSubmit = options.state?.inputMode === "locked";
 	const composerSurface = new ComposerSurface(editor, theme, options.state);
 	const composer = new VStack([composerSurface]);
+	const activity = new ComposerActivityLine(tui, theme, options.state);
 	const status = new VStack();
 	const shortcutLine = new VStack();
 	const root = new VStack(
@@ -172,6 +182,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 				grow: 1,
 				minSize: 1,
 			},
+			{ component: activity, basis: "auto" },
 			{ component: composer, basis: "auto" },
 			{ component: status, basis: "auto" },
 			{
@@ -195,6 +206,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		| "session"
 		| "model"
 		| "effort"
+		| "skill"
 		| "theme"
 		| "provider"
 		| undefined;
@@ -208,8 +220,20 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		| undefined;
 	let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 	const expandedToolCallIds = new Set<string>();
+	let thinkingExpanded = false;
 	let blocksByItem = new WeakMap<object, Component>();
-	const toolBlocksById = new Map<string, ToolBlock>();
+	const toolGroupsById = new Map<string, ToolGroupBlock>();
+
+	const restoreComposer = (): void => {
+		composer.clear();
+		composer.addChild(composerSurface);
+	};
+
+	const mountBottomSelector = (selector: Component): void => {
+		composer.clear();
+		composer.addChild(selector);
+		composer.addChild(composerSurface);
+	};
 
 	const renderShortcuts = (): void => {
 		const text =
@@ -262,9 +286,8 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		selectorGeneration += 1;
 		selectorOverlay?.hide();
 		selectorOverlay = undefined;
-		if (selectorKind === "effort") {
-			composer.clear();
-			composer.addChild(composerSurface);
+		if (isBottomSelector(selectorKind)) {
+			restoreComposer();
 		}
 		selectorKind = undefined;
 		selectionActive = false;
@@ -278,7 +301,14 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 	const dismissPicker = (): boolean => dismissSelector("picker");
 
 	const beginSelector = (
-		kind: "palette" | "session" | "model" | "effort" | "theme" | "provider",
+		kind:
+			| "palette"
+			| "session"
+			| "model"
+			| "effort"
+			| "skill"
+			| "theme"
+			| "provider",
 	): number => {
 		if (selectorKind === "theme" && themePickerOrigin !== undefined) {
 			applyVisualTheme(themePickerOrigin);
@@ -287,9 +317,8 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		selectorGeneration += 1;
 		selectorOverlay?.hide();
 		selectorOverlay = undefined;
-		if (selectorKind === "effort") {
-			composer.clear();
-			composer.addChild(composerSurface);
+		if (isBottomSelector(selectorKind)) {
+			restoreComposer();
 		}
 		selectorKind = kind;
 		selectionActive = false;
@@ -683,7 +712,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 			theme.editor.selectList,
 		);
 		list.setSelectedIndex(
-			Math.max(0, REASONING_LEVELS.indexOf(currentState?.reasoning ?? "off")),
+			Math.max(0, REASONING_LEVELS.indexOf(currentState?.reasoning ?? "high")),
 		);
 		list.onCancel = () => dismissPicker();
 		list.onSelect = (item) => {
@@ -714,8 +743,54 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 				},
 			);
 		};
-		composer.clear();
-		composer.addChild(list);
+		mountBottomSelector(list);
+		tui.setFocus(list);
+		renderShortcuts();
+		tui.requestRender();
+		return true;
+	};
+
+	const openSkillPicker = (argumentsText = ""): boolean => {
+		if (currentState?.running === true) {
+			return false;
+		}
+		dismissInlineCompletion();
+		dismissCommandOverlay();
+		const generation = beginSelector("skill");
+		const names = [...new Set(options.getCompletionCatalog().skillNames)].sort(
+			(left, right) => left.localeCompare(right),
+		);
+		if (names.length === 0) {
+			selectorKind = undefined;
+			renderShortcuts();
+			presentCommand("No skills loaded", "info");
+			return false;
+		}
+
+		const list = new FilterableSelectList(
+			names.map((name) => ({
+				value: name,
+				label: name,
+				description: "Loaded skill",
+			})),
+			overlayListRows(options.terminal.rows, 10),
+			theme,
+		);
+		list.onCancel = () => dismissPicker();
+		list.onSelect = (item) => {
+			if (generation !== selectorGeneration) {
+				return;
+			}
+			const suffix = argumentsText.trim();
+			editor.setText(
+				suffix.length === 0
+					? `/skill:${item.value} `
+					: `/skill:${item.value} ${suffix}`,
+			);
+			dismissPicker();
+			tui.requestRender();
+		};
+		mountBottomSelector(list);
 		tui.setFocus(list);
 		renderShortcuts();
 		tui.requestRender();
@@ -879,47 +954,71 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 			transcript.clear();
 			mountedTranscript.length = 0;
 			blocksByItem = new WeakMap<object, Component>();
-			toolBlocksById.clear();
+			toolGroupsById.clear();
 		}
 		currentState = state;
 		currentSessionId = state.sessionId;
 		composerSurface.setState(state);
+		activity.setState(state);
 		if (state.running) {
 			dismissCommandPalette();
 			dismissPicker();
 			dismissInlineCompletion();
 		}
 		const desired = [...initialTranscript];
-		for (const item of state.items) {
+		for (let index = 0; index < state.items.length; index += 1) {
+			const item = state.items[index];
+			if (item === undefined) {
+				continue;
+			}
 			let block: Component;
 			if (item.role === "tool") {
-				block =
-					toolBlocksById.get(item.toolCallId) ??
-					createChatItemBlock(item, theme);
-				if (!(block instanceof ToolBlock)) {
-					throw new Error(`Invalid tool block for ${item.toolCallId}`);
+				const tools = [item];
+				while (state.items[index + 1]?.role === "tool") {
+					const next = state.items[index + 1];
+					if (next?.role === "tool") {
+						tools.push(next);
+					}
+					index += 1;
 				}
-				toolBlocksById.set(item.toolCallId, block);
-				block.update({
-					preview: item.preview,
-					patch: item.patch,
-					isError: item.isError,
-				});
-				block.setExpanded(expandedToolCallIds.has(item.toolCallId));
+				const group =
+					toolGroupsById.get(item.toolCallId) ?? new ToolGroupBlock(theme, []);
+				toolGroupsById.set(item.toolCallId, group);
+				group.update(
+					tools.map((tool) => ({
+						toolName: tool.toolName,
+						active: state.running && tool.isError === undefined,
+						preview: tool.preview,
+						patch: tool.patch,
+						isError: tool.isError,
+					})),
+				);
+				group.setExpanded(
+					tools.some((tool) => expandedToolCallIds.has(tool.toolCallId)),
+				);
+				block = group;
 			} else {
 				block = blocksByItem.get(item) ?? createChatItemBlock(item, theme);
 				blocksByItem.set(item, block);
+				if (block instanceof ThinkingBlock) {
+					block.setActive(false);
+					block.setExpanded(thinkingExpanded);
+				}
 			}
 			desired.push(block);
 		}
 		if (state.assistantBlocks !== undefined) {
-			for (const block of state.assistantBlocks) {
+			for (const [index, block] of state.assistantBlocks.entries()) {
 				if (block.text.trim().length === 0) {
 					continue;
 				}
 				const component =
 					block.role === "thinking"
-						? new ThinkingBlock(block.text, theme)
+						? new ThinkingBlock(block.text, theme, {
+								active:
+									state.running && index === state.assistantBlocks.length - 1,
+								expanded: thinkingExpanded,
+							})
 						: new MessageBlock("assistant", block.text, theme);
 				desired.push(component);
 			}
@@ -987,6 +1086,30 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		refresh(currentState);
 	};
 
+	const toggleThinking = (): void => {
+		if (currentState === undefined) {
+			return;
+		}
+		const hasThinking =
+			currentState.items.some((item) => item.role === "thinking") ||
+			currentState.assistantBlocks?.some(
+				(block) => block.role === "thinking",
+			) === true;
+		if (!hasThinking) {
+			return;
+		}
+		thinkingExpanded = !thinkingExpanded;
+		refresh(currentState);
+	};
+
+	const dispose = (): void => {
+		activity.stop();
+		if (noticeTimer !== undefined) {
+			clearTimeout(noticeTimer);
+			noticeTimer = undefined;
+		}
+	};
+
 	if (currentState !== undefined) {
 		refresh(currentState);
 	} else {
@@ -996,6 +1119,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 	return {
 		tui,
 		editor,
+		dispose,
 		refresh,
 		presentCommand,
 		clearCommandPresentation,
@@ -1005,12 +1129,14 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		openSessionPicker,
 		openModelPicker,
 		openEffortPicker,
+		openSkillPicker,
 		openThemePicker,
 		setTheme,
 		dismissPicker,
 		dismissInlineCompletion,
 		acceptInlineCompletion,
 		toggleToolPreviews,
+		toggleThinking,
 		openProviderPicker,
 		beginAuthDialog,
 		setAuthUrl,
@@ -1084,6 +1210,61 @@ class ComposerSurface extends Container {
 	}
 }
 
+class ComposerActivityLine implements Component {
+	private readonly loader: Loader;
+	private active = false;
+	private description: string | undefined;
+
+	constructor(
+		tui: TuiAltScreen,
+		private readonly theme: TuiTheme,
+		state: TuiState | undefined,
+	) {
+		this.loader = new Loader(tui, theme.assistant, theme.muted, "Working");
+		this.loader.stop();
+		this.setState(state);
+	}
+
+	setState(state: TuiState | undefined): void {
+		const description = agentActivityDescription(state);
+		if (description === undefined) {
+			this.active = false;
+			this.description = undefined;
+			this.loader.stop();
+			return;
+		}
+		if (description !== this.description) {
+			this.description = description;
+			this.loader.setMessage(description);
+		}
+		if (!this.active) {
+			this.active = true;
+			this.loader.start();
+		}
+	}
+
+	stop(): void {
+		this.active = false;
+		this.description = undefined;
+		this.loader.stop();
+	}
+
+	invalidate(): void {
+		this.loader.invalidate();
+	}
+
+	render(width: number): string[] {
+		const availableWidth = normalizeWidth(width);
+		if (!this.active || availableWidth === 0) {
+			return [];
+		}
+		const line = this.loader.render(availableWidth).at(-1) ?? "";
+		return [
+			truncateToWidth(`${this.theme.muted("  ")}${line}`, availableWidth, "…"),
+		];
+	}
+}
+
 class ComposerStatusLine implements Component {
 	constructor(
 		private readonly state: TuiState | undefined,
@@ -1117,14 +1298,12 @@ class ComposerStatusLine implements Component {
 			return style(this.notice.text);
 		}
 		if (this.state?.running === true) {
-			return this.theme.muted(
-				this.state.queuedCount > 0
-					? `Running · ${this.state.queuedCount} queued`
-					: "Running",
-			);
+			return this.state.queuedCount > 0
+				? this.theme.muted(`${this.state.queuedCount} queued`)
+				: undefined;
 		}
 		if (this.state?.inputMode === "locked") {
-			return this.theme.muted("Starting");
+			return undefined;
 		}
 		if (this.state?.lastUsage !== undefined) {
 			return this.theme.muted(
@@ -1132,6 +1311,55 @@ class ComposerStatusLine implements Component {
 			);
 		}
 		return undefined;
+	}
+}
+
+function agentActivityDescription(
+	state: TuiState | undefined,
+): string | undefined {
+	if (state === undefined) {
+		return undefined;
+	}
+	if (state.inputMode === "locked") {
+		return "Starting";
+	}
+	if (!state.running) {
+		return undefined;
+	}
+	for (let index = state.items.length - 1; index >= 0; index -= 1) {
+		const item = state.items[index];
+		if (item?.role === "tool" && item.isError === undefined) {
+			return toolActivityDescription(item.toolName);
+		}
+	}
+	const latestBlock = state.assistantBlocks?.at(-1);
+	if (latestBlock?.role === "thinking") {
+		return "Thinking";
+	}
+	if (
+		latestBlock?.role === "assistant" ||
+		(state.assistantBuffer !== undefined && state.assistantBuffer.length > 0)
+	) {
+		return "Responding";
+	}
+	return "Working";
+}
+
+function toolActivityDescription(toolName: string): string {
+	switch (toolName.toLocaleLowerCase()) {
+		case "read":
+			return "Reading";
+		case "edit":
+		case "write":
+			return "Editing";
+		case "bash":
+			return "Running";
+		default: {
+			const word = cleanPickerText(toolName).trim().split(/\s+/, 1)[0];
+			return word === undefined || word.length === 0
+				? "Working"
+				: `${word[0]?.toLocaleUpperCase() ?? ""}${word.slice(1)}`;
+		}
 	}
 }
 
@@ -1238,6 +1466,10 @@ function pickerPresentation(kind: "session" | "model" | "theme"): {
 				subtitle: "Preview and apply an interface theme",
 			};
 	}
+}
+
+function isBottomSelector(kind: string | undefined): boolean {
+	return kind === "effort" || kind === "skill";
 }
 
 function normalizeWidth(width: number): number {

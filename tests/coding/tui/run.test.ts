@@ -463,10 +463,7 @@ describe("runInteractiveMode", () => {
 		await waitUntil(() => controller.states.at(-1)?.inputMode === "idle");
 		expect(session.commandCalls).toEqual(["/help"]);
 		expect(session.lastTuiService?.getThemeName()).toBe("areeb-dark");
-		expect(session.lastTuiService?.getThemeNames()).toEqual([
-			"areeb-dark",
-			"areeb-light",
-		]);
+		expect(session.lastTuiService?.getThemeNames()).toEqual(["areeb-dark"]);
 		expect(
 			session.lastTuiService
 				?.getHotkeys()

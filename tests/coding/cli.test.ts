@@ -225,7 +225,7 @@ describe("CLI session persistence", () => {
 						defaultRecord.id,
 					)
 				).buildContext(),
-			).resolves.toMatchObject({ reasoning: "off" });
+			).resolves.toMatchObject({ reasoning: "high" });
 
 			const explicitRoot = join(directory, "explicit-user");
 			await setupOpenAICompatibleProvider({

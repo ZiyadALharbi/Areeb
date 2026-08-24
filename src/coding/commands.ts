@@ -100,6 +100,7 @@ export type CommandOutcome =
 	| { readonly kind: "logout-picker" }
 	| { readonly kind: "logout"; readonly provider: string }
 	| { readonly kind: "theme-picker" }
+	| { readonly kind: "skill-picker"; readonly argumentsText: string }
 	| { readonly kind: "set-theme"; readonly theme: string }
 	| { readonly kind: "effort-picker" }
 	| { readonly kind: "set-effort"; readonly effort: ReasoningLevel }
@@ -524,6 +525,15 @@ export function createDefaultCommandRegistry(): CommandRegistry {
 			return argumentsText.length > 0
 				? usageError("/copy")
 				: { kind: "copy-last-assistant" };
+		},
+	});
+	registry.register({
+		name: "skill",
+		description: "Choose and invoke a loaded skill",
+		usage: "/skill [instructions]",
+		requirements: ["tui"],
+		async handler(_context, argumentsText) {
+			return { kind: "skill-picker", argumentsText };
 		},
 	});
 	registry.register({
