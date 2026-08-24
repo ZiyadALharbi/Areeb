@@ -37,6 +37,32 @@ describe("resource frontmatter", () => {
 		});
 	});
 
+	test("loads block descriptions while ignoring nested skill metadata", () => {
+		expect(
+			parseFrontmatter(`---
+name: review
+description: |
+  Review the requested changes.
+  Preserve important context.
+metadata:
+  owner: engineering
+inputs:
+  - name: path
+---
+Instructions
+`),
+		).toEqual({
+			attributes: {
+				name: "review",
+				description:
+					"Review the requested changes.\nPreserve important context.",
+				metadata: "",
+				inputs: "",
+			},
+			body: "Instructions\n",
+		});
+	});
+
 	test("rejects malformed, duplicate, and unterminated frontmatter", () => {
 		expect(() => parseFrontmatter("---\ninvalid\n---\nbody")).toThrow(
 			"Malformed frontmatter entry",

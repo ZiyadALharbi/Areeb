@@ -367,6 +367,7 @@ When a skill file references a relative path, resolve it against the skill direc
 	});
 
 	test("rejects unknown and malformed directives without matching later text", () => {
+		expect(expandSkillInvocation("/skill", [])).toBe("/skill");
 		expect(() => expandSkillInvocation("/skill:missing", [])).toThrow(
 			"Unknown skill",
 		);

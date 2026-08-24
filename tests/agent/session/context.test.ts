@@ -44,7 +44,7 @@ describe("buildSessionContext", () => {
 		expect(await buildSessionContext(storage)).toEqual({
 			messages: [],
 			model: null,
-			reasoning: "off",
+			reasoning: "high",
 			activeToolNames: null,
 		});
 		expect(storage.lastQuery).toBeUndefined();

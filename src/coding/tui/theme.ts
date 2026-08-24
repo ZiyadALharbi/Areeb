@@ -1,11 +1,13 @@
 import type { EditorTheme, MarkdownTheme } from "@earendil-works/pi-tui";
+import {
+	type Theme as HighlightTheme,
+	highlight,
+	supportsLanguage,
+} from "cli-highlight";
 
 export type TextStyle = (text: string) => string;
 
-export const TUI_THEME_NAMES = Object.freeze([
-	"areeb-dark",
-	"areeb-light",
-] as const);
+export const TUI_THEME_NAMES = Object.freeze(["areeb-dark"] as const);
 export type TuiThemeName = (typeof TUI_THEME_NAMES)[number];
 
 export interface TuiTheme {
@@ -14,10 +16,12 @@ export interface TuiTheme {
 	readonly primary: TextStyle;
 	readonly muted: TextStyle;
 	readonly user: TextStyle;
+	readonly userBorder: TextStyle;
 	readonly assistant: TextStyle;
 	readonly tool: TextStyle;
 	readonly error: TextStyle;
 	readonly warning: TextStyle;
+	readonly success: TextStyle;
 	readonly composerBorder: TextStyle;
 	readonly shortcut: TextStyle;
 	readonly diffAdded: TextStyle;
@@ -56,10 +60,12 @@ interface ThemePalette {
 	readonly primary: `#${string}`;
 	readonly muted: `#${string}`;
 	readonly user: `#${string}`;
+	readonly userBorder: `#${string}`;
 	readonly assistant: `#${string}`;
 	readonly tool: `#${string}`;
 	readonly error: `#${string}`;
 	readonly warning: `#${string}`;
+	readonly success: `#${string}`;
 	readonly composerBorder: `#${string}`;
 	readonly shortcut: `#${string}`;
 	readonly heading: `#${string}`;
@@ -71,6 +77,13 @@ interface ThemePalette {
 	readonly diffContext: `#${string}`;
 	readonly diffHunk: `#${string}`;
 	readonly diffMeta: `#${string}`;
+	readonly syntaxKeyword: `#${string}`;
+	readonly syntaxType: `#${string}`;
+	readonly syntaxNumber: `#${string}`;
+	readonly syntaxString: `#${string}`;
+	readonly syntaxComment: `#${string}`;
+	readonly syntaxFunction: `#${string}`;
+	readonly syntaxVariable: `#${string}`;
 }
 
 function createTheme(
@@ -82,10 +95,12 @@ function createTheme(
 		primary: foreground(palette.primary),
 		muted: foreground(palette.muted),
 		user: foreground(palette.user),
+		userBorder: foreground(palette.userBorder),
 		assistant: foreground(palette.assistant),
 		tool: foreground(palette.tool),
 		error: foreground(palette.error),
 		warning: foreground(palette.warning),
+		success: foreground(palette.success),
 		composerBorder: foreground(palette.composerBorder),
 		shortcut: foreground(palette.shortcut),
 		heading: foreground(palette.heading),
@@ -97,6 +112,38 @@ function createTheme(
 		diffContext: foreground(palette.diffContext),
 		diffHunk: foreground(palette.diffHunk),
 		diffMeta: foreground(palette.diffMeta),
+		syntaxKeyword: foreground(palette.syntaxKeyword),
+		syntaxType: foreground(palette.syntaxType),
+		syntaxNumber: foreground(palette.syntaxNumber),
+		syntaxString: foreground(palette.syntaxString),
+		syntaxComment: foreground(palette.syntaxComment),
+		syntaxFunction: foreground(palette.syntaxFunction),
+		syntaxVariable: foreground(palette.syntaxVariable),
+	};
+	const highlightTheme: HighlightTheme = {
+		default: styles.primary,
+		keyword: styles.syntaxKeyword,
+		built_in: styles.syntaxType,
+		type: styles.syntaxType,
+		class: styles.syntaxType,
+		literal: styles.syntaxNumber,
+		number: styles.syntaxNumber,
+		string: styles.syntaxString,
+		regexp: styles.syntaxString,
+		comment: styles.syntaxComment,
+		doctag: styles.syntaxComment,
+		function: styles.syntaxFunction,
+		title: styles.syntaxFunction,
+		name: styles.syntaxFunction,
+		attr: styles.syntaxVariable,
+		attribute: styles.syntaxVariable,
+		variable: styles.syntaxVariable,
+		params: styles.syntaxVariable,
+		meta: styles.syntaxKeyword,
+		section: styles.heading,
+		tag: styles.syntaxKeyword,
+		addition: styles.diffAdded,
+		deletion: styles.diffRemoved,
 	};
 
 	return Object.freeze({
@@ -105,10 +152,12 @@ function createTheme(
 		primary: styles.primary,
 		muted: styles.muted,
 		user: styles.user,
+		userBorder: styles.userBorder,
 		assistant: styles.assistant,
 		tool: styles.tool,
 		error: styles.error,
 		warning: styles.warning,
+		success: styles.success,
 		composerBorder: styles.composerBorder,
 		shortcut: styles.shortcut,
 		diffAdded: styles.diffAdded,
@@ -131,6 +180,20 @@ function createTheme(
 			italic,
 			strikethrough,
 			underline,
+			highlightCode: (code: string, language?: string) => {
+				if (language === undefined || !supportsLanguage(language)) {
+					return code.split("\n").map(styles.primary);
+				}
+				try {
+					return highlight(code, {
+						language,
+						ignoreIllegals: true,
+						theme: highlightTheme,
+					}).split("\n");
+				} catch {
+					return code.split("\n").map(styles.primary);
+				}
+			},
 			codeBlockIndent: "  ",
 		}),
 		editor: Object.freeze({
@@ -146,55 +209,42 @@ function createTheme(
 	});
 }
 
-export const AREEB_DARK_THEME = createTheme("areeb-dark", "#141414", {
-	primary: "#e1e1e1",
-	muted: "#6c6c6c",
-	user: "#c8c8c8",
-	assistant: "#bb9af7",
-	tool: "#787878",
-	error: "#f7768e",
-	warning: "#e0af68",
-	composerBorder: "#505058",
-	shortcut: "#6c6c6c",
-	heading: "#bb9af7",
-	link: "#7aa2f7",
-	code: "#e0af68",
-	quote: "#9aa5ce",
-	diffAdded: "#9ece6a",
-	diffRemoved: "#f7768e",
-	diffContext: "#a9b1d6",
-	diffHunk: "#7aa2f7",
-	diffMeta: "#787878",
-});
-
-export const AREEB_LIGHT_THEME = createTheme("areeb-light", "#f7f7f5", {
-	primary: "#242424",
-	muted: "#767676",
-	user: "#444444",
-	assistant: "#6f42c1",
-	tool: "#666666",
-	error: "#c62828",
-	warning: "#9a6700",
-	composerBorder: "#b8b8b8",
-	shortcut: "#6f6f6f",
-	heading: "#6f42c1",
-	link: "#0969da",
-	code: "#9a6700",
-	quote: "#57606a",
-	diffAdded: "#16794a",
-	diffRemoved: "#c43543",
-	diffContext: "#5f6368",
-	diffHunk: "#6f42c1",
-	diffMeta: "#6b7280",
+export const AREEB_DARK_THEME = createTheme("areeb-dark", "#0a0a0a", {
+	primary: "#f5f5f5",
+	muted: "#707070",
+	user: "#f1c674",
+	userBorder: "#39765e",
+	assistant: "#8abeb7",
+	tool: "#707070",
+	error: "#fc424b",
+	warning: "#f1c674",
+	success: "#00bd7d",
+	composerBorder: "#4b4b4b",
+	shortcut: "#707070",
+	heading: "#f1c674",
+	link: "#8abeb7",
+	code: "#b6bd68",
+	quote: "#8abeb7",
+	diffAdded: "#00bd7d",
+	diffRemoved: "#fc424b",
+	diffContext: "#c0c0c0",
+	diffHunk: "#8abeb7",
+	diffMeta: "#707070",
+	syntaxKeyword: "#4fc1ff",
+	syntaxType: "#8abeb7",
+	syntaxNumber: "#f1c674",
+	syntaxString: "#b6bd68",
+	syntaxComment: "#707070",
+	syntaxFunction: "#c397d8",
+	syntaxVariable: "#f5f5f5",
 });
 
 const THEMES: Readonly<Record<TuiThemeName, TuiTheme>> = Object.freeze({
 	"areeb-dark": AREEB_DARK_THEME,
-	"areeb-light": AREEB_LIGHT_THEME,
 });
 
 export function isTuiThemeName(value: unknown): value is TuiThemeName {
-	return value === "areeb-dark" || value === "areeb-light";
+	return value === "areeb-dark";
 }
 
 export function getTuiTheme(name: string): TuiTheme | undefined {
@@ -223,10 +273,12 @@ export function createTuiThemeBinding(initial: TuiTheme): TuiThemeBinding {
 		primary: bind((theme) => theme.primary),
 		muted: bind((theme) => theme.muted),
 		user: bind((theme) => theme.user),
+		userBorder: bind((theme) => theme.userBorder),
 		assistant: bind((theme) => theme.assistant),
 		tool: bind((theme) => theme.tool),
 		error: bind((theme) => theme.error),
 		warning: bind((theme) => theme.warning),
+		success: bind((theme) => theme.success),
 		composerBorder: bind((theme) => theme.composerBorder),
 		shortcut: bind((theme) => theme.shortcut),
 		diffAdded: bind((theme) => theme.diffAdded),
@@ -249,6 +301,8 @@ export function createTuiThemeBinding(initial: TuiTheme): TuiThemeBinding {
 			italic,
 			strikethrough,
 			underline,
+			highlightCode: (code, language) =>
+				current.markdown.highlightCode?.(code, language) ?? code.split("\n"),
 			codeBlockIndent: "  ",
 		},
 		editor: {

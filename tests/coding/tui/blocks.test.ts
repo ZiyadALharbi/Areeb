@@ -4,29 +4,38 @@ import {
 	MessageBlock,
 	ThinkingBlock,
 	ToolBlock,
+	ToolGroupBlock,
 } from "../../../src/coding/tui/blocks.ts";
 import { AREEB_DARK_THEME } from "../../../src/coding/tui/theme.ts";
 
 const theme = AREEB_DARK_THEME;
 
 describe("TUI transcript blocks", () => {
-	test("renders transparent, label-free rows at normal widths", () => {
+	test("renders bordered user rows and inset, label-free assistant rows", () => {
 		const user = new MessageBlock("user", "hello", theme);
 		const assistant = new MessageBlock("assistant", "welcome", theme);
 		const status = new MessageBlock("status", "waiting", theme);
-		const tool = new ToolBlock("bash", theme);
+		const tool = new ToolBlock("bash", theme, { isError: false });
 
-		expect(user.render(40).map(stripTerminalSequences)).toEqual(["│  hello"]);
+		const userLines = user.render(40).map(stripTerminalSequences);
+		expect(userLines).toHaveLength(3);
+		expect(userLines[0]).toBe(`╭${"─".repeat(38)}╮`);
+		expect(userLines[1]).toStartWith("│  › hello");
+		expect(userLines[2]).toBe(`╰${"─".repeat(38)}╯`);
+		expect(userLines.every((line) => visibleWidth(line) === 40)).toBe(true);
+		expect(user.render(40).join("\n")).toContain("38;2;57;118;94");
 		expect(assistant.render(40).map(stripTerminalSequences)).toEqual([
-			"│  welcome",
+			" welcome",
 		]);
 		expect(status.render(40).map(stripTerminalSequences)).toEqual([
 			"│  waiting",
 		]);
-		expect(tool.render(40).map(stripTerminalSequences)).toEqual(["◆  bash"]);
+		expect(tool.render(40).map(stripTerminalSequences)).toEqual([
+			"■ Ran 1 command (Ctrl+O to Expand)",
+		]);
 	});
 
-	test("wraps every physical line within the requested width", () => {
+	test("wraps assistant text naturally within the requested width", () => {
 		const block = new MessageBlock(
 			"assistant",
 			"A long response wraps at words and keeps its semantic rail visible.",
@@ -36,34 +45,60 @@ describe("TUI transcript blocks", () => {
 
 		expect(lines.length).toBeGreaterThan(1);
 		expect(lines.every((line) => visibleWidth(line) <= 20)).toBe(true);
-		expect(
-			lines.map(stripTerminalSequences).every((line) => line.startsWith("│  ")),
-		).toBe(true);
+		expect(lines.map(stripTerminalSequences).join(" ")).not.toContain("│");
 	});
 
-	test("renders sanitized multiline thinking with an accented label and muted italic body", () => {
+	test("renders compact thinking with a shortcut and sanitized expanded content", () => {
 		const rendered = new ThinkingBlock(
-			"\u001b[31mfirst thought that wraps\u001b[0m\nsecond",
+			"\u001b[31m**first thought** that wraps\u001b[0m\nsecond",
 			theme,
+			{ expanded: true },
 		).render(18);
 		const plain = rendered.map(stripTerminalSequences);
 
-		expect(plain[0]).toStartWith("Thinking · ");
+		expect(plain[0]).toStartWith("Thinking...");
+		expect(plain[0]).not.toContain("●");
 		expect(plain.join("\n")).toContain("first");
 		expect(plain.join("\n")).toContain("thought");
 		expect(plain.join("\n")).toContain("wraps");
 		expect(plain.join("\n")).toContain("second");
 		expect(rendered.every((line) => visibleWidth(line) <= 18)).toBe(true);
-		expect(rendered[0]).toContain("38;2;187;154;247");
-		expect(rendered.join("\n")).toContain("38;2;108;108;108");
+		expect(rendered[0]).toContain("38;2;138;190;183");
+		expect(rendered.join("\n")).toContain("38;2;112;112;112");
 		expect(rendered.join("\n")).toContain("\u001b[3m");
 		expect(rendered.join("\n")).not.toContain("\u001b[31m");
+		expect(plain.join("\n")).not.toContain("**");
+	});
+
+	test("summarizes collapsed thinking without a completed-state circle", () => {
+		const rendered = new ThinkingBlock(
+			"**Examining** header utilities and provider integrations",
+			theme,
+		).render(100);
+		const plain = rendered.map(stripTerminalSequences);
+
+		expect(plain).toEqual([
+			"Thinking... · Examining header utilities and provider integrations (Ctrl+T to Expand)",
+		]);
+		expect(plain[0]).not.toContain("●");
+		expect(rendered[0]).toContain("38;2;138;190;183");
+	});
+
+	test("shows only the latest complete thinking summary when collapsed", () => {
+		const rendered = new ThinkingBlock(
+			"Outlining key files\n\nExplaining startup flow\n\nChecking lifecycle cleanup",
+			theme,
+		).render(100);
+
+		expect(rendered.map(stripTerminalSequences)).toEqual([
+			"Thinking... · Checking lifecycle cleanup (Ctrl+T to Expand)",
+		]);
 	});
 
 	test("renders assistant Markdown while leaving user Markdown literal", () => {
 		const assistant = new MessageBlock(
 			"assistant",
-			"## Heading\n\n- **bold** and `code`",
+			"###### Heading\n\n- **bold** and `code`\n\n```typescript\nconst answer: number = 42;\n```",
 			theme,
 		)
 			.render(30)
@@ -73,8 +108,21 @@ describe("TUI transcript blocks", () => {
 			.map(stripTerminalSequences);
 
 		expect(assistant.join("\n")).toContain("Heading");
+		expect(assistant.join("\n")).not.toContain("######");
+		expect(assistant.join("\n")).not.toContain("```");
 		expect(assistant.join("\n")).toContain("- bold and code");
-		expect(user).toEqual(["│  **bold** and `code`"]);
+		expect(assistant.join("\n")).toContain("const answer: number = 42;");
+		expect(
+			new MessageBlock(
+				"assistant",
+				"```typescript\nconst answer: number = 42;\n```",
+				theme,
+			)
+				.render(40)
+				.join("\n"),
+		).toContain("38;2;79;193;255");
+		expect(user).toHaveLength(3);
+		expect(user[1]).toContain("› **bold** and `code`");
 		expect(assistant.every((line) => visibleWidth(line) <= 30)).toBe(true);
 	});
 
@@ -86,6 +134,9 @@ describe("TUI transcript blocks", () => {
 		);
 
 		expect(() => block.render(20)).not.toThrow();
+		expect(
+			block.render(20).map(stripTerminalSequences).join("\n"),
+		).not.toContain("```");
 		expect(block.render(20).every((line) => visibleWidth(line) <= 20)).toBe(
 			true,
 		);
@@ -97,21 +148,30 @@ describe("TUI transcript blocks", () => {
 			.render(10)
 			.map(stripTerminalSequences);
 
-		expect(lines.length).toBeGreaterThan(1);
-		expect(lines.map((line) => line.slice(3)).join("")).toBe(token);
+		expect(lines.length).toBeGreaterThan(3);
+		const content = lines
+			.slice(1, -1)
+			.map((line, index) =>
+				line
+					.slice(3, -3)
+					.replace(index === 0 ? /^› / : /^ {2}/, "")
+					.trimEnd(),
+			)
+			.join("");
+		expect(content).toBe(token);
 	});
 
-	test("preserves explicit blank lines and renders empty text as one rail", () => {
+	test("preserves explicit blank lines and renders empty user text as a prompt", () => {
 		expect(
 			new MessageBlock("assistant", "first\n\nlast", theme)
 				.render(40)
 				.map(stripTerminalSequences),
-		).toEqual(["│  first", "│", "│  last"]);
-		expect(
-			new MessageBlock("user", "", theme)
-				.render(40)
-				.map(stripTerminalSequences),
-		).toEqual(["│"]);
+		).toEqual([" first", "", " last"]);
+		const emptyUser = new MessageBlock("user", "", theme)
+			.render(40)
+			.map(stripTerminalSequences);
+		expect(emptyUser).toHaveLength(3);
+		expect(emptyUser[1]).toMatch(/^│ {2}› +│$/);
 	});
 
 	test("handles CJK, emoji, and combining characters by visible width", () => {
@@ -140,13 +200,13 @@ describe("TUI transcript blocks", () => {
 	});
 
 	test("keeps tool headers to one truncated line", () => {
-		const lines = new ToolBlock("a-very-long-tool-name\nignored", theme).render(
-			12,
-		);
+		const lines = new ToolBlock("a-very-long-tool-name\nignored", theme, {
+			isError: false,
+		}).render(12);
 
 		expect(lines).toHaveLength(1);
 		expect(visibleWidth(lines[0] ?? "")).toBeLessThanOrEqual(12);
-		expect(stripTerminalSequences(lines[0] ?? "")).toBe("◆  a-very-lo");
+		expect(stripTerminalSequences(lines[0] ?? "")).toBe("■ Ran 1 com…");
 	});
 
 	test("keeps tool output collapsed until expanded and bounds its lines", () => {
@@ -159,7 +219,7 @@ describe("TUI transcript blocks", () => {
 		expect(tool.render(24)).toHaveLength(1);
 		tool.setExpanded(true);
 		const expanded = tool.render(24).map(stripTerminalSequences);
-		expect(expanded.length).toBeLessThanOrEqual(17);
+		expect(expanded.length).toBeLessThanOrEqual(18);
 		expect(expanded.join("\n")).toContain("lines omitted");
 		expect(expanded.join("\n")).toContain("**literal**");
 		expect(expanded.every((line) => visibleWidth(line) <= 24)).toBe(true);
@@ -172,12 +232,12 @@ describe("TUI transcript blocks", () => {
 		});
 
 		expect(tool.render(40).map(stripTerminalSequences)).toContain(
-			"   old preview",
+			"    old preview",
 		);
 		tool.update({ preview: "new preview", isError: true });
 		const rendered = tool.render(40);
-		expect(rendered.map(stripTerminalSequences)).toContain("   new preview");
-		expect(rendered[0]).toContain("38;2;247;118;142");
+		expect(rendered.map(stripTerminalSequences)).toContain("    new preview");
+		expect(rendered[0]).toContain("38;2;252;66;75");
 	});
 
 	test("prefers a literal edit patch and uses the error accent", () => {
@@ -190,12 +250,13 @@ describe("TUI transcript blocks", () => {
 		const rendered = tool.render(30);
 
 		expect(rendered.map(stripTerminalSequences)).toEqual([
-			"◆  edit",
-			"   @@ -1 +1 @@",
-			"   -old",
-			"   +new",
+			"● Ran 1 command (Ctrl+O to Co…",
+			"  └ edit",
+			"    @@ -1 +1 @@",
+			"    - old",
+			"    + new",
 		]);
-		expect(rendered[0]).toContain("38;2;247;118;142");
+		expect(rendered[0]).toContain("38;2;252;66;75");
 	});
 
 	test("styles every unified-diff category before wrapping", () => {
@@ -220,16 +281,35 @@ describe("TUI transcript blocks", () => {
 			return rendered[index] ?? "";
 		};
 
-		expect(plain).toContain("   --- a/file");
-		expect(plain).toContain("   +++ b/file");
-		expect(styledLine("diff --git")).toContain("38;2;120;120;120");
-		expect(styledLine("@@ -1")).toContain("38;2;122;162;247");
-		expect(styledLine("context")).toContain("38;2;169;177;214");
-		expect(styledLine("removed")).toContain("38;2;247;118;142");
-		const addedIndex = plain.findIndex((line) => line.includes("+added"));
+		expect(plain).toContain("    file");
+		expect(plain.join("\n")).not.toContain("diff --git");
+		expect(plain.join("\n")).not.toContain("--- a/file");
+		expect(styledLine("@@ -1")).toContain("38;2;138;190;183");
+		expect(styledLine("context")).toContain("38;2;192;192;192");
+		expect(styledLine("removed")).toContain("38;2;252;66;75");
+		const addedIndex = plain.findIndex((line) => line.includes("+ added"));
 		expect(addedIndex).toBeGreaterThan(0);
-		expect(rendered[addedIndex]).toContain("38;2;158;206;106");
-		expect(rendered[addedIndex + 1]).toContain("38;2;158;206;106");
+		expect(rendered[addedIndex]).toContain("38;2;0;189;125");
+		expect(rendered[addedIndex + 1]).toContain("38;2;0;189;125");
+	});
+
+	test("groups consecutive tool activity under one command summary", () => {
+		const group = new ToolGroupBlock(theme, [
+			{ toolName: "read", isError: false },
+			{ toolName: "edit", active: true },
+		]);
+		const active = group.render(60).map(stripTerminalSequences);
+		expect(active).toHaveLength(1);
+		expect(active[0]).toContain("Ran 2 commands (Ctrl+O to Expand)");
+		expect(active[0]).not.toStartWith("●");
+
+		group.update([
+			{ toolName: "read", isError: false },
+			{ toolName: "edit", isError: false },
+		]);
+		expect(group.render(60).map(stripTerminalSequences)).toEqual([
+			"■ Ran 2 commands (Ctrl+O to Expand)",
+		]);
 	});
 
 	test("strips injected terminal styling and adds no labels, boxes, or backgrounds", () => {

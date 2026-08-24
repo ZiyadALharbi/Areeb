@@ -194,13 +194,7 @@ export function buildSkillIndex(skills: readonly Skill[]): string {
 }
 
 export function isSkillDirective(input: string): boolean {
-	return (
-		input === "/skill" ||
-		input.startsWith("/skill:") ||
-		input.startsWith("/skill ") ||
-		input.startsWith("/skill\n") ||
-		input.startsWith("/skill\t")
-	);
+	return input.startsWith("/skill:");
 }
 
 interface SkillCandidate {

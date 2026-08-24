@@ -448,7 +448,7 @@ async function runSessionCommand(
 		handle: session,
 		selection: initialSelection,
 		reasoning:
-			command.resumeId === undefined ? (command.effort ?? "off") : "off",
+			command.resumeId === undefined ? (command.effort ?? "high") : "high",
 	});
 	if (command.resumeId !== undefined && command.effort !== undefined) {
 		await coding.setReasoning(command.effort);

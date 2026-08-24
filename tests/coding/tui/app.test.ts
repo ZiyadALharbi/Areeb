@@ -10,10 +10,7 @@ import {
 	createTuiApp,
 } from "../../../src/coding/tui/app.ts";
 import { createTuiState } from "../../../src/coding/tui/state.ts";
-import {
-	AREEB_DARK_THEME,
-	AREEB_LIGHT_THEME,
-} from "../../../src/coding/tui/theme.ts";
+import { AREEB_DARK_THEME } from "../../../src/coding/tui/theme.ts";
 
 const SESSION_ID = "00000000-0000-4000-8000-000000000001";
 
@@ -80,6 +77,70 @@ async function flush(): Promise<void> {
 }
 
 describe("createTuiApp pickers", () => {
+	test("filters commands and sessions by their visible text", async () => {
+		const app = createTuiApp(
+			appOptions({
+				getCompletionCatalog: () => ({
+					commands: [
+						{
+							name: "help",
+							description: "Show available commands",
+							usage: "/help",
+							searchTerms: ["manual"],
+						},
+					],
+					skillNames: [],
+					templateNames: [],
+					availableCapabilities: [],
+					cwd: "/project",
+					listSessions: async () => [],
+					models: [],
+				}),
+				listSessions: async () => [
+					{
+						id: SESSION_ID,
+						title: "Release planning",
+						model: { provider: "fake", model: "model-a" },
+					},
+				],
+			}),
+		);
+
+		expect(app.openCommandPalette()).toBe(true);
+		const commands = app.tui.getFocusedComponent();
+		for (const character of "help") {
+			commands?.handleInput?.(character);
+		}
+		const commandOutput = stripTerminalSequences(
+			commands?.render(100).join("\n") ?? "",
+		);
+		expect(commandOutput).toContain("/help");
+		expect(commandOutput).not.toContain("No matching commands");
+		expect(app.dismissCommandPalette()).toBe(true);
+		expect(app.openCommandPalette()).toBe(true);
+		const commandsBySearchTerm = app.tui.getFocusedComponent();
+		for (const character of "manual") {
+			commandsBySearchTerm?.handleInput?.(character);
+		}
+		expect(
+			stripTerminalSequences(
+				commandsBySearchTerm?.render(100).join("\n") ?? "",
+			),
+		).toContain("/help");
+		expect(app.dismissCommandPalette()).toBe(true);
+
+		expect(await app.openSessionPicker()).toBe(true);
+		const sessions = app.tui.getFocusedComponent();
+		for (const character of "planning") {
+			sessions?.handleInput?.(character);
+		}
+		const sessionOutput = stripTerminalSequences(
+			sessions?.render(100).join("\n") ?? "",
+		);
+		expect(sessionOutput).toContain("Release planning");
+		expect(sessionOutput).not.toContain("No matching commands");
+	});
+
 	test("renders the effort selector inline and restores the exact draft and focus", async () => {
 		const selected: string[] = [];
 		const state = createTuiState({
@@ -101,6 +162,10 @@ describe("createTuiApp pickers", () => {
 
 		expect(app.openEffortPicker()).toBe(true);
 		expect(app.tui.hasOverlay()).toBe(false);
+		const surface = stripTerminalSequences(app.tui.render(80).join("\n"));
+		expect(surface).toMatch(/│.*high.*│/);
+		expect(surface.indexOf("╭")).toBeLessThan(surface.indexOf("high"));
+		expect(surface.indexOf("high")).toBeLessThan(surface.indexOf("╰"));
 		const picker = app.tui.getFocusedComponent();
 		expect(picker).not.toBe(app.editor);
 		const rendered = stripTerminalSequences(
@@ -127,6 +192,36 @@ describe("createTuiApp pickers", () => {
 		expect(app.tui.hasOverlay()).toBe(false);
 		expect(app.tui.getFocusedComponent()).toBe(app.editor);
 		expect(app.editor.getText()).toBe("  exact draft\nsecond line  ");
+	});
+
+	test("renders all skills below the transcript and preserves invocation arguments", () => {
+		const app = createTuiApp(
+			appOptions({
+				getCompletionCatalog: () => ({
+					commands: [],
+					skillNames: ["review", "implement", "review"],
+					templateNames: [],
+					availableCapabilities: [],
+					cwd: "/project",
+					listSessions: async () => [],
+					models: [],
+				}),
+			}),
+		);
+
+		expect(app.openSkillPicker("src/app.ts carefully")).toBe(true);
+		expect(app.tui.hasOverlay()).toBe(false);
+		const surface = stripTerminalSequences(app.tui.render(80).join("\n"));
+		expect(surface).toMatch(/│.*implement.*│/);
+		expect(surface.indexOf("╭")).toBeLessThan(surface.indexOf("implement"));
+		expect(surface.indexOf("implement")).toBeLessThan(surface.indexOf("╰"));
+		const picker = app.tui.getFocusedComponent();
+		const output = stripTerminalSequences(picker?.render(80).join("\n") ?? "");
+		expect(output).toContain("implement");
+		expect(output).toContain("review");
+		picker?.handleInput?.("\r");
+		expect(app.editor.getText()).toBe("/skill:implement src/app.ts carefully");
+		expect(app.tui.getFocusedComponent()).toBe(app.editor);
 	});
 
 	test("keeps a failed effort selector open and safely replaces it with other pickers", async () => {
@@ -236,7 +331,7 @@ describe("createTuiApp pickers", () => {
 		expect(app.editor.getText()).toBe("preserved draft");
 	});
 
-	test("renders flat filterable rows and contextual running status", () => {
+	test("renders framed filterable rows and contextual running status", () => {
 		const state = createTuiState({
 			sessionId: SESSION_ID,
 			model: "model-a",
@@ -259,10 +354,11 @@ describe("createTuiApp pickers", () => {
 		const pickerOutput = stripTerminalSequences(
 			picker?.render(100).join("\n") ?? "",
 		);
-		expect(pickerOutput).toContain("Filter: type to narrow");
+		expect(pickerOutput).toContain("Models");
+		expect(pickerOutput).toContain("Search  Type to filter");
 		expect(pickerOutput).toContain("model-a");
 		expect(pickerOutput).toContain("fake");
-		expect(pickerOutput).not.toMatch(/[┌┐└┘]/);
+		expect(pickerOutput).toMatch(/[╭╮╰╯]/);
 		expect(stripTerminalSequences(app.tui.render(100).join("\n"))).toContain(
 			"menu shortcuts",
 		);
@@ -274,15 +370,34 @@ describe("createTuiApp pickers", () => {
 		app.refresh(state);
 		const output = stripTerminalSequences(app.tui.render(100).join("\n"));
 		expect(output).toContain("running shortcuts");
-		expect(output).toContain("queued 2");
+		expect(output).toContain("2 queued");
 		expect(app.editor.disableSubmit).toBe(false);
 	});
 
-	test("previews, reverts, commits, and recovers failed theme selections", async () => {
+	test("does not render a separate activity line above the composer", () => {
+		const state = createTuiState({
+			sessionId: SESSION_ID,
+			model: "model-a",
+			cwd: "/project",
+			reasoning: "high",
+		});
+		state.running = true;
+		state.inputMode = "running";
+		state.assistantBlocks = [{ role: "thinking", text: "Inspecting files" }];
+		const app = createTuiApp(appOptions({ state }));
+		const lines = stripTerminalSequences(app.tui.render(100).join("\n"))
+			.split("\n")
+			.map((line) => line.trim());
+
+		expect(lines).not.toContain("Thinking");
+		expect(lines.some((line) => line.includes("Thinking..."))).toBe(true);
+	});
+
+	test("keeps the dark theme as the only selectable theme", async () => {
 		const saved: string[] = [];
 		const app = createTuiApp(
 			appOptions({
-				themes: [AREEB_DARK_THEME, AREEB_LIGHT_THEME],
+				themes: [AREEB_DARK_THEME],
 				async onSetTheme(theme) {
 					saved.push(theme);
 				},
@@ -292,35 +407,12 @@ describe("createTuiApp pickers", () => {
 		const darkBorder = app.editor.borderColor("border");
 
 		expect(app.openThemePicker()).toBe(true);
-		app.tui.getFocusedComponent()?.handleInput?.("\u001b[B");
-		expect(app.editor.borderColor("border")).not.toBe(darkBorder);
-		expect(app.dismissPicker()).toBe(true);
-		expect(app.editor.borderColor("border")).toBe(darkBorder);
-
-		expect(app.openThemePicker()).toBe(true);
-		app.tui.getFocusedComponent()?.handleInput?.("\u001b[B");
 		app.tui.getFocusedComponent()?.handleInput?.("\r");
 		await flush();
-		expect(saved).toEqual(["areeb-light"]);
+		expect(saved).toEqual(["areeb-dark"]);
 		expect(app.tui.hasOverlay()).toBe(false);
-		expect(app.editor.borderColor("border")).not.toBe(darkBorder);
+		expect(app.editor.borderColor("border")).toBe(darkBorder);
 		expect(app.editor.getText()).toBe("preserved draft");
-
-		const failing = createTuiApp(
-			appOptions({
-				themes: [AREEB_DARK_THEME, AREEB_LIGHT_THEME],
-				async onSetTheme() {
-					throw new Error("storage failed");
-				},
-			}),
-		);
-		const originalBorder = failing.editor.borderColor("border");
-		failing.openThemePicker();
-		failing.tui.getFocusedComponent()?.handleInput?.("\u001b[B");
-		failing.tui.getFocusedComponent()?.handleInput?.("\r");
-		await flush();
-		expect(failing.tui.hasOverlay()).toBe(true);
-		expect(failing.editor.borderColor("border")).toBe(originalBorder);
 	});
 
 	test("shows honest last-response usage in the footer", () => {
@@ -340,11 +432,11 @@ describe("createTuiApp pickers", () => {
 		const app = createTuiApp(appOptions({ state }));
 		const output = stripTerminalSequences(app.tui.render(120).join("\n"));
 
-		expect(output).toContain("last response in 12.4k · out 860");
+		expect(output).toContain("Last · 12.4k in · 860 out");
 		expect(output).not.toContain("%");
 	});
 
-	test("shows the exact thinking level in wide and narrow footers", () => {
+	test("shows model and effort on the composer bottom border", () => {
 		const state = createTuiState({
 			sessionId: SESSION_ID,
 			model: "model-a",
@@ -353,18 +445,21 @@ describe("createTuiApp pickers", () => {
 		});
 		const app = createTuiApp(appOptions({ state }));
 
-		expect(stripTerminalSequences(app.tui.render(120).join("\n"))).toContain(
-			"thinking: off",
-		);
+		const wide = stripTerminalSequences(app.tui.render(120).join("\n"));
+		const wideMetadataLine = wide
+			.split("\n")
+			.find((line) => line.includes("model-a · effort off"));
+		expect(wideMetadataLine).toStartWith("╰");
+		expect(wideMetadataLine).toEndWith("╯");
 		state.reasoning = "high";
 		app.refresh(state);
 		expect(stripTerminalSequences(app.tui.render(32).join("\n"))).toContain(
-			"thinking: high",
+			"model-a · effort high",
 		);
 		state.reasoning = "max";
 		app.refresh(state);
 		expect(stripTerminalSequences(app.tui.render(24).join("\n"))).toContain(
-			"thinking: max",
+			"model-a · effort max",
 		);
 	});
 

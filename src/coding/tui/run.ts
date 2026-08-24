@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, mkdir, open, rename, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
+	isKeyRelease,
 	Key,
 	matchesKey,
 	ProcessTerminal,
@@ -18,7 +19,7 @@ import type { ReasoningLevel } from "../../ai/types.ts";
 import type { CommandHotkey, CommandSessionListItem } from "../commands.ts";
 import { areebPaths } from "../paths.ts";
 import type { ProviderAuthView } from "../provider-runtime.ts";
-import type { ResourceDiagnostic } from "../resources.ts";
+import { type ResourceDiagnostic, ResourceError } from "../resources.ts";
 import type { CodingSessionTuiService } from "../session.ts";
 import type { TuiEventAdapter } from "./adapter.ts";
 import {
@@ -112,12 +113,17 @@ export const INTERACTIVE_HOTKEYS: readonly InteractiveHotkey[] = Object.freeze([
 		description: "Toggle tool previews",
 		footerLabel: "tools",
 	},
+	{
+		keys: "Ctrl+T",
+		description: "Toggle thinking details",
+		footerLabel: "thinking",
+	},
 	{ keys: "/theme", description: "Preview or switch the interface theme" },
 	{ keys: "/copy", description: "Copy the latest assistant response" },
 ]);
 
 export const INTERACTIVE_SHORTCUTS: TuiShortcutSet = Object.freeze({
-	idle: "Ctrl+S:sessions  │  Ctrl+M:model  │  Ctrl+P:commands  │  Ctrl+O:tools  │  Ctrl+C:quit",
+	idle: "Ctrl+S:sessions  │  Ctrl+M:model  │  Ctrl+P:commands  │  Ctrl+C:quit",
 	menu: "Type:filter  │  Up/Down:move  │  Enter:select  │  Esc:close",
 	running: "Enter:queue  │  Esc:interrupt  │  Ctrl+C:quit",
 });
@@ -230,6 +236,7 @@ export async function runInteractiveMode(
 		app.dismissInlineCompletion();
 		app.closeAuthDialog?.();
 		app.clearCommandPresentation();
+		app.dispose?.();
 	};
 
 	const settle = (error?: unknown): void => {
@@ -478,6 +485,10 @@ export async function runInteractiveMode(
 		} catch (error) {
 			failure ??= error;
 		}
+		if (failure instanceof ResourceError) {
+			app.presentCommand(errorMessage(failure), "error");
+			failure = undefined;
+		}
 		if (failure !== undefined) {
 			fail(failure);
 			return;
@@ -542,6 +553,9 @@ export async function runInteractiveMode(
 	};
 
 	removeInputListener = app.tui.addInputListener((data) => {
+		if (isKeyRelease(data)) {
+			return { consume: true };
+		}
 		if (matchesKey(data, Key.ctrl("c"))) {
 			if (app.cancelAuthDialog?.()) {
 				return { consume: true };
@@ -570,6 +584,10 @@ export async function runInteractiveMode(
 		}
 		if (matchesKey(data, Key.ctrl("o"))) {
 			app.toggleToolPreviews();
+			return { consume: true };
+		}
+		if (matchesKey(data, Key.ctrl("t"))) {
+			app.toggleThinking();
 			return { consume: true };
 		}
 		if (matchesKey(data, Key.ctrl("p"))) {
@@ -657,7 +675,11 @@ async function applyCommandResult(
 ): Promise<void> {
 	switch (result.outcome.kind) {
 		case "message":
-			app.presentCommand(result.outcome.text, result.outcome.level);
+			app.presentCommand(
+				result.outcome.text,
+				result.outcome.level,
+				commandOverlayTitle(input),
+			);
 			return;
 		case "unavailable": {
 			const command = input.trim().split(/\s/, 1)[0] ?? "Command";
@@ -678,6 +700,9 @@ async function applyCommandResult(
 			return;
 		case "effort-picker":
 			app.openEffortPicker();
+			return;
+		case "skill-picker":
+			app.openSkillPicker(result.outcome.argumentsText);
 			return;
 		case "login-picker":
 			await auth.openPicker("login");
@@ -730,6 +755,7 @@ function applyPickerOutcome(
 		case "resume-picker":
 		case "model-picker":
 		case "effort-picker":
+		case "skill-picker":
 		case "theme-picker":
 		case "set-theme":
 		case "copy-last-assistant":
@@ -777,10 +803,7 @@ export async function copyTuiText(
 
 function presentCopyResult(app: TuiApp, result: CopyDeliveryResult): void {
 	if (result.backupSaved && result.osc52Sent) {
-		app.presentCommand(
-			`Copy sent via OSC 52 and saved to ${result.backupPath}`,
-			"info",
-		);
+		app.presentCommand("Copied", "info");
 		return;
 	}
 	if (result.backupSaved) {
@@ -794,6 +817,24 @@ function presentCopyResult(app: TuiApp, result: CopyDeliveryResult): void {
 		`${result.osc52Sent ? "OSC 52 sent, but copy recovery failed" : "Copy failed"}: could not save ${result.backupPath}${result.error === undefined ? "" : ` (${result.error})`}`,
 		"error",
 	);
+}
+
+function commandOverlayTitle(input: string): string | undefined {
+	const command = input.trim().split(/\s/, 1)[0];
+	switch (command) {
+		case "/help":
+			return "Available commands";
+		case "/session":
+			return "Session";
+		case "/resources":
+			return "Resources";
+		case "/hotkeys":
+			return "Keyboard shortcuts";
+		case "/reload":
+			return "Resources reloaded";
+		default:
+			return undefined;
+	}
 }
 
 async function writePrivateTextFile(path: string, text: string): Promise<void> {

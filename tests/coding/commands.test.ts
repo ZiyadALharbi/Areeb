@@ -239,6 +239,7 @@ describe("default slash commands", () => {
 			"reload",
 			"name",
 			"copy",
+			"skills",
 			"theme",
 		]);
 		expect(commands.find((entry) => entry.name === "quit")?.aliases).toEqual([
@@ -438,6 +439,18 @@ describe("default slash commands", () => {
 		expect(await registry.dispatch("/theme", commandContext)).toEqual({
 			handled: true,
 			outcome: { kind: "theme-picker" },
+		});
+		expect(
+			await registry.dispatch("/skills inspect this", commandContext),
+		).toEqual({
+			handled: true,
+			outcome: {
+				kind: "skill-picker",
+				argumentsText: "inspect this",
+			},
+		});
+		expect(await registry.dispatch("/skill", commandContext)).toEqual({
+			handled: false,
 		});
 		expect(
 			await registry.dispatch("/theme areeb-light", commandContext),

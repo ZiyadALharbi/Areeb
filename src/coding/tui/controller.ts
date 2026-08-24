@@ -333,6 +333,7 @@ export class TuiController {
 				return { handled: true, outcome: result.outcome };
 			case "message":
 			case "theme-picker":
+			case "skill-picker":
 			case "set-theme":
 			case "copy-last-assistant":
 			case "quit":
@@ -453,7 +454,7 @@ export class TuiController {
 			const candidate = await this.options.loadSession({
 				handle,
 				selection: record.model,
-				reasoning: "off",
+				reasoning: "high",
 			});
 			const bundle = buildBundle(candidate);
 			this.active = bundle;

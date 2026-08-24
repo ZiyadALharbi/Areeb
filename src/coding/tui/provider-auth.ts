@@ -35,7 +35,7 @@ export class ProviderPicker implements Component, Focusable {
 
 	constructor(
 		private readonly providers: readonly ProviderAuthView[],
-		private readonly mode: ProviderPickerMode,
+		_mode: ProviderPickerMode,
 		private readonly theme: TuiTheme,
 		private readonly maxVisible = 8,
 	) {}
@@ -52,19 +52,9 @@ export class ProviderPicker implements Component, Focusable {
 		);
 		const visible = filtered.slice(start, start + this.maxVisible);
 		const lines = [
-			this.theme.primary(
-				this.mode === "login" ? "Providers" : "Saved Credentials",
-			),
 			this.theme.muted(
-				this.mode === "login"
-					? "Connect with a subscription or API key."
-					: "Choose a credential to remove.",
+				this.filter ? `Search  ${this.filter}` : "Search  Type to filter",
 			),
-			"",
-			this.theme.muted(
-				this.filter ? `Filter: ${this.filter}` : "Filter: type to narrow",
-			),
-			"",
 		];
 		if (visible.length === 0) {
 			lines.push(this.theme.error("No matching providers"));
@@ -104,9 +94,15 @@ export class ProviderPicker implements Component, Focusable {
 				),
 			);
 			lines.push(
-				`${selected ? this.theme.assistant(prefix) : prefix}${selected ? this.theme.primary(left) : this.theme.muted(left)}${padding}${right}`,
+				`${selected ? this.theme.assistant(prefix) : prefix}${this.theme.markdown.bold(
+					selected ? this.theme.primary(left) : this.theme.muted(left),
+				)}${padding}${right}`,
 			);
-			lines.push(this.theme.muted(`  ${provider.authLabel}`));
+			lines.push(
+				this.theme.muted(
+					`  ${provider.authType === "oauth" ? "OAuth" : "API key"} · ${provider.authLabel}`,
+				),
+			);
 		}
 		if (filtered.length > this.maxVisible) {
 			lines.push(
@@ -248,11 +244,7 @@ export class AuthDialog implements Component, Focusable {
 	}
 
 	render(width: number): string[] {
-		const lines = [
-			this.theme.primary(this.options.title),
-			this.theme.muted(this.options.subtitle),
-			"",
-		];
+		const lines: string[] = [];
 		if (this.url !== undefined) {
 			lines.push(this.theme.primary("Browser sign-in"));
 			lines.push(

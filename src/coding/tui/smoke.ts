@@ -10,7 +10,7 @@ export function runTuiSmoke(): void {
 
 	const theme = AREEB_DARK_THEME;
 	const terminal = new ProcessTerminal();
-	const { tui } = createTuiApp({
+	const app = createTuiApp({
 		terminal,
 		theme,
 		transcript: [
@@ -47,6 +47,7 @@ export function runTuiSmoke(): void {
 		onSetModel: async () => false,
 		onSetEffort: async () => false,
 	});
+	const { tui } = app;
 
 	let stopped = false;
 	let removeInputListener: (() => void) | undefined;
@@ -56,6 +57,7 @@ export function runTuiSmoke(): void {
 		}
 		stopped = true;
 		removeInputListener?.();
+		app.dispose?.();
 		tui.stop({ preserveScreen: true });
 	};
 

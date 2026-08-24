@@ -71,7 +71,7 @@ describe("TuiEventAdapter", () => {
 			sessionId: "unknown",
 			model: "unknown model",
 			cwd: ".",
-			reasoning: "off",
+			reasoning: "high",
 			running: false,
 			inputMode: "idle",
 			queuedCount: 0,

@@ -24,7 +24,7 @@ export async function buildSessionContext(
 				});
 
 	let model: SessionContext["model"] = null;
-	let reasoning: SessionContext["reasoning"] = "off";
+	let reasoning: SessionContext["reasoning"] = "high";
 	let activeToolNames: SessionContext["activeToolNames"] = null;
 	let newestCompaction: { entry: CompactionEntry; index: number } | undefined;
 

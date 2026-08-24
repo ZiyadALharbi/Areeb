@@ -71,7 +71,6 @@ describe("buildCompletionState", () => {
 			"/first",
 			"/planned",
 			"/last",
-			"/skill:",
 			"/alpha",
 			"/zeta",
 		]);
@@ -110,9 +109,9 @@ describe("buildCompletionState", () => {
 		expect(state?.items[0]?.source).toBe("template");
 	});
 
-	test("offers the synthetic skill namespace and replaces only a skill name", () => {
+	test("hides the skill namespace suggestion and completes explicit skill names", () => {
 		const namespace = complete("/ski", { skillNames: ["test", "review"] });
-		expect(values(namespace?.items ?? [])).toEqual(["/skill:"]);
+		expect(values(namespace?.items ?? [])).toEqual([]);
 
 		const state = complete("/skill:r fix the bug", {
 			skillNames: ["test", "review"],

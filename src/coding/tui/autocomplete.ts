@@ -161,28 +161,6 @@ export function buildCompletionState(
 		}
 	}
 
-	if (options.skillNames.length > 0) {
-		const candidate = rankItem(
-			{
-				value: SKILL_PREFIX,
-				label: SKILL_PREFIX,
-				description: "Use a loaded skill",
-				source: "skill",
-				aliases: [],
-				missingCapabilities: [],
-				planned: false,
-			},
-			query,
-			[],
-			[],
-			catalogOrder,
-		);
-		catalogOrder += 1;
-		if (candidate !== undefined) {
-			ranked.push(candidate);
-		}
-	}
-
 	for (const name of [...new Set(options.templateNames)]
 		.filter((name) => name !== "skill" && !executableNames.has(name))
 		.sort((left, right) => left.localeCompare(right))) {
