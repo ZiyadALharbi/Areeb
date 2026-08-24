@@ -117,7 +117,7 @@ export const INTERACTIVE_HOTKEYS: readonly InteractiveHotkey[] = Object.freeze([
 ]);
 
 export const INTERACTIVE_SHORTCUTS: TuiShortcutSet = Object.freeze({
-	idle: "Ctrl+S:sessions  │  Ctrl+M:model  │  Ctrl+P:commands  │  Ctrl+O:tools  │  Ctrl+C:quit",
+	idle: "Ctrl+S:sessions  │  Ctrl+M:model  │  Ctrl+P:commands  │  Ctrl+C:quit",
 	menu: "Type:filter  │  Up/Down:move  │  Enter:select  │  Esc:close",
 	running: "Enter:queue  │  Esc:interrupt  │  Ctrl+C:quit",
 });

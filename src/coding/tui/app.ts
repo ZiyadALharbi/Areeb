@@ -5,6 +5,7 @@ import {
 	Container,
 	decodeKittyPrintable,
 	Editor,
+	fuzzyFilter,
 	Key,
 	matchesKey,
 	type OverlayHandle,
@@ -123,6 +124,10 @@ export interface TuiApp {
 	closeAuthDialog?(): void;
 }
 
+interface FilterableSelectItem extends PiAutocompleteItem {
+	readonly searchText?: string;
+}
+
 export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 	const theme = createTuiThemeBinding(options.theme);
 	let activeTheme = options.theme;
@@ -155,7 +160,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		createAutocompleteProvider(options.getCompletionCatalog),
 	);
 	editor.disableSubmit = options.state?.inputMode === "locked";
-	const composerSurface = new ComposerSurface(editor, theme);
+	const composerSurface = new ComposerSurface(editor, theme, options.state);
 	const composer = new VStack([composerSurface]);
 	const status = new VStack();
 	const shortcutLine = new VStack();
@@ -406,6 +411,12 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		beginSelector("palette");
 
 		const catalog = options.getCompletionCatalog();
+		const searchTermsByCommand = new Map(
+			catalog.commands.map((command) => [
+				`/${command.name}`,
+				command.searchTerms ?? [],
+			]),
+		);
 		const completion = buildCompletionState({
 			...catalog,
 			lines: ["/"],
@@ -419,7 +430,9 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		}
 
 		const list = new FilterableSelectList(
-			completion.items.map(toSelectItem),
+			completion.items.map((item) =>
+				toSelectItem(item, searchTermsByCommand.get(item.value)),
+			),
 			overlayListRows(options.terminal.rows, 12),
 			theme,
 		);
@@ -509,7 +522,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 	const showPicker = (
 		kind: "session" | "model" | "theme",
 		generation: number,
-		items: PiAutocompleteItem[],
+		items: FilterableSelectItem[],
 		onSelect: (value: string) => Promise<boolean>,
 		selectedIndex = 0,
 		onCancel?: () => void,
@@ -870,6 +883,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		}
 		currentState = state;
 		currentSessionId = state.sessionId;
+		composerSurface.setState(state);
 		if (state.running) {
 			dismissCommandPalette();
 			dismissPicker();
@@ -1011,9 +1025,14 @@ class ComposerSurface extends Container {
 	constructor(
 		private readonly editor: Editor,
 		private readonly theme: TuiTheme,
+		private state: TuiState | undefined,
 	) {
 		super();
 		this.addChild(editor);
+	}
+
+	setState(state: TuiState): void {
+		this.state = state;
 	}
 
 	override render(width: number): string[] {
@@ -1041,12 +1060,27 @@ class ComposerSurface extends Container {
 			...content.map((line, index) => {
 				const prompted =
 					index === 0
-						? `${this.theme.assistant("› ")}${sliceByColumn(line, 2, innerWidth - 2, true)}`
+						? `${this.theme.assistant("❯ ")}${sliceByColumn(line, 2, innerWidth - 2, true)}`
 						: line;
 				return `${this.theme.composerBorder("│")}${fitLine(prompted, innerWidth)}${this.theme.composerBorder("│")}`;
 			}),
-			this.theme.composerBorder(`╰${"─".repeat(innerWidth)}╯`),
+			this.renderBottomBorder(innerWidth),
 		];
+	}
+
+	private renderBottomBorder(innerWidth: number): string {
+		const metadata = renderComposerMetadata(
+			this.state,
+			Math.max(0, innerWidth - 2),
+			this.theme,
+		);
+		if (metadata === "") {
+			return this.theme.composerBorder(`╰${"─".repeat(innerWidth)}╯`);
+		}
+		const fill = "─".repeat(
+			Math.max(0, innerWidth - visibleWidth(metadata) - 2),
+		);
+		return `${this.theme.composerBorder(`╰${fill} `)}${metadata}${this.theme.composerBorder(" ╯")}`;
 	}
 }
 
@@ -1066,28 +1100,10 @@ class ComposerStatusLine implements Component {
 		if (availableWidth === 0) {
 			return [];
 		}
-		const metadata = this.renderMetadata(availableWidth);
 		const left = this.renderLeft();
-		if (left === undefined) {
-			return metadata === "" ? [] : [rightAlign(metadata, availableWidth)];
-		}
-		if (metadata === "") {
-			return [truncateToWidth(left, availableWidth, "…")];
-		}
-		if (visibleWidth(left) + visibleWidth(metadata) + 2 <= availableWidth) {
-			return [
-				`${left}${" ".repeat(
-					availableWidth - visibleWidth(left) - visibleWidth(metadata),
-				)}${metadata}`,
-			];
-		}
-		if (this.notice !== undefined) {
-			return [
-				truncateToWidth(left, availableWidth, "…"),
-				rightAlign(metadata, availableWidth),
-			];
-		}
-		return [rightAlign(metadata, availableWidth)];
+		return left === undefined
+			? []
+			: [truncateToWidth(left, availableWidth, "…")];
 	}
 
 	private renderLeft(): string | undefined {
@@ -1117,41 +1133,21 @@ class ComposerStatusLine implements Component {
 		}
 		return undefined;
 	}
-
-	private renderMetadata(width: number): string {
-		if (this.state === undefined) {
-			return "";
-		}
-		const effort = `effort ${this.state.reasoning}`;
-		if (visibleWidth(effort) >= width) {
-			return this.theme.assistant(truncateToWidth(effort, width, "…"));
-		}
-		const separator = " · ";
-		const modelWidth = width - visibleWidth(separator) - visibleWidth(effort);
-		if (modelWidth < 4) {
-			return this.theme.assistant(effort);
-		}
-		const model = truncateToWidth(this.state.model, modelWidth, "…");
-		return `${this.theme.primary(model)}${this.theme.muted(separator)}${this.theme.assistant(effort)}`;
-	}
 }
 
 class FilterableSelectList implements Component {
-	private readonly list: SelectList;
+	private list: SelectList;
 	private filter = "";
 	onSelect?: (item: PiAutocompleteItem) => void;
 	onCancel?: () => void;
 	onSelectionChange?: (item: PiAutocompleteItem) => void;
 
 	constructor(
-		items: PiAutocompleteItem[],
-		maxVisible: number,
+		private readonly items: FilterableSelectItem[],
+		private readonly maxVisible: number,
 		private readonly theme: TuiTheme,
 	) {
-		this.list = new SelectList(items, maxVisible, theme.editor.selectList);
-		this.list.onSelect = (item) => this.onSelect?.(item);
-		this.list.onCancel = () => this.onCancel?.();
-		this.list.onSelectionChange = (item) => this.onSelectionChange?.(item);
+		this.list = this.createList(items);
 	}
 
 	setSelectedIndex(index: number): void {
@@ -1177,7 +1173,7 @@ class FilterableSelectList implements Component {
 		if (matchesKey(data, Key.backspace)) {
 			if (this.filter.length > 0) {
 				this.filter = Array.from(this.filter).slice(0, -1).join("");
-				this.list.setFilter(this.filter);
+				this.applyFilter();
 			}
 			return;
 		}
@@ -1189,10 +1185,35 @@ class FilterableSelectList implements Component {
 				: undefined);
 		if (printable !== undefined && printable.trim().length > 0) {
 			this.filter += printable;
-			this.list.setFilter(this.filter);
+			this.applyFilter();
 			return;
 		}
 		this.list.handleInput(data);
+	}
+
+	private applyFilter(): void {
+		this.list = this.createList(
+			fuzzyFilter(this.items, this.filter, (item) =>
+				[
+					item.value.replace(/^\//, ""),
+					item.label,
+					item.description ?? "",
+					item.searchText ?? "",
+				].join(" "),
+			),
+		);
+	}
+
+	private createList(items: FilterableSelectItem[]): SelectList {
+		const list = new SelectList(
+			items,
+			this.maxVisible,
+			this.theme.editor.selectList,
+		);
+		list.onSelect = (item) => this.onSelect?.(item);
+		list.onCancel = () => this.onCancel?.();
+		list.onSelectionChange = (item) => this.onSelectionChange?.(item);
+		return list;
 	}
 }
 
@@ -1238,17 +1259,33 @@ function fitLine(line: string, width: number): string {
 	return `${fitted}${" ".repeat(Math.max(0, width - visibleWidth(fitted)))}`;
 }
 
-function rightAlign(line: string, width: number): string {
-	const fitted = truncateToWidth(line, width, "…");
-	return `${" ".repeat(Math.max(0, width - visibleWidth(fitted)))}${fitted}`;
-}
-
 function formatTokenCount(value: number): string {
 	if (value < 1_000) {
 		return String(value);
 	}
 	const formatted = (value / 1_000).toFixed(1);
 	return `${formatted.replace(/\.0$/, "")}k`;
+}
+
+function renderComposerMetadata(
+	state: TuiState | undefined,
+	width: number,
+	theme: TuiTheme,
+): string {
+	if (state === undefined || width === 0) {
+		return "";
+	}
+	const effort = `effort ${state.reasoning}`;
+	if (visibleWidth(effort) >= width) {
+		return theme.assistant(truncateToWidth(effort, width, "…"));
+	}
+	const separator = " · ";
+	const modelWidth = width - visibleWidth(separator) - visibleWidth(effort);
+	if (modelWidth < 4) {
+		return theme.assistant(effort);
+	}
+	const model = truncateToWidth(state.model, modelWidth, "…");
+	return `${theme.primary(model)}${theme.muted(separator)}${theme.assistant(effort)}`;
 }
 
 function createAutocompleteProvider(
@@ -1285,7 +1322,7 @@ function createAutocompleteProvider(
 				return completion.items.length === 0
 					? null
 					: {
-							items: completion.items.map(toSelectItem),
+							items: completion.items.map((item) => toSelectItem(item)),
 							prefix: completion.query,
 						};
 			}
@@ -1342,7 +1379,10 @@ function createAutocompleteProvider(
 	};
 }
 
-function toSelectItem(item: CompletionItem): PiAutocompleteItem {
+function toSelectItem(
+	item: CompletionItem,
+	searchTerms: readonly string[] = [],
+): FilterableSelectItem {
 	const aliases =
 		item.aliases.length === 0
 			? undefined
@@ -1353,6 +1393,7 @@ function toSelectItem(item: CompletionItem): PiAutocompleteItem {
 	return {
 		value: item.value,
 		label: item.label,
+		searchText: searchTerms.join(" "),
 		description: [
 			item.usage === item.value ? undefined : item.usage,
 			item.description,

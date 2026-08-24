@@ -80,6 +80,70 @@ async function flush(): Promise<void> {
 }
 
 describe("createTuiApp pickers", () => {
+	test("filters commands and sessions by their visible text", async () => {
+		const app = createTuiApp(
+			appOptions({
+				getCompletionCatalog: () => ({
+					commands: [
+						{
+							name: "help",
+							description: "Show available commands",
+							usage: "/help",
+							searchTerms: ["manual"],
+						},
+					],
+					skillNames: [],
+					templateNames: [],
+					availableCapabilities: [],
+					cwd: "/project",
+					listSessions: async () => [],
+					models: [],
+				}),
+				listSessions: async () => [
+					{
+						id: SESSION_ID,
+						title: "Release planning",
+						model: { provider: "fake", model: "model-a" },
+					},
+				],
+			}),
+		);
+
+		expect(app.openCommandPalette()).toBe(true);
+		const commands = app.tui.getFocusedComponent();
+		for (const character of "help") {
+			commands?.handleInput?.(character);
+		}
+		const commandOutput = stripTerminalSequences(
+			commands?.render(100).join("\n") ?? "",
+		);
+		expect(commandOutput).toContain("/help");
+		expect(commandOutput).not.toContain("No matching commands");
+		expect(app.dismissCommandPalette()).toBe(true);
+		expect(app.openCommandPalette()).toBe(true);
+		const commandsBySearchTerm = app.tui.getFocusedComponent();
+		for (const character of "manual") {
+			commandsBySearchTerm?.handleInput?.(character);
+		}
+		expect(
+			stripTerminalSequences(
+				commandsBySearchTerm?.render(100).join("\n") ?? "",
+			),
+		).toContain("/help");
+		expect(app.dismissCommandPalette()).toBe(true);
+
+		expect(await app.openSessionPicker()).toBe(true);
+		const sessions = app.tui.getFocusedComponent();
+		for (const character of "planning") {
+			sessions?.handleInput?.(character);
+		}
+		const sessionOutput = stripTerminalSequences(
+			sessions?.render(100).join("\n") ?? "",
+		);
+		expect(sessionOutput).toContain("Release planning");
+		expect(sessionOutput).not.toContain("No matching commands");
+	});
+
 	test("renders the effort selector inline and restores the exact draft and focus", async () => {
 		const selected: string[] = [];
 		const state = createTuiState({
@@ -345,7 +409,7 @@ describe("createTuiApp pickers", () => {
 		expect(output).not.toContain("%");
 	});
 
-	test("shows the exact thinking level in wide and narrow footers", () => {
+	test("shows model and effort on the composer bottom border", () => {
 		const state = createTuiState({
 			sessionId: SESSION_ID,
 			model: "model-a",
@@ -354,9 +418,12 @@ describe("createTuiApp pickers", () => {
 		});
 		const app = createTuiApp(appOptions({ state }));
 
-		expect(stripTerminalSequences(app.tui.render(120).join("\n"))).toContain(
-			"model-a · effort off",
-		);
+		const wide = stripTerminalSequences(app.tui.render(120).join("\n"));
+		const wideMetadataLine = wide
+			.split("\n")
+			.find((line) => line.includes("model-a · effort off"));
+		expect(wideMetadataLine).toStartWith("╰");
+		expect(wideMetadataLine).toEndWith("╯");
 		state.reasoning = "high";
 		app.refresh(state);
 		expect(stripTerminalSequences(app.tui.render(32).join("\n"))).toContain(

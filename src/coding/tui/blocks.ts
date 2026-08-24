@@ -11,6 +11,8 @@ import type { TuiTheme } from "./theme.ts";
 const MESSAGE_GLYPH = "│";
 const TOOL_GLYPH = "◆";
 const NORMAL_INSET = 2;
+const ASSISTANT_MARGIN = 1;
+const USER_PADDING = 2;
 const TOOL_PREVIEW_MAX_LINES = 16;
 
 export type MessageBlockKind = "user" | "assistant" | "status" | "error";
@@ -101,26 +103,60 @@ export class MessageBlock implements Component {
 		if (!text) {
 			return [""];
 		}
+		const margin = width > ASSISTANT_MARGIN * 2 ? ASSISTANT_MARGIN : 0;
+		const contentWidth = width - margin * 2;
 		try {
 			this.markdown.setText(text);
-			const markdownLines = this.markdown.render(width);
+			const markdownLines = this.markdown.render(contentWidth);
 			if (markdownLines.length === 0) {
 				return [""];
 			}
 			return markdownLines.flatMap((line) =>
-				wrapTextWithAnsi(line, width).map(trimTerminalLineEnd),
+				wrapTextWithAnsi(line, contentWidth).map((fragment) => {
+					const trimmed = trimTerminalLineEnd(fragment);
+					return trimmed ? `${" ".repeat(margin)}${trimmed}` : "";
+				}),
 			);
 		} catch {
 			// Streaming can temporarily expose malformed Markdown. Literal text is
 			// always safe and keeps the transcript usable until the next update.
-			return wrapLiteralText(text, width).map((line) =>
-				this.theme.primary(line),
+			return wrapLiteralText(text, contentWidth).map((line) =>
+				line ? `${" ".repeat(margin)}${this.theme.primary(line)}` : "",
 			);
 		}
 	}
 
 	private renderUser(text: string, width: number): string[] {
 		const glyph = this.theme.user("›");
+		if (width < 4) {
+			if (width === 1 || !text) {
+				return [glyph];
+			}
+			const separator = width === 3 ? " " : "";
+			return [
+				`${glyph}${separator}${this.theme.primary(truncateToWidth(text, 1, ""))}`,
+			];
+		}
+
+		const innerWidth = width - 2;
+		const padding = Math.min(
+			USER_PADDING,
+			Math.max(0, Math.floor((innerWidth - 1) / 2)),
+		);
+		const contentWidth = Math.max(1, innerWidth - padding * 2);
+		const body = this.renderUserBody(text, contentWidth, glyph);
+
+		return [
+			this.theme.composerBorder(`╭${"─".repeat(innerWidth)}╮`),
+			...body.map(
+				(line) =>
+					`${this.theme.composerBorder("│")}${" ".repeat(padding)}${fitLine(line, contentWidth)}${" ".repeat(padding)}${this.theme.composerBorder("│")}`,
+			),
+			this.theme.composerBorder(`╰${"─".repeat(innerWidth)}╯`),
+		];
+	}
+
+	private renderUserBody(text: string, width: number, glyph: string): string[] {
 		if (width === 1 || !text) {
 			return [glyph];
 		}
@@ -290,6 +326,11 @@ function wrapLiteralText(text: string, width: number): string[] {
 function trimTerminalLineEnd(line: string): string {
 	const width = visibleWidth(stripTerminalSequences(line).trimEnd());
 	return truncateToWidth(line, width, "");
+}
+
+function fitLine(line: string, width: number): string {
+	const fitted = truncateToWidth(line, width, "");
+	return `${fitted}${" ".repeat(Math.max(0, width - visibleWidth(fitted)))}`;
 }
 
 interface StyledLine {

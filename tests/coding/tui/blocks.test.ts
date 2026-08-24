@@ -10,15 +10,20 @@ import { AREEB_DARK_THEME } from "../../../src/coding/tui/theme.ts";
 const theme = AREEB_DARK_THEME;
 
 describe("TUI transcript blocks", () => {
-	test("renders transparent, label-free rows at normal widths", () => {
+	test("renders bordered user rows and inset, label-free assistant rows", () => {
 		const user = new MessageBlock("user", "hello", theme);
 		const assistant = new MessageBlock("assistant", "welcome", theme);
 		const status = new MessageBlock("status", "waiting", theme);
 		const tool = new ToolBlock("bash", theme);
 
-		expect(user.render(40).map(stripTerminalSequences)).toEqual(["› hello"]);
+		const userLines = user.render(40).map(stripTerminalSequences);
+		expect(userLines).toHaveLength(3);
+		expect(userLines[0]).toBe(`╭${"─".repeat(38)}╮`);
+		expect(userLines[1]).toStartWith("│  › hello");
+		expect(userLines[2]).toBe(`╰${"─".repeat(38)}╯`);
+		expect(userLines.every((line) => visibleWidth(line) === 40)).toBe(true);
 		expect(assistant.render(40).map(stripTerminalSequences)).toEqual([
-			"welcome",
+			" welcome",
 		]);
 		expect(status.render(40).map(stripTerminalSequences)).toEqual([
 			"│  waiting",
@@ -72,7 +77,8 @@ describe("TUI transcript blocks", () => {
 
 		expect(assistant.join("\n")).toContain("Heading");
 		expect(assistant.join("\n")).toContain("- bold and code");
-		expect(user).toEqual(["› **bold** and `code`"]);
+		expect(user).toHaveLength(3);
+		expect(user[1]).toContain("› **bold** and `code`");
 		expect(assistant.every((line) => visibleWidth(line) <= 30)).toBe(true);
 	});
 
@@ -95,8 +101,17 @@ describe("TUI transcript blocks", () => {
 			.render(10)
 			.map(stripTerminalSequences);
 
-		expect(lines.length).toBeGreaterThan(1);
-		expect(lines.map((line) => line.slice(2)).join("")).toBe(token);
+		expect(lines.length).toBeGreaterThan(3);
+		const content = lines
+			.slice(1, -1)
+			.map((line, index) =>
+				line
+					.slice(3, -3)
+					.replace(index === 0 ? /^› / : /^ {2}/, "")
+					.trimEnd(),
+			)
+			.join("");
+		expect(content).toBe(token);
 	});
 
 	test("preserves explicit blank lines and renders empty user text as a prompt", () => {
@@ -104,12 +119,12 @@ describe("TUI transcript blocks", () => {
 			new MessageBlock("assistant", "first\n\nlast", theme)
 				.render(40)
 				.map(stripTerminalSequences),
-		).toEqual(["first", "", "last"]);
-		expect(
-			new MessageBlock("user", "", theme)
-				.render(40)
-				.map(stripTerminalSequences),
-		).toEqual(["›"]);
+		).toEqual([" first", "", " last"]);
+		const emptyUser = new MessageBlock("user", "", theme)
+			.render(40)
+			.map(stripTerminalSequences);
+		expect(emptyUser).toHaveLength(3);
+		expect(emptyUser[1]).toMatch(/^│ {2}› +│$/);
 	});
 
 	test("handles CJK, emoji, and combining characters by visible width", () => {
