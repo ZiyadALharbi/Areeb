@@ -18,6 +18,7 @@ import {
 	VStack,
 } from "@earendil-works/pi-tui";
 import type { AuthPrompt, AuthType } from "../../ai/auth.ts";
+import { REASONING_LEVELS, type ReasoningLevel } from "../../ai/types.ts";
 import type {
 	CommandModelListItem,
 	CommandSessionListItem,
@@ -28,7 +29,7 @@ import {
 	type CompletionCatalog,
 	type CompletionItem,
 } from "./autocomplete.ts";
-import { MessageBlock, ToolBlock } from "./blocks.ts";
+import { MessageBlock, ThinkingBlock, ToolBlock } from "./blocks.ts";
 import {
 	AuthDialog,
 	ProviderPicker,
@@ -64,6 +65,7 @@ export interface CreateTuiAppOptions {
 	readonly getCurrentModel: () => CommandModelListItem;
 	readonly onResume: (sessionId: string) => Promise<boolean>;
 	readonly onSetModel: (provider: string, model: string) => Promise<boolean>;
+	readonly onSetEffort: (effort: ReasoningLevel) => Promise<boolean>;
 	readonly themes?: readonly TuiTheme[];
 	readonly onSetTheme?: (theme: TuiThemeName) => Promise<void>;
 	readonly onCopySelection?: (text: string) => Promise<boolean>;
@@ -81,6 +83,7 @@ export interface TuiApp {
 	dismissCommandPalette(): boolean;
 	openSessionPicker(): Promise<boolean>;
 	openModelPicker(): boolean;
+	openEffortPicker(): boolean;
 	openThemePicker(): boolean;
 	setTheme(name: string): Promise<boolean>;
 	dismissPicker(): boolean;
@@ -138,6 +141,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		createAutocompleteProvider(options.getCompletionCatalog),
 	);
 	editor.disableSubmit = options.state?.inputMode === "locked";
+	const composer = new VStack([editor]);
 	const status = new VStack();
 	const shortcutLine = new VStack();
 	const root = new VStack(
@@ -148,7 +152,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 				grow: 1,
 				minSize: 1,
 			},
-			{ component: editor, basis: "auto" },
+			{ component: composer, basis: "auto" },
 			{ component: status, basis: "auto" },
 			{
 				component: shortcutLine,
@@ -164,13 +168,13 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 	tui.setFocus(editor);
 	let currentState = options.state;
 	let currentSessionId = currentState?.sessionId;
-	let streamingBlock: MessageBlock | undefined;
 	let commandOverlay: OverlayHandle | undefined;
 	let selectorOverlay: OverlayHandle | undefined;
 	let selectorKind:
 		| "palette"
 		| "session"
 		| "model"
+		| "effort"
 		| "theme"
 		| "provider"
 		| undefined;
@@ -189,12 +193,14 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 
 	const renderShortcuts = (): void => {
 		const text =
-			authOverlay !== undefined || selectorOverlay !== undefined
-				? options.shortcuts.menu
-				: currentState?.running === true ||
-						currentState?.inputMode === "running"
-					? options.shortcuts.running
-					: options.shortcuts.idle;
+			selectorKind === "effort"
+				? "Up/Down:move  │  Enter:select  │  Esc:close"
+				: authOverlay !== undefined || selectorKind !== undefined
+					? options.shortcuts.menu
+					: currentState?.running === true ||
+							currentState?.inputMode === "running"
+						? options.shortcuts.running
+						: options.shortcuts.idle;
 		shortcutLine.clear();
 		shortcutLine.addChild(new TruncatedText(theme.shortcut(text)));
 	};
@@ -217,7 +223,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 			status.addChild(
 				new TruncatedText(
 					theme.muted(
-						`${currentState.model} · ${currentState.cwd} · ${currentState.sessionId} · ${currentState.running ? "running" : currentState.inputMode}${queue}${formatLastUsage(currentState)}`,
+						`thinking: ${currentState.reasoning} · ${currentState.model} · ${currentState.cwd} · ${currentState.sessionId} · ${currentState.running ? "running" : currentState.inputMode}${queue}${formatLastUsage(currentState)}`,
 					),
 				),
 			);
@@ -251,6 +257,10 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		selectorGeneration += 1;
 		selectorOverlay?.hide();
 		selectorOverlay = undefined;
+		if (selectorKind === "effort") {
+			composer.clear();
+			composer.addChild(editor);
+		}
 		selectorKind = undefined;
 		selectionActive = false;
 		tui.setFocus(editor);
@@ -263,7 +273,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 	const dismissPicker = (): boolean => dismissSelector("picker");
 
 	const beginSelector = (
-		kind: "palette" | "session" | "model" | "theme" | "provider",
+		kind: "palette" | "session" | "model" | "effort" | "theme" | "provider",
 	): number => {
 		if (selectorKind === "theme" && themePickerOrigin !== undefined) {
 			applyVisualTheme(themePickerOrigin);
@@ -272,6 +282,10 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		selectorGeneration += 1;
 		selectorOverlay?.hide();
 		selectorOverlay = undefined;
+		if (selectorKind === "effort") {
+			composer.clear();
+			composer.addChild(editor);
+		}
 		selectorKind = kind;
 		selectionActive = false;
 		tui.setFocus(editor);
@@ -603,6 +617,61 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		);
 	};
 
+	const openEffortPicker = (): boolean => {
+		if (currentState?.running === true) {
+			return false;
+		}
+		dismissInlineCompletion();
+		dismissCommandOverlay();
+		const generation = beginSelector("effort");
+		const list = new SelectList(
+			REASONING_LEVELS.map((effort) => ({
+				value: effort,
+				label: effort,
+			})),
+			REASONING_LEVELS.length,
+			theme.editor.selectList,
+		);
+		list.setSelectedIndex(
+			Math.max(0, REASONING_LEVELS.indexOf(currentState?.reasoning ?? "off")),
+		);
+		list.onCancel = () => dismissPicker();
+		list.onSelect = (item) => {
+			if (selectionActive) {
+				return;
+			}
+			selectionActive = true;
+			void options.onSetEffort(item.value as ReasoningLevel).then(
+				(close) => {
+					if (generation !== selectorGeneration) {
+						return;
+					}
+					selectionActive = false;
+					if (close) {
+						dismissPicker();
+					} else {
+						tui.setFocus(list);
+						tui.requestRender();
+					}
+				},
+				(error) => {
+					if (generation !== selectorGeneration) {
+						return;
+					}
+					selectionActive = false;
+					presentCommand(`Selection failed: ${errorMessage(error)}`, "error");
+					tui.setFocus(list);
+				},
+			);
+		};
+		composer.clear();
+		composer.addChild(list);
+		tui.setFocus(list);
+		renderShortcuts();
+		tui.requestRender();
+		return true;
+	};
+
 	const openProviderPicker = (
 		mode: ProviderPickerMode,
 		providers: readonly ProviderAuthView[],
@@ -739,13 +808,13 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		const sessionReplaced =
 			currentSessionId !== undefined && currentSessionId !== state.sessionId;
 		if (sessionReplaced) {
+			dismissPicker();
 			clearCommandPresentation();
 			expandedToolCallIds.clear();
 			transcript.clear();
 			mountedTranscript.length = 0;
 			blocksByItem = new WeakMap<object, Component>();
 			toolBlocksById.clear();
-			streamingBlock = undefined;
 		}
 		currentState = state;
 		currentSessionId = state.sessionId;
@@ -777,17 +846,27 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 			}
 			desired.push(block);
 		}
-		if (
+		if (state.assistantBlocks !== undefined) {
+			for (const block of state.assistantBlocks) {
+				if (block.text.trim().length === 0) {
+					continue;
+				}
+				const component =
+					block.role === "thinking"
+						? new ThinkingBlock(block.text, theme)
+						: new MessageBlock("assistant", block.text, theme);
+				desired.push(component);
+			}
+		} else if (
 			state.assistantBuffer !== undefined &&
 			state.assistantBuffer.trim().length > 0
 		) {
-			streamingBlock ??= new MessageBlock(
+			const component = new MessageBlock(
 				"assistant",
 				state.assistantBuffer,
 				theme,
 			);
-			streamingBlock.setText(state.assistantBuffer);
-			desired.push(streamingBlock);
+			desired.push(component);
 		}
 
 		let stablePrefix = 0;
@@ -859,6 +938,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		dismissCommandPalette,
 		openSessionPicker,
 		openModelPicker,
+		openEffortPicker,
 		openThemePicker,
 		setTheme,
 		dismissPicker,
@@ -1131,6 +1211,8 @@ function createChatItemBlock(item: ChatItem, theme: TuiTheme): Component {
 		case "status":
 		case "error":
 			return new MessageBlock(item.role, item.text, theme);
+		case "thinking":
+			return new ThinkingBlock(item.text, theme);
 		case "tool":
 			return new ToolBlock(item.toolName, theme, {
 				preview: item.preview,

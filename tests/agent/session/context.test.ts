@@ -109,6 +109,46 @@ describe("buildSessionContext", () => {
 		});
 	});
 
+	test("uses the latest max reasoning change on the selected branch", async () => {
+		const firstChangeId = "00000000-0000-4000-8000-000000000002";
+		const secondChangeId = "00000000-0000-4000-8000-000000000003";
+		const branchEntries: SessionEntry[] = [
+			{
+				type: "reasoning_change",
+				id: ROOT_ID,
+				seq: 1,
+				parentId: null,
+				timestamp: 100,
+				reasoning: "low",
+			},
+			{
+				type: "reasoning_change",
+				id: firstChangeId,
+				seq: 2,
+				parentId: ROOT_ID,
+				timestamp: 200,
+				reasoning: "high",
+			},
+			{
+				type: "reasoning_change",
+				id: secondChangeId,
+				seq: 3,
+				parentId: firstChangeId,
+				timestamp: 300,
+				reasoning: "max",
+			},
+		];
+
+		const selected = new ContextStorage(secondChangeId, branchEntries);
+		expect((await buildSessionContext(selected)).reasoning).toBe("max");
+
+		const sibling = new ContextStorage(
+			firstChangeId,
+			branchEntries.slice(0, 2),
+		);
+		expect((await buildSessionContext(sibling)).reasoning).toBe("high");
+	});
+
 	test("uses only the newest compaction and preserves its complete tail", async () => {
 		const storage = new ContextStorage(LEAF_ID, [
 			{

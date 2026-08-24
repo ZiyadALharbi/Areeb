@@ -46,8 +46,10 @@ class StubSession implements TuiControllerSession {
 	readonly skills: { readonly name: string }[] = [];
 	readonly promptTemplates: { readonly name: string }[] = [];
 	readonly resourceDiagnostics = [];
+	readonly reasoningCalls: ReasoningLevel[] = [];
 	abortCount = 0;
 	isRunning = false;
+	reasoningFailure: Error | undefined;
 	lastServices: CodingSessionHostServices | undefined;
 	private followUps: AgentMessage[] = [];
 
@@ -56,7 +58,7 @@ class StubSession implements TuiControllerSession {
 		readonly messages: readonly AgentMessage[] = [],
 		readonly provider = "fake",
 		readonly model = "model-a",
-		readonly reasoning: ReasoningLevel = "low",
+		public reasoning: ReasoningLevel = "low",
 	) {}
 
 	prompt(input: string): AgentRunStream {
@@ -122,6 +124,18 @@ class StubSession implements TuiControllerSession {
 					}
 				: { handled: true, outcome: { kind: "resume-picker" } };
 		}
+		if (trimmed === "/effort") {
+			return { handled: true, outcome: { kind: "effort-picker" } };
+		}
+		const effort = /^\/effort\s+(off|low|medium|high|xhigh|max)$/.exec(
+			trimmed,
+		)?.[1] as ReasoningLevel | undefined;
+		if (effort !== undefined) {
+			return {
+				handled: true,
+				outcome: { kind: "set-effort", effort },
+			};
+		}
 		const resumed = /^\/resume\s+(\S+)$/.exec(trimmed);
 		if (resumed?.[1] !== undefined) {
 			return {
@@ -134,6 +148,14 @@ class StubSession implements TuiControllerSession {
 
 	abort(): void {
 		this.abortCount += 1;
+	}
+
+	async setReasoning(reasoning: ReasoningLevel): Promise<void> {
+		this.reasoningCalls.push(reasoning);
+		if (this.reasoningFailure !== undefined) {
+			throw this.reasoningFailure;
+		}
+		this.reasoning = reasoning;
 	}
 
 	async waitForIdle(): Promise<void> {}
@@ -552,6 +574,49 @@ describe("TuiController", () => {
 		expect(controller.followUp("queued").count).toBe(1);
 		expect(initial.followUpCalls).toEqual(["queued"]);
 		expect(controller.clearQueues().count).toBe(0);
+	});
+
+	test("changes effort after persistence and keeps state unchanged on failure", async () => {
+		const { controller, initial } = await createFixture();
+		expect(controller.state.reasoning).toBe("low");
+
+		expect(await controller.setReasoning("high")).toEqual({ kind: "none" });
+		expect(initial.reasoningCalls).toEqual(["high"]);
+		expect(initial.reasoning).toBe("high");
+		expect(controller.state.reasoning).toBe("high");
+
+		initial.reasoningFailure = new Error("storage failed");
+		expect(await controller.setReasoning("max")).toMatchObject({
+			kind: "message",
+			level: "error",
+			text: "Failed to change thinking effort: storage failed",
+		});
+		expect(controller.state.reasoning).toBe("high");
+		expect(initial.reasoning).toBe("high");
+
+		initial.reasoningFailure = undefined;
+		initial.isRunning = true;
+		expect(await controller.setReasoning("max")).toMatchObject({
+			kind: "message",
+			level: "warning",
+			text: "Cannot change thinking effort while the current session is running",
+		});
+		expect(initial.reasoningCalls).toEqual(["high", "max"]);
+	});
+
+	test("handles direct effort commands and returns picker requests", async () => {
+		const { controller, initial } = await createFixture();
+
+		expect(await controller.handleCommand("/effort")).toEqual({
+			handled: true,
+			outcome: { kind: "effort-picker" },
+		});
+		expect(await controller.handleCommand("/effort max")).toEqual({
+			handled: true,
+			outcome: { kind: "none" },
+		});
+		expect(initial.reasoning).toBe("max");
+		expect(controller.state.reasoning).toBe("max");
 	});
 
 	test("keeps the previous JSONL file after starting a new session", async () => {

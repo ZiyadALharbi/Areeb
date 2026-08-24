@@ -12,10 +12,12 @@ import { dirname } from "node:path";
 import { z } from "zod";
 import { DEFAULT_OPENAI_BASE_URL } from "../ai/environment.ts";
 import {
+	type OpenAICompatibleCompat,
 	type OpenAICompatibleConfig,
 	OpenAICompatibleProvider,
 } from "../ai/openai_compatible_provider.ts";
 import type { ModelProvider } from "../ai/provider_protocol.ts";
+import { REASONING_LEVELS } from "../ai/types.ts";
 import { areebPaths } from "./paths.ts";
 
 export const PROVIDER_SETTINGS_VERSION = 1;
@@ -48,6 +50,7 @@ export interface OpenAICompatibleProviderConfig {
 	readonly timeoutSeconds?: number;
 	readonly maxRetries: number;
 	readonly maxRetryDelaySeconds: number;
+	readonly compat: OpenAICompatibleCompat;
 }
 
 export interface ProviderSettings {
@@ -141,6 +144,10 @@ const environmentNameSchema = z
 const finitePositiveSchema = z.number().finite().positive();
 const finiteNonnegativeSchema = z.number().finite().nonnegative();
 const nonnegativeSafeIntegerSchema = z.number().int().safe().nonnegative();
+const thinkingLevelMapSchema = z.partialRecord(
+	z.enum(REASONING_LEVELS),
+	z.string().min(1, "must not be empty").nullable(),
+);
 
 const rawProviderSchema = z
 	.object({
@@ -152,6 +159,11 @@ const rawProviderSchema = z
 		timeout_seconds: finitePositiveSchema.optional(),
 		max_retries: nonnegativeSafeIntegerSchema.optional(),
 		max_retry_delay_seconds: finiteNonnegativeSchema.optional(),
+		thinking_format: z
+			.enum(["openai", "openrouter", "deepseek", "zai"])
+			.optional(),
+		supports_reasoning_effort: z.boolean().optional(),
+		thinking_level_map: thinkingLevelMapSchema.optional(),
 	})
 	.strict();
 
@@ -337,7 +349,7 @@ export function createProviderRuntime(
 			maxRetries: providerConfig.maxRetries,
 			maxRetryDelayMs,
 		},
-		compat: { thinkingLevelMap: { off: "none" } },
+		compat: providerConfig.compat,
 	};
 	const provider =
 		options.createProvider?.(adapterConfig) ??
@@ -628,6 +640,17 @@ function normalizeBuiltInOpenAI(
 					"nonnegative",
 				) ??
 				DEFAULT_PROVIDER_MAX_RETRY_DELAY_SECONDS,
+			...(overlay?.thinking_format === undefined
+				? {}
+				: { thinking_format: overlay.thinking_format }),
+			...(overlay?.supports_reasoning_effort === undefined
+				? {}
+				: {
+						supports_reasoning_effort: overlay.supports_reasoning_effort,
+					}),
+			...(overlay?.thinking_level_map === undefined
+				? {}
+				: { thinking_level_map: overlay.thinking_level_map }),
 		},
 		path,
 		true,
@@ -682,6 +705,19 @@ function normalizeProvider(
 			`must appear in ${basePath}.models`,
 		);
 	}
+	const thinkingLevelMap = Object.freeze({
+		off: "none",
+		...(raw.thinking_level_map ?? {}),
+	});
+	const compat: OpenAICompatibleCompat = Object.freeze({
+		...(raw.thinking_format === undefined
+			? {}
+			: { thinkingFormat: raw.thinking_format }),
+		...(raw.supports_reasoning_effort === undefined
+			? {}
+			: { supportsReasoningEffort: raw.supports_reasoning_effort }),
+		thinkingLevelMap,
+	});
 
 	return Object.freeze({
 		id: providerId,
@@ -697,6 +733,7 @@ function normalizeProvider(
 		maxRetries: raw.max_retries ?? DEFAULT_PROVIDER_MAX_RETRIES,
 		maxRetryDelaySeconds:
 			raw.max_retry_delay_seconds ?? DEFAULT_PROVIDER_MAX_RETRY_DELAY_SECONDS,
+		compat,
 	});
 }
 

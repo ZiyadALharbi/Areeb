@@ -429,6 +429,36 @@ describe("AgentHarness construction and ownership", () => {
 		provider.finish(1, "Second response");
 		await second.result();
 	});
+
+	test("updates reasoning for the next provider request only while idle", async () => {
+		const provider = new ControlledPromptProvider();
+		const agent = harness(provider, {
+			streamOptions: { reasoning: "low", timeout: 25 },
+		});
+
+		const first = agent.prompt("First");
+		await waitUntil(
+			() => provider.calls.length === 1,
+			"the first provider call",
+		);
+		expect(provider.calls[0]?.options).toMatchObject({ reasoning: "low" });
+		expect(() => agent.setReasoning("max")).toThrow("already running");
+		provider.finish(0, "First response");
+		await first.result();
+
+		agent.setReasoning("max");
+		const second = agent.prompt("Second");
+		await waitUntil(
+			() => provider.calls.length === 2,
+			"the second provider call",
+		);
+		expect(provider.calls[1]?.options).toMatchObject({
+			reasoning: "max",
+			timeout: 25,
+		});
+		provider.finish(1, "Second response");
+		await second.result();
+	});
 });
 
 describe("AgentHarness prompt lifecycle", () => {

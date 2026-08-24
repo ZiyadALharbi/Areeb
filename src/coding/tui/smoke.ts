@@ -45,6 +45,7 @@ export function runTuiSmoke(): void {
 		getCurrentModel: () => ({ provider: "unknown", model: "unknown" }),
 		onResume: async () => false,
 		onSetModel: async () => false,
+		onSetEffort: async () => false,
 	});
 
 	let stopped = false;

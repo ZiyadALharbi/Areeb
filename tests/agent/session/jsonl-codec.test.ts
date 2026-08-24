@@ -10,6 +10,7 @@ import {
 } from "../../../src/agent/session/jsonl/codec.ts";
 import type { SessionJsonlRecord } from "../../../src/agent/session/jsonl/types.ts";
 import type { SessionMetadata } from "../../../src/agent/session/types.ts";
+import { isReasoningLevel, REASONING_LEVELS } from "../../../src/ai/types.ts";
 
 const SESSION_ID = "00000000-0000-4000-8000-000000000001";
 const ENTRY_ID = "00000000-0000-4000-8000-000000000002";
@@ -47,6 +48,19 @@ function expectSessionError(
 }
 
 describe("session JSONL codec", () => {
+	test("exports the canonical ordered public reasoning levels", () => {
+		expect(REASONING_LEVELS).toEqual([
+			"off",
+			"low",
+			"medium",
+			"high",
+			"xhigh",
+			"max",
+		]);
+		expect(REASONING_LEVELS.every(isReasoningLevel)).toBe(true);
+		expect(isReasoningLevel("minimal")).toBe(false);
+	});
+
 	test("round-trips the header and every mutation shape", () => {
 		const records: SessionJsonlRecord[] = [
 			{
@@ -115,7 +129,7 @@ describe("session JSONL codec", () => {
 					seq: 1,
 					parentId: PARENT_ID,
 					timestamp: 100,
-					reasoning: "xhigh",
+					reasoning: "max",
 				},
 			},
 			{
@@ -218,6 +232,34 @@ describe("session JSONL codec", () => {
 		const decoded = metadataFromSessionJsonlHeader(header);
 		(header.metadata?.nested as { value: number }).value = 3;
 		expect(decoded.metadata).toEqual({ nested: { value: 1 } });
+	});
+
+	test("round-trips max reasoning and rejects the removed minimal level", () => {
+		const maxRecord: SessionJsonlRecord = {
+			kind: "entry",
+			entry: {
+				type: "reasoning_change",
+				id: ENTRY_ID,
+				seq: 1,
+				parentId: PARENT_ID,
+				timestamp: 100,
+				reasoning: "max",
+			},
+		};
+
+		expect(
+			decodeSessionJsonlRecord(encodeSessionJsonlRecord(maxRecord)),
+		).toEqual(maxRecord);
+		expectSessionError(
+			() =>
+				decodeSessionJsonlRecord(
+					JSON.stringify({
+						...maxRecord,
+						entry: { ...maxRecord.entry, reasoning: "minimal" },
+					}),
+				),
+			"invalid_format",
+		);
 	});
 
 	test("enforces header and mutation positions", () => {

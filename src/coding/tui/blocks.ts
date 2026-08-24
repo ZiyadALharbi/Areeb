@@ -195,6 +195,50 @@ export class ToolBlock implements Component {
 	}
 }
 
+export class ThinkingBlock implements Component {
+	private text: string;
+
+	constructor(
+		text: string,
+		private readonly theme: TuiTheme,
+	) {
+		this.text = text;
+	}
+
+	setText(text: string): void {
+		this.text = text;
+	}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		const availableWidth = normalizeWidth(width);
+		if (availableWidth === 0) {
+			return [];
+		}
+		const cleanText = stripTerminalSequences(this.text);
+		if (cleanText.trim().length === 0) {
+			return [];
+		}
+
+		const label = "Thinking";
+		const separator = " · ";
+		const prefixWidth = visibleWidth(label) + visibleWidth(separator);
+		if (availableWidth <= prefixWidth) {
+			return [truncateToWidth(this.theme.assistant(label), availableWidth, "")];
+		}
+
+		const contentWidth = availableWidth - prefixWidth;
+		const lines = wrapLiteralText(cleanText, contentWidth);
+		const prefix = `${this.theme.assistant(label)}${this.theme.muted(separator)}`;
+		const indent = " ".repeat(prefixWidth);
+		return lines.map((line, index) => {
+			const body = this.theme.markdown.italic(this.theme.muted(line));
+			return `${index === 0 ? prefix : indent}${body}`;
+		});
+	}
+}
+
 // The smoke entry remains intentionally unchanged for this phase.
 export { ToolBlock as CollapsedToolBlock };
 

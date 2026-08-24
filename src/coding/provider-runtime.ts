@@ -384,7 +384,7 @@ export class ProviderRuntimeService {
 					maxRetries: configured.maxRetries,
 					maxRetryDelayMs: configured.maxRetryDelaySeconds * 1_000,
 				},
-				compat: { thinkingLevelMap: { off: "none" } },
+				compat: configured.compat,
 			};
 			const provider =
 				this.options.createProvider?.(adapterConfig) ??

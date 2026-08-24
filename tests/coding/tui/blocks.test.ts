@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { MessageBlock, ToolBlock } from "../../../src/coding/tui/blocks.ts";
+import {
+	MessageBlock,
+	ThinkingBlock,
+	ToolBlock,
+} from "../../../src/coding/tui/blocks.ts";
 import { AREEB_DARK_THEME } from "../../../src/coding/tui/theme.ts";
 
 const theme = AREEB_DARK_THEME;
@@ -35,6 +39,25 @@ describe("TUI transcript blocks", () => {
 		expect(
 			lines.map(stripTerminalSequences).every((line) => line.startsWith("│  ")),
 		).toBe(true);
+	});
+
+	test("renders sanitized multiline thinking with an accented label and muted italic body", () => {
+		const rendered = new ThinkingBlock(
+			"\u001b[31mfirst thought that wraps\u001b[0m\nsecond",
+			theme,
+		).render(18);
+		const plain = rendered.map(stripTerminalSequences);
+
+		expect(plain[0]).toStartWith("Thinking · ");
+		expect(plain.join("\n")).toContain("first");
+		expect(plain.join("\n")).toContain("thought");
+		expect(plain.join("\n")).toContain("wraps");
+		expect(plain.join("\n")).toContain("second");
+		expect(rendered.every((line) => visibleWidth(line) <= 18)).toBe(true);
+		expect(rendered[0]).toContain("38;2;187;154;247");
+		expect(rendered.join("\n")).toContain("38;2;108;108;108");
+		expect(rendered.join("\n")).toContain("\u001b[3m");
+		expect(rendered.join("\n")).not.toContain("\u001b[31m");
 	});
 
 	test("renders assistant Markdown while leaving user Markdown literal", () => {
@@ -106,6 +129,7 @@ describe("TUI transcript blocks", () => {
 		for (const width of [0, 1, 2]) {
 			for (const block of [
 				new MessageBlock("user", "content🙂", theme),
+				new ThinkingBlock("reasoning🙂", theme),
 				new ToolBlock("bash", theme),
 			]) {
 				const lines = block.render(width);
@@ -226,9 +250,11 @@ describe("TUI transcript blocks", () => {
 
 	test("supports cache invalidation", () => {
 		const message = new MessageBlock("error", "failed", theme);
+		const thinking = new ThinkingBlock("reasoning", theme);
 		const tool = new ToolBlock("bash", theme);
 
 		expect(() => message.invalidate()).not.toThrow();
+		expect(() => thinking.invalidate()).not.toThrow();
 		expect(() => tool.invalidate()).not.toThrow();
 	});
 });

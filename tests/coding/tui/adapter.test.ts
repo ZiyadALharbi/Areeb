@@ -31,7 +31,7 @@ const toolResult: ToolResultMessage = {
 };
 
 describe("TuiEventAdapter", () => {
-	test("restores only visible transcript content", () => {
+	test("restores visible transcript content including separate thinking rows", () => {
 		const state = createTuiState();
 		const adapter = new TuiEventAdapter(state);
 		const imageOnly: UserMessage = {
@@ -56,6 +56,7 @@ describe("TuiEventAdapter", () => {
 			items: [
 				{ role: "user", text: "[image]" },
 				{ role: "user", text: "hello" },
+				{ role: "thinking", text: "private" },
 				{ role: "assistant", text: "answer" },
 				{
 					role: "tool",
@@ -70,6 +71,7 @@ describe("TuiEventAdapter", () => {
 			sessionId: "unknown",
 			model: "unknown model",
 			cwd: ".",
+			reasoning: "off",
 			running: false,
 			inputMode: "idle",
 			queuedCount: 0,
@@ -82,14 +84,17 @@ describe("TuiEventAdapter", () => {
 			{ type: "text", text: "answer" },
 			toolCall,
 		]);
-		const partial: AssistantMessage = {
+		const thinkingPartial: AssistantMessage = {
 			...response,
-			content: [{ type: "text", text: "wrong snapshot" }],
+			content: [{ type: "thinking", thinking: "pri" }],
 			usage: { ...EMPTY_USAGE },
 		};
-		const finalSnapshot: AssistantMessage = {
+		const textPartial: AssistantMessage = {
 			...response,
-			content: [{ type: "text", text: "answer" }],
+			content: [
+				{ type: "thinking", thinking: "private" },
+				{ type: "text", text: "ans" },
+			],
 			usage: { ...EMPTY_USAGE },
 		};
 		const state = createTuiState();
@@ -101,31 +106,38 @@ describe("TuiEventAdapter", () => {
 		expect(
 			adapter.apply({
 				type: "message_update",
-				message: partial,
+				message: thinkingPartial,
 				assistantMessageEvent: {
 					type: "thinking_delta",
 					contentIndex: 0,
-					delta: "private",
-					partial,
-				},
-			}),
-		).toBe(false);
-		expect(
-			adapter.apply({
-				type: "message_update",
-				message: finalSnapshot,
-				assistantMessageEvent: {
-					type: "text_delta",
-					contentIndex: 0,
-					delta: "answer",
-					partial: finalSnapshot,
+					delta: "pri",
+					partial: thinkingPartial,
 				},
 			}),
 		).toBe(true);
-		expect(state.assistantBuffer).toBe("answer");
+		expect(state.assistantBlocks).toEqual([{ role: "thinking", text: "pri" }]);
+		expect(
+			adapter.apply({
+				type: "message_update",
+				message: textPartial,
+				assistantMessageEvent: {
+					type: "text_delta",
+					contentIndex: 1,
+					delta: "ans",
+					partial: textPartial,
+				},
+			}),
+		).toBe(true);
+		expect(state.assistantBlocks).toEqual([
+			{ role: "thinking", text: "private" },
+			{ role: "assistant", text: "ans" },
+		]);
+		expect(state.assistantBuffer).toBe("ans");
 		expect(adapter.apply({ type: "message_end", message: response })).toBe(
 			true,
 		);
+		expect(state.assistantBlocks).toBeUndefined();
+		expect(state.assistantBuffer).toBeUndefined();
 		expect(adapter.apply({ type: "tool_execution_start", toolCall })).toBe(
 			false,
 		);
@@ -145,10 +157,41 @@ describe("TuiEventAdapter", () => {
 		expect(state.items).toEqual(restored.items);
 	});
 
+	test("preserves content order, coalesces adjacent blocks, and skips empty thinking", () => {
+		const orderedCall = { ...toolCall, id: "ordered-call" };
+		const response = assistant([
+			{ type: "thinking", thinking: "first " },
+			{ type: "thinking", thinking: "thought" },
+			{ type: "text", text: "answer " },
+			{ type: "text", text: "one" },
+			{ type: "thinking", thinking: " \n " },
+			{ type: "thinking", thinking: "second thought" },
+			orderedCall,
+			{ type: "thinking", thinking: "after tool" },
+			{ type: "text", text: "answer two" },
+		]);
+		const state = createTuiState();
+
+		expect(new TuiEventAdapter(state).restore([response])).toBe(true);
+		expect(state.items).toEqual([
+			{ role: "thinking", text: "first thought" },
+			{ role: "assistant", text: "answer one" },
+			{ role: "thinking", text: "second thought" },
+			{
+				role: "tool",
+				text: "read",
+				toolName: "read",
+				toolCallId: "ordered-call",
+			},
+			{ role: "thinking", text: "after tool" },
+			{ role: "assistant", text: "answer two" },
+		]);
+	});
+
 	test("avoids blank assistant rows and preserves multiple tool calls", () => {
 		const state = createTuiState();
 		const adapter = new TuiEventAdapter(state);
-		const empty = assistant([{ type: "thinking", thinking: "hidden" }]);
+		const empty = assistant([{ type: "thinking", thinking: " \n " }]);
 		const second = { ...toolCall, id: "call-2", name: "bash" };
 
 		expect(adapter.apply({ type: "message_end", message: empty })).toBe(true);
@@ -171,7 +214,10 @@ describe("TuiEventAdapter", () => {
 
 		expect(adapter.restore([first, second])).toBe(true);
 		expect(state.lastUsage).toEqual(second.usage);
-		expect(state.items).toEqual([{ role: "assistant", text: "first" }]);
+		expect(state.items).toEqual([
+			{ role: "assistant", text: "first" },
+			{ role: "thinking", text: "hidden" },
+		]);
 		expect(adapter.apply({ type: "message_end", message: second })).toBe(false);
 		expect(adapter.restore([])).toBe(true);
 		expect(state.lastUsage).toBeUndefined();

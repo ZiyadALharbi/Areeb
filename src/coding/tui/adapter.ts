@@ -6,12 +6,11 @@ import type {
 } from "../../agent/types.ts";
 import type {
 	AssistantMessage,
-	ToolCall,
 	ToolResultMessage,
 	Usage,
 	UserMessage,
 } from "../../ai/types.ts";
-import type { ChatItem, TuiState } from "./state.ts";
+import type { ChatItem, StreamingAssistantBlock, TuiState } from "./state.ts";
 
 const TOOL_PREVIEW_MAX_BYTES = 4 * 1024;
 const TOOL_PREVIEW_MAX_LINES = 16;
@@ -26,11 +25,13 @@ export class TuiEventAdapter {
 		let changed =
 			this.state.items.length > 0 ||
 			this.state.assistantBuffer !== undefined ||
+			this.state.assistantBlocks !== undefined ||
 			this.state.lastUsage !== undefined ||
 			this.state.terminalReason !== undefined ||
 			this.state.running;
 		this.state.items.length = 0;
 		delete this.state.assistantBuffer;
+		delete this.state.assistantBlocks;
 		delete this.state.lastUsage;
 		delete this.state.terminalReason;
 		this.state.running = false;
@@ -57,17 +58,29 @@ export class TuiEventAdapter {
 			case "tool_execution_update":
 				return false;
 			case "message_update": {
+				if (!isAssistantMessage(event.message)) {
+					return false;
+				}
 				if (
-					event.assistantMessageEvent.type !== "text_delta" ||
-					!isAssistantMessage(event.message)
+					event.assistantMessageEvent.type !== "text_delta" &&
+					event.assistantMessageEvent.type !== "thinking_delta"
 				) {
 					return false;
 				}
-				const text = visibleAssistantText(event.message);
-				if (this.state.assistantBuffer === text) {
+				const blocks = visibleAssistantBlocks(event.message);
+				if (assistantBlocksEqual(this.state.assistantBlocks, blocks)) {
 					return false;
 				}
-				this.state.assistantBuffer = text;
+				this.state.assistantBlocks = blocks;
+				const text = blocks
+					.filter((block) => block.role === "assistant")
+					.map((block) => block.text)
+					.join("");
+				if (text.length === 0) {
+					delete this.state.assistantBuffer;
+				} else {
+					this.state.assistantBuffer = text;
+				}
 				return true;
 			}
 			case "message_end":
@@ -105,12 +118,8 @@ export class TuiEventAdapter {
 				changed = true;
 			}
 		} else if (isAssistantMessage(message)) {
-			const text = visibleAssistantText(message);
 			changed = this.updateUsage(message.usage);
-			changed = this.finalizeAssistantMessage(text) || changed;
-			for (const toolCall of visibleToolCalls(message)) {
-				changed = this.upsertTool(toolCall.id, toolCall.name) || changed;
-			}
+			changed = this.finalizeAssistantMessage(message) || changed;
 		} else if (isToolResultMessage(message)) {
 			changed = this.upsertTool(message.toolCallId, message.toolName, message);
 		} else {
@@ -129,19 +138,61 @@ export class TuiEventAdapter {
 		return true;
 	}
 
-	private finalizeAssistantMessage(text: string): boolean {
-		const clearedBuffer = this.state.assistantBuffer !== undefined;
+	private finalizeAssistantMessage(message: AssistantMessage): boolean {
+		const clearedBuffer =
+			this.state.assistantBuffer !== undefined ||
+			this.state.assistantBlocks !== undefined;
 		delete this.state.assistantBuffer;
-		if (text.trim().length === 0) {
-			return clearedBuffer;
+		delete this.state.assistantBlocks;
+
+		let changed = clearedBuffer;
+		let pending: StreamingAssistantBlock | undefined;
+		const flushPending = (): void => {
+			if (pending === undefined || pending.text.trim().length === 0) {
+				pending = undefined;
+				return;
+			}
+			this.state.items.push({ ...pending });
+			changed = true;
+			pending = undefined;
+		};
+
+		for (const content of message.content) {
+			if (content.type === "tool_call") {
+				flushPending();
+				changed = this.upsertTool(content.id, content.name) || changed;
+				continue;
+			}
+			const role = content.type === "thinking" ? "thinking" : "assistant";
+			const text =
+				content.type === "thinking" ? content.thinking : content.text;
+			if (text.trim().length === 0) {
+				continue;
+			}
+			if (pending?.role === role) {
+				pending = { role, text: pending.text + text };
+			} else {
+				flushPending();
+				pending = { role, text };
+			}
 		}
-		this.state.items.push({ role: "assistant", text });
-		return true;
+		flushPending();
+		return changed;
 	}
 
 	private flushAssistantBuffer(): boolean {
+		const blocks = this.state.assistantBlocks;
 		const text = this.state.assistantBuffer;
 		delete this.state.assistantBuffer;
+		delete this.state.assistantBlocks;
+		if (blocks !== undefined) {
+			for (const block of blocks) {
+				if (block.text.trim().length > 0) {
+					this.state.items.push({ ...block });
+				}
+			}
+			return true;
+		}
 		if (text === undefined || text.trim().length === 0) {
 			return text !== undefined;
 		}
@@ -217,12 +268,6 @@ export class TuiEventAdapter {
 				return true;
 		}
 	}
-}
-
-function visibleToolCalls(message: AssistantMessage): ToolCall[] {
-	return message.content.flatMap((content) =>
-		content.type === "tool_call" ? [content] : [],
-	);
 }
 
 function toolResultPreview(message: ToolResultMessage): string | undefined {
@@ -342,10 +387,44 @@ function visibleUserText(message: UserMessage): string {
 		.join("");
 }
 
-function visibleAssistantText(message: AssistantMessage): string {
-	return message.content
-		.flatMap((content) => (content.type === "text" ? [content.text] : []))
-		.join("");
+function visibleAssistantBlocks(
+	message: AssistantMessage,
+): readonly StreamingAssistantBlock[] {
+	const blocks: StreamingAssistantBlock[] = [];
+	let blockedByTool = false;
+	for (const content of message.content) {
+		if (content.type === "tool_call") {
+			blockedByTool = true;
+			continue;
+		}
+		const role = content.type === "thinking" ? "thinking" : "assistant";
+		const text = content.type === "thinking" ? content.thinking : content.text;
+		if (text.trim().length === 0) {
+			continue;
+		}
+		const previous = blocks.at(-1);
+		if (!blockedByTool && previous?.role === role) {
+			blocks[blocks.length - 1] = { role, text: previous.text + text };
+		} else {
+			blocks.push({ role, text });
+		}
+		blockedByTool = false;
+	}
+	return blocks;
+}
+
+function assistantBlocksEqual(
+	left: readonly StreamingAssistantBlock[] | undefined,
+	right: readonly StreamingAssistantBlock[],
+): boolean {
+	return (
+		left !== undefined &&
+		left.length === right.length &&
+		left.every(
+			(block, index) =>
+				block.role === right[index]?.role && block.text === right[index]?.text,
+		)
+	);
 }
 
 function findFinalAssistantMessage(

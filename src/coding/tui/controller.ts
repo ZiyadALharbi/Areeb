@@ -33,6 +33,7 @@ export type TuiTransitionOutcome = Exclude<
 	| { readonly kind: "new-session" }
 	| { readonly kind: "resume" }
 	| { readonly kind: "set-model" }
+	| { readonly kind: "set-effort" }
 >;
 
 export type TuiCommandResult =
@@ -60,6 +61,7 @@ export interface TuiControllerSession {
 	abort(): void;
 	followUp(input: string): QueuedMessages;
 	clearQueues(): QueuedMessages;
+	setReasoning(reasoning: ReasoningLevel): Promise<void>;
 	waitForIdle(): Promise<void>;
 }
 
@@ -298,6 +300,12 @@ export class TuiController {
 						result.outcome.model,
 					),
 				};
+			case "set-effort":
+				this.newSessionPending = false;
+				return {
+					handled: true,
+					outcome: await this.setReasoning(result.outcome.effort),
+				};
 			case "resume-picker":
 				this.newSessionPending = false;
 				return {
@@ -309,6 +317,13 @@ export class TuiController {
 				return {
 					handled: true,
 					outcome: this.transitionBlock("switch models") ?? result.outcome,
+				};
+			case "effort-picker":
+				this.newSessionPending = false;
+				return {
+					handled: true,
+					outcome:
+						this.transitionBlock("change thinking effort") ?? result.outcome,
 				};
 			case "login-picker":
 			case "login":
@@ -507,6 +522,23 @@ export class TuiController {
 		}
 	}
 
+	async setReasoning(reasoning: ReasoningLevel): Promise<TuiTransitionOutcome> {
+		const blocked = this.transitionBlock("change thinking effort");
+		if (blocked !== undefined) {
+			return blocked;
+		}
+		this.transitionActive = true;
+		try {
+			await this.active.session.setReasoning(reasoning);
+			this.active.state.reasoning = this.active.session.reasoning;
+			return { kind: "none" };
+		} catch (error) {
+			return transitionFailure("Failed to change thinking effort", error);
+		} finally {
+			this.transitionActive = false;
+		}
+	}
+
 	async listSessions(): Promise<readonly CommandSessionListItem[]> {
 		return (await this.options.manager.list()).map((session) => ({
 			id: session.id,
@@ -601,6 +633,7 @@ function buildBundle(session: TuiControllerSession): ActiveBundle {
 		sessionId: session.metadata.id,
 		model: session.model,
 		cwd: session.metadata.cwd,
+		reasoning: session.reasoning,
 	});
 	state.queuedCount = session.queuedMessages.count;
 	const adapter = new TuiEventAdapter(state);

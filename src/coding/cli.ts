@@ -7,6 +7,11 @@ import type { SessionModel } from "../agent/session/types.ts";
 import type { CodexProviderConfig } from "../ai/codex_provider.ts";
 import type { OpenAICompatibleConfig } from "../ai/openai_compatible_provider.ts";
 import type { ModelProvider } from "../ai/provider_protocol.ts";
+import {
+	isReasoningLevel,
+	REASONING_LEVELS,
+	type ReasoningLevel,
+} from "../ai/types.ts";
 import { FileCredentialStore } from "./auth-store.ts";
 import { runPrintMode } from "./modes/print-mode.ts";
 import { isPrintOutputMode, type PrintOutputMode } from "./modes/types.ts";
@@ -34,8 +39,8 @@ import {
 import { runInteractiveMode } from "./tui/run.ts";
 
 export const USAGE = `Usage:
-  areeb [--provider <provider>] [--model <model>] [--resume <session-id>] [--trust-project]
-  areeb -p <prompt> [--provider <provider>] [--model <model>] [--output <mode>] [--resume <session-id>] [--trust-project]
+  areeb [--provider <provider>] [--model <model>] [--effort <level>] [--resume <session-id>] [--trust-project]
+  areeb -p <prompt> [--provider <provider>] [--model <model>] [--effort <level>] [--output <mode>] [--resume <session-id>] [--trust-project]
   areeb sessions
   areeb providers
   areeb setup --provider <provider> [--base-url <url>] [--models <model,...>] [--default-model <model>] [--api-key-env <name>] [--timeout-seconds <seconds>] [--max-retries <count>] [--max-retry-delay-seconds <seconds>] [--set-default]
@@ -45,6 +50,7 @@ Options:
       --resume <session-id>  Resume an indexed session by exact UUID
       --provider <provider>  Select an exact configured provider
       --model <model>        Select an exact configured model
+      --effort <level>       Thinking effort: off, low, medium, high, xhigh, or max
       --output <mode>        Output mode: text, json, or transcript (default: text)
       --trust-project        Load project-controlled resources and instructions
   -h, --help                 Show this help
@@ -84,6 +90,7 @@ export interface PromptCliCommand {
 	readonly prompt: string;
 	readonly provider?: string;
 	readonly model?: string;
+	readonly effort?: ReasoningLevel;
 	readonly resumeId?: string;
 	readonly output: PrintOutputMode;
 	readonly trustProjectResources: boolean;
@@ -93,6 +100,7 @@ export interface InteractiveCliCommand {
 	readonly kind: "interactive";
 	readonly provider?: string;
 	readonly model?: string;
+	readonly effort?: ReasoningLevel;
 	readonly resumeId?: string;
 	readonly trustProjectResources: boolean;
 }
@@ -110,6 +118,7 @@ interface ParsedCliValues {
 	readonly resume?: string;
 	readonly provider?: string;
 	readonly model?: string;
+	readonly effort?: string;
 	readonly output?: string;
 	readonly "trust-project"?: boolean;
 	readonly "base-url"?: string;
@@ -132,6 +141,7 @@ export function parseCli(args: string[]): CliCommand {
 			resume: { type: "string" },
 			provider: { type: "string" },
 			model: { type: "string" },
+			effort: { type: "string" },
 			output: { type: "string" },
 			"trust-project": { type: "boolean" },
 			"base-url": { type: "string" },
@@ -173,7 +183,15 @@ export function parseCli(args: string[]): CliCommand {
 	}
 	assertOnlyOptions(
 		values,
-		["prompt", "resume", "provider", "model", "output", "trust-project"],
+		[
+			"prompt",
+			"resume",
+			"provider",
+			"model",
+			"effort",
+			"output",
+			"trust-project",
+		],
 		"session mode",
 	);
 	if (values.resume !== undefined) {
@@ -181,9 +199,16 @@ export function parseCli(args: string[]): CliCommand {
 	}
 	const provider = optionalNonempty(values.provider, "Provider");
 	const model = optionalNonempty(values.model, "Model");
+	const effort = values.effort;
+	if (effort !== undefined && !isReasoningLevel(effort)) {
+		throw new Error(
+			`Invalid effort: ${effort}. Expected ${REASONING_LEVELS.join(", ")}.`,
+		);
+	}
 	const common = {
 		...(provider === undefined ? {} : { provider }),
 		...(model === undefined ? {} : { model }),
+		...(effort === undefined ? {} : { effort }),
 		...(values.resume === undefined ? {} : { resumeId: values.resume }),
 		trustProjectResources: values["trust-project"] ?? false,
 	};
@@ -422,8 +447,12 @@ async function runSessionCommand(
 	const coding = await loadSession({
 		handle: session,
 		selection: initialSelection,
-		reasoning: "off",
+		reasoning:
+			command.resumeId === undefined ? (command.effort ?? "off") : "off",
 	});
+	if (command.resumeId !== undefined && command.effort !== undefined) {
+		await coding.setReasoning(command.effort);
+	}
 
 	if (command.kind === "prompt") {
 		return (runtime.runPrint ?? runPrintMode)(coding, command.prompt, {

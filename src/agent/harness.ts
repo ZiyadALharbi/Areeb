@@ -1,9 +1,11 @@
 import { EventStream } from "../ai/event-stream.ts";
 import type {
 	AssistantMessage,
+	ReasoningLevel,
 	ToolResultMessage,
 	UserMessage,
 } from "../ai/types.ts";
+import { isReasoningLevel } from "../ai/types.ts";
 import { runAgentLoop, runAgentLoopContinue } from "./agent_loop.ts";
 import type {
 	AgentContext,
@@ -42,7 +44,7 @@ export class AgentHarness {
 	private currentSystemPrompt: string;
 	private readonly tools: AgentTool[];
 	private readonly messageConverter: AgentHarnessConfig["messageConverter"];
-	private readonly streamOptions: AgentHarnessStreamOptions;
+	private streamOptions: AgentHarnessStreamOptions;
 	private readonly maxTurns: number | undefined;
 	private readonly steeringMode: QueueMode;
 	private readonly followUpMode: QueueMode;
@@ -212,6 +214,14 @@ export class AgentHarness {
 	replaceSystemPrompt(systemPrompt: string): void {
 		this.ensureIdle("replace the system prompt");
 		this.currentSystemPrompt = systemPrompt;
+	}
+
+	setReasoning(reasoning: ReasoningLevel): void {
+		this.ensureIdle("change reasoning effort");
+		if (!isReasoningLevel(reasoning)) {
+			throw new Error(`Invalid reasoning level: ${String(reasoning)}`);
+		}
+		this.streamOptions = { ...this.streamOptions, reasoning };
 	}
 
 	/**

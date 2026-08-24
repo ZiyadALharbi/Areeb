@@ -49,7 +49,7 @@ describe("provider settings parsing and resolution", () => {
 			version: 1,
 			defaultProvider: "openai",
 		});
-		expect(settings.providers.openai).toEqual({
+		expect(settings.providers.openai).toMatchObject({
 			id: "openai",
 			type: "openai-compatible",
 			builtIn: true,
@@ -60,6 +60,7 @@ describe("provider settings parsing and resolution", () => {
 			timeoutSeconds: 2.5,
 			maxRetries: 0,
 			maxRetryDelaySeconds: 0,
+			compat: { thinkingLevelMap: { off: "none" } },
 		});
 		expect(Object.isFrozen(settings)).toBe(true);
 		expect(Object.isFrozen(settings.providers.openai?.models)).toBe(true);
@@ -88,6 +89,54 @@ describe("provider settings parsing and resolution", () => {
 			baseUrl: "https://gateway.example/v1",
 			apiKey: "secret",
 			retry: { maxRetries: 0, maxRetryDelayMs: 0 },
+		});
+	});
+
+	test("normalizes snake-case thinking compatibility and forwards it to the adapter", () => {
+		const settings = parseProviderSettings(
+			{
+				version: 1,
+				default_provider: "local",
+				providers: {
+					local: {
+						type: "openai-compatible",
+						base_url: "https://api.example/v1",
+						models: ["reasoning-model"],
+						default_model: "reasoning-model",
+						thinking_format: "zai",
+						supports_reasoning_effort: true,
+						thinking_level_map: {
+							off: null,
+							low: "high",
+							max: "max",
+						},
+					},
+				},
+			},
+			{ path: "/tmp/providers.json", env: {} },
+		);
+		expect(settings.providers.local?.compat).toEqual({
+			thinkingFormat: "zai",
+			supportsReasoningEffort: true,
+			thinkingLevelMap: { off: null, low: "high", max: "max" },
+		});
+
+		let adapterConfig: OpenAICompatibleConfig | undefined;
+		createProviderRuntime(
+			settings,
+			{ provider: "local", model: "reasoning-model" },
+			{
+				env: {},
+				createProvider(config) {
+					adapterConfig = config;
+					return new FakeProvider([], { providerId: "local" });
+				},
+			},
+		);
+		expect(adapterConfig?.compat).toEqual({
+			thinkingFormat: "zai",
+			supportsReasoningEffort: true,
+			thinkingLevelMap: { off: null, low: "high", max: "max" },
 		});
 	});
 
@@ -145,6 +194,41 @@ describe("provider settings parsing and resolution", () => {
 					providers: { openai: { api_key: "secret" } },
 				},
 				"$.providers.openai.api_key",
+			],
+			[
+				{
+					version: 1,
+					providers: { local: { thinking_format: "qwen" } },
+				},
+				"$.providers.local.thinking_format",
+			],
+			[
+				{
+					version: 1,
+					providers: { local: { supports_reasoning_effort: "true" } },
+				},
+				"$.providers.local.supports_reasoning_effort",
+			],
+			[
+				{
+					version: 1,
+					providers: { local: { thinking_level_map: { minimal: "low" } } },
+				},
+				"$.providers.local.thinking_level_map.minimal",
+			],
+			[
+				{
+					version: 1,
+					providers: { local: { thinking_level_map: { high: "" } } },
+				},
+				"$.providers.local.thinking_level_map.high",
+			],
+			[
+				{
+					version: 1,
+					providers: { local: { thinkingFormat: "zai" } },
+				},
+				"$.providers.local.thinkingFormat",
 			],
 		] as const) {
 			expect(() => parseProviderSettings(document, { path, env: {} })).toThrow(
@@ -251,6 +335,15 @@ describe("provider settings persistence", () => {
 			timeoutSeconds: 120,
 		});
 		const filePath = join(userRoot, "providers.json");
+		const configured = JSON.parse(await readFile(filePath, "utf8")) as {
+			providers: Record<string, Record<string, unknown>>;
+		};
+		Object.assign(configured.providers.local ?? {}, {
+			thinking_format: "zai",
+			supports_reasoning_effort: true,
+			thinking_level_map: { off: null, high: "max" },
+		});
+		await writeFile(filePath, `${JSON.stringify(configured)}\n`, "utf8");
 		const before = await readFile(filePath, "utf8");
 
 		await expect(
@@ -276,9 +369,23 @@ describe("provider settings persistence", () => {
 			models: ["llama"],
 			defaultModel: "llama",
 			timeoutSeconds: 120,
+			compat: {
+				thinkingFormat: "zai",
+				supportsReasoningEffort: true,
+				thinkingLevelMap: { off: null, high: "max" },
+			},
 		});
 		expect(updated.defaultProvider).toBe("local");
 		expect(updated.defaultModel).toBe("llama");
+		expect(JSON.parse(await readFile(filePath, "utf8"))).toMatchObject({
+			providers: {
+				local: {
+					thinking_format: "zai",
+					supports_reasoning_effort: true,
+					thinking_level_map: { off: null, high: "max" },
+				},
+			},
+		});
 	});
 
 	test("persists a credential-backed default without changing provider setup", async () => {

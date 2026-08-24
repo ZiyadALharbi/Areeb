@@ -233,6 +233,7 @@ describe("default slash commands", () => {
 			"hotkeys",
 			"resume",
 			"model",
+			"effort",
 			"login",
 			"logout",
 			"reload",
@@ -246,6 +247,42 @@ describe("default slash commands", () => {
 		expect(commands.find((entry) => entry.name === "new")?.searchTerms).toEqual(
 			["clear"],
 		);
+	});
+
+	test("opens the effort picker and validates exact canonical levels", async () => {
+		const registry = createDefaultCommandRegistry();
+		const commandContext = context(["tui"]);
+
+		expect(await registry.dispatch("/effort", commandContext)).toEqual({
+			handled: true,
+			outcome: { kind: "effort-picker" },
+		});
+		for (const effort of [
+			"off",
+			"low",
+			"medium",
+			"high",
+			"xhigh",
+			"max",
+		] as const) {
+			expect(
+				await registry.dispatch(`/effort ${effort}`, commandContext),
+			).toEqual({
+				handled: true,
+				outcome: { kind: "set-effort", effort },
+			});
+		}
+
+		for (const input of [
+			"/effort minimal",
+			"/effort High",
+			"/effort high extra",
+		]) {
+			expect(await registry.dispatch(input, commandContext)).toMatchObject({
+				handled: true,
+				outcome: { kind: "message", level: "error" },
+			});
+		}
 	});
 
 	test("returns provider-auth outcomes without performing auth side effects", async () => {
