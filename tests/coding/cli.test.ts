@@ -274,7 +274,10 @@ describe("CLI session persistence", () => {
 				),
 			).toBe(0);
 			expect(overridden.calls[0]?.options?.reasoning).toBe("max");
-			const finalHandle = await manager.open(record.id);
+			const finalHandle = await new CodingSessionManager({
+				cwd,
+				userRoot: explicitRoot,
+			}).open(record.id);
 			expect((await finalHandle.buildContext()).reasoning).toBe("max");
 			expect(
 				await finalHandle.findEntries({ type: "reasoning_change" }),

@@ -408,7 +408,7 @@ async function waitUntil(condition: () => boolean): Promise<void> {
 		if (condition()) {
 			return;
 		}
-		await Promise.resolve();
+		await Bun.sleep(1);
 	}
 	throw new Error("Condition did not settle");
 }
@@ -685,7 +685,12 @@ describe("runInteractiveMode", () => {
 		app.submit("first");
 		await waitUntil(() => session.promptCalls.length === 1);
 		app.submit("/effort max");
-		await waitUntil(() => session.commandCalls.includes("/effort max"));
+		await waitUntil(
+			() =>
+				session.commandCalls.includes("/effort max") &&
+				app.presentations.at(-1)?.text ===
+					"Cannot change thinking effort while the current session is running",
+		);
 		expect(session.followUpCalls).toEqual([]);
 		expect(session.promptCalls).toEqual(["first"]);
 		expect(app.presentations.at(-1)).toEqual({
