@@ -70,14 +70,16 @@ export class MessageBlock implements Component {
 			return [];
 		}
 
-		const style =
-			this.kind === "status" ? this.theme.muted : this.theme[this.kind];
-		const rail = style(MESSAGE_GLYPH);
 		const cleanText = stripTerminalSequences(this.text);
-		if (!cleanText) {
-			return [rail];
+		if (this.kind === "assistant") {
+			return this.renderAssistant(cleanText, availableWidth);
+		}
+		if (this.kind === "user") {
+			return this.renderUser(cleanText, availableWidth);
 		}
 
+		const style = this.kind === "status" ? this.theme.muted : this.theme.error;
+		const rail = style(MESSAGE_GLYPH);
 		const inset = Math.min(
 			NORMAL_INSET,
 			Math.max(0, availableWidth - visibleWidth(MESSAGE_GLYPH) - 1),
@@ -90,27 +92,50 @@ export class MessageBlock implements Component {
 
 		const contentStyle =
 			this.kind === "status" ? this.theme.muted : this.theme.primary;
-		if (this.kind === "assistant") {
-			try {
-				this.markdown.setText(cleanText);
-				const markdownLines = this.markdown.render(contentWidth);
-				if (markdownLines.length === 0) {
-					return [rail];
-				}
-				return markdownLines.flatMap((line) =>
-					wrapTextWithAnsi(line, contentWidth).map((wrapped) => {
-						const trimmed = trimTerminalLineEnd(wrapped);
-						return visibleWidth(trimmed) > 0 ? `${prefix}${trimmed}` : rail;
-					}),
-				);
-			} catch {
-				// Streaming can temporarily expose malformed Markdown. Literal text is
-				// always safe and keeps the transcript usable until the next update.
-			}
-		}
 		return wrapLiteralText(cleanText, contentWidth).map((line) =>
 			line ? `${prefix}${contentStyle(line)}` : rail,
 		);
+	}
+
+	private renderAssistant(text: string, width: number): string[] {
+		if (!text) {
+			return [""];
+		}
+		try {
+			this.markdown.setText(text);
+			const markdownLines = this.markdown.render(width);
+			if (markdownLines.length === 0) {
+				return [""];
+			}
+			return markdownLines.flatMap((line) =>
+				wrapTextWithAnsi(line, width).map(trimTerminalLineEnd),
+			);
+		} catch {
+			// Streaming can temporarily expose malformed Markdown. Literal text is
+			// always safe and keeps the transcript usable until the next update.
+			return wrapLiteralText(text, width).map((line) =>
+				this.theme.primary(line),
+			);
+		}
+	}
+
+	private renderUser(text: string, width: number): string[] {
+		const glyph = this.theme.user("›");
+		if (width === 1 || !text) {
+			return [glyph];
+		}
+		const prefix = `${glyph} `;
+		const indent = " ".repeat(visibleWidth(prefix));
+		const lines = wrapLiteralText(
+			text,
+			Math.max(1, width - visibleWidth(prefix)),
+		);
+		return lines.map((line, index) => {
+			if (line.length === 0) {
+				return index === 0 ? prefix.trimEnd() : "";
+			}
+			return `${index === 0 ? prefix : indent}${this.theme.primary(line)}`;
+		});
 	}
 }
 

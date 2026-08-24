@@ -657,7 +657,11 @@ async function applyCommandResult(
 ): Promise<void> {
 	switch (result.outcome.kind) {
 		case "message":
-			app.presentCommand(result.outcome.text, result.outcome.level);
+			app.presentCommand(
+				result.outcome.text,
+				result.outcome.level,
+				commandOverlayTitle(input),
+			);
 			return;
 		case "unavailable": {
 			const command = input.trim().split(/\s/, 1)[0] ?? "Command";
@@ -777,10 +781,7 @@ export async function copyTuiText(
 
 function presentCopyResult(app: TuiApp, result: CopyDeliveryResult): void {
 	if (result.backupSaved && result.osc52Sent) {
-		app.presentCommand(
-			`Copy sent via OSC 52 and saved to ${result.backupPath}`,
-			"info",
-		);
+		app.presentCommand("Copied", "info");
 		return;
 	}
 	if (result.backupSaved) {
@@ -794,6 +795,24 @@ function presentCopyResult(app: TuiApp, result: CopyDeliveryResult): void {
 		`${result.osc52Sent ? "OSC 52 sent, but copy recovery failed" : "Copy failed"}: could not save ${result.backupPath}${result.error === undefined ? "" : ` (${result.error})`}`,
 		"error",
 	);
+}
+
+function commandOverlayTitle(input: string): string | undefined {
+	const command = input.trim().split(/\s/, 1)[0];
+	switch (command) {
+		case "/help":
+			return "Available commands";
+		case "/session":
+			return "Session";
+		case "/resources":
+			return "Resources";
+		case "/hotkeys":
+			return "Keyboard shortcuts";
+		case "/reload":
+			return "Resources reloaded";
+		default:
+			return undefined;
+	}
 }
 
 async function writePrivateTextFile(path: string, text: string): Promise<void> {

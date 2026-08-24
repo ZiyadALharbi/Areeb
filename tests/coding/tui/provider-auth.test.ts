@@ -31,11 +31,13 @@ describe("provider auth TUI", () => {
 			"login",
 			AREEB_DARK_THEME,
 		);
-		const rendered = stripTerminalSequences(picker.render(80).join("\n"));
-		expect(rendered).toContain("Providers");
-		expect(rendered).toContain("Connect with a subscription or API key.");
-		expect(rendered).toContain("subscription");
+		const lines = picker.render(80);
+		const rendered = stripTerminalSequences(lines.join("\n"));
+		expect(rendered).toContain("ChatGPT Plus/Pro (Codex Subscription)");
+		expect(rendered).toContain("OAuth · subscription");
+		expect(rendered).toContain("API key · api key");
 		expect(rendered).toContain("connected (environment)");
+		expect(lines.join("\n")).toContain("\u001b[1m");
 	});
 
 	test("masks API keys and never renders the secret", async () => {

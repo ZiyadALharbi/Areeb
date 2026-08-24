@@ -2,6 +2,7 @@ import {
 	type AutocompleteProvider,
 	CombinedAutocompleteProvider,
 	type Component,
+	Container,
 	decodeKittyPrintable,
 	Editor,
 	Key,
@@ -10,12 +11,14 @@ import {
 	type AutocompleteItem as PiAutocompleteItem,
 	ScrollView,
 	SelectList,
+	sliceByColumn,
 	stripTerminalSequences,
 	type Terminal,
-	Text,
 	TruncatedText,
 	TuiAltScreen,
+	truncateToWidth,
 	VStack,
+	visibleWidth,
 } from "@earendil-works/pi-tui";
 import type { AuthPrompt, AuthType } from "../../ai/auth.ts";
 import { REASONING_LEVELS, type ReasoningLevel } from "../../ai/types.ts";
@@ -30,6 +33,13 @@ import {
 	type CompletionItem,
 } from "./autocomplete.ts";
 import { MessageBlock, ThinkingBlock, ToolBlock } from "./blocks.ts";
+import {
+	CommandOverlayContent,
+	OverlayFrame,
+	overlayListRows,
+	overlayMaxHeight,
+	STANDARD_OVERLAY_OPTIONS,
+} from "./overlay.ts";
 import {
 	AuthDialog,
 	ProviderPicker,
@@ -76,7 +86,11 @@ export interface TuiApp {
 	readonly tui: TuiAltScreen;
 	readonly editor: Editor;
 	refresh(state?: TuiState): void;
-	presentCommand(text: string, level: CommandNoticeLevel): void;
+	presentCommand(
+		text: string,
+		level: CommandNoticeLevel,
+		overlayTitle?: string,
+	): void;
 	clearCommandPresentation(): void;
 	dismissCommandOverlay(): boolean;
 	openCommandPalette(): boolean;
@@ -136,12 +150,13 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		primary: true,
 		scrollbar: "hidden",
 	});
-	const editor = new Editor(tui, theme.editor, { paddingX: 1 });
+	const editor = new Editor(tui, theme.editor, { paddingX: 3 });
 	editor.setAutocompleteProvider(
 		createAutocompleteProvider(options.getCompletionCatalog),
 	);
 	editor.disableSubmit = options.state?.inputMode === "locked";
-	const composer = new VStack([editor]);
+	const composerSurface = new ComposerSurface(editor, theme);
+	const composer = new VStack([composerSurface]);
 	const status = new VStack();
 	const shortcutLine = new VStack();
 	const root = new VStack(
@@ -195,38 +210,22 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		const text =
 			selectorKind === "effort"
 				? "Up/Down:move  │  Enter:select  │  Esc:close"
-				: authOverlay !== undefined || selectorKind !== undefined
-					? options.shortcuts.menu
-					: currentState?.running === true ||
-							currentState?.inputMode === "running"
-						? options.shortcuts.running
-						: options.shortcuts.idle;
+				: commandOverlay !== undefined
+					? "Up/Down:scroll  │  PgUp/PgDn:page  │  Esc:close"
+					: authOverlay !== undefined || selectorKind !== undefined
+						? options.shortcuts.menu
+						: currentState?.running === true ||
+								currentState?.inputMode === "running"
+							? options.shortcuts.running
+							: options.shortcuts.idle;
 		shortcutLine.clear();
 		shortcutLine.addChild(new TruncatedText(theme.shortcut(text)));
 	};
 
 	const renderStatus = (): void => {
 		status.clear();
-		if (notice !== undefined) {
-			const style =
-				notice.level === "error"
-					? theme.error
-					: notice.level === "warning"
-						? theme.warning
-						: theme.muted;
-			status.addChild(new TruncatedText(style(notice.text)));
-		}
-		if (currentState !== undefined) {
-			const queue = currentState.running
-				? ` · queued ${currentState.queuedCount}`
-				: "";
-			status.addChild(
-				new TruncatedText(
-					theme.muted(
-						`thinking: ${currentState.reasoning} · ${currentState.model} · ${currentState.cwd} · ${currentState.sessionId} · ${currentState.running ? "running" : currentState.inputMode}${queue}${formatLastUsage(currentState)}`,
-					),
-				),
-			);
+		if (notice !== undefined || currentState !== undefined) {
+			status.addChild(new ComposerStatusLine(currentState, notice, theme));
 		}
 	};
 
@@ -237,6 +236,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		commandOverlay.hide();
 		commandOverlay = undefined;
 		tui.setFocus(editor);
+		renderShortcuts();
 		tui.requestRender();
 		return true;
 	};
@@ -259,7 +259,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		selectorOverlay = undefined;
 		if (selectorKind === "effort") {
 			composer.clear();
-			composer.addChild(editor);
+			composer.addChild(composerSurface);
 		}
 		selectorKind = undefined;
 		selectionActive = false;
@@ -284,7 +284,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		selectorOverlay = undefined;
 		if (selectorKind === "effort") {
 			composer.clear();
-			composer.addChild(editor);
+			composer.addChild(composerSurface);
 		}
 		selectorKind = kind;
 		selectionActive = false;
@@ -325,11 +325,21 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		dismissCommandOverlay();
 		closeAuthDialog();
 		authDialog = new AuthDialog(dialogOptions, theme);
-		authOverlay = tui.showOverlay(authDialog, {
-			width: "80%",
-			maxHeight: "85%",
-			margin: 2,
-		});
+		authOverlay = tui.showOverlay(
+			new OverlayFrame(
+				authDialog,
+				{
+					title: dialogOptions.title,
+					subtitle: dialogOptions.subtitle,
+					maxHeight: () => overlayMaxHeight(options.terminal.rows),
+					scrollable: true,
+					stickToEnd: true,
+					scrollWithArrows: false,
+				},
+				theme,
+			),
+			STANDARD_OVERLAY_OPTIONS,
+		);
 		authOverlay.focus();
 		renderShortcuts();
 		tui.requestRender();
@@ -410,7 +420,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 
 		const list = new FilterableSelectList(
 			completion.items.map(toSelectItem),
-			12,
+			overlayListRows(options.terminal.rows, 12),
 			theme,
 		);
 		list.onCancel = () => {
@@ -421,11 +431,18 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 			applyPaletteSelection(editor, item.value);
 			tui.requestRender();
 		};
-		selectorOverlay = tui.showOverlay(list, {
-			width: "80%",
-			maxHeight: "70%",
-			margin: 2,
-		});
+		selectorOverlay = tui.showOverlay(
+			new OverlayFrame(
+				list,
+				{
+					title: "Commands",
+					subtitle: "Type to filter available actions",
+					maxHeight: () => overlayMaxHeight(options.terminal.rows),
+				},
+				theme,
+			),
+			STANDARD_OVERLAY_OPTIONS,
+		);
 		selectorOverlay.focus();
 		renderShortcuts();
 		tui.requestRender();
@@ -443,7 +460,11 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		tui.requestRender();
 	};
 
-	const presentCommand = (text: string, level: CommandNoticeLevel): void => {
+	const presentCommand = (
+		text: string,
+		level: CommandNoticeLevel,
+		overlayTitle = "Details",
+	): void => {
 		clearCommandPresentation();
 		const cleanText = stripTerminalSequences(text).replace(/\r\n|\r/g, "\n");
 		if (!cleanText.includes("\n")) {
@@ -463,20 +484,25 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 			return;
 		}
 
-		const style =
-			level === "error"
-				? theme.error
-				: level === "warning"
-					? theme.warning
-					: theme.primary;
 		commandOverlay = tui.showOverlay(
-			new Text(style(boundCommandText(cleanText)), 1, 1),
-			{
-				width: "80%",
-				maxHeight: "70%",
-				margin: 2,
-			},
+			new OverlayFrame(
+				new CommandOverlayContent(
+					boundCommandText(cleanText),
+					level,
+					theme,
+					overlayTitle,
+				),
+				{
+					title: overlayTitle,
+					maxHeight: () => overlayMaxHeight(options.terminal.rows),
+					scrollable: true,
+				},
+				theme,
+			),
+			STANDARD_OVERLAY_OPTIONS,
 		);
+		commandOverlay.focus();
+		renderShortcuts();
 		tui.requestRender();
 	};
 
@@ -502,7 +528,11 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 			return false;
 		}
 
-		const list = new FilterableSelectList(items, 12, theme);
+		const list = new FilterableSelectList(
+			items,
+			overlayListRows(options.terminal.rows, 12),
+			theme,
+		);
 		list.setSelectedIndex(selectedIndex);
 		list.onCancel = () => {
 			onCancel?.();
@@ -537,11 +567,18 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 				},
 			);
 		};
-		selectorOverlay = tui.showOverlay(list, {
-			width: "80%",
-			maxHeight: "70%",
-			margin: 2,
-		});
+		const presentation = pickerPresentation(kind);
+		selectorOverlay = tui.showOverlay(
+			new OverlayFrame(
+				list,
+				{
+					...presentation,
+					maxHeight: () => overlayMaxHeight(options.terminal.rows),
+				},
+				theme,
+			),
+			STANDARD_OVERLAY_OPTIONS,
+		);
 		selectorOverlay.focus();
 		renderShortcuts();
 		tui.requestRender();
@@ -683,7 +720,12 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 		dismissInlineCompletion();
 		dismissCommandOverlay();
 		const generation = beginSelector("provider");
-		const picker = new ProviderPicker(providers, mode, theme);
+		const picker = new ProviderPicker(
+			providers,
+			mode,
+			theme,
+			overlayListRows(options.terminal.rows, 8),
+		);
 		picker.onCancel = () => dismissPicker();
 		picker.onSelect = (provider) => {
 			if (selectionActive) {
@@ -713,11 +755,21 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 				},
 			);
 		};
-		selectorOverlay = tui.showOverlay(picker, {
-			width: "80%",
-			maxHeight: "80%",
-			margin: 2,
-		});
+		selectorOverlay = tui.showOverlay(
+			new OverlayFrame(
+				picker,
+				{
+					title: mode === "login" ? "Connect provider" : "Log out",
+					subtitle:
+						mode === "login"
+							? "Choose a subscription or API key"
+							: "Choose a saved credential to remove",
+					maxHeight: () => overlayMaxHeight(options.terminal.rows),
+				},
+				theme,
+			),
+			STANDARD_OVERLAY_OPTIONS,
+		);
 		selectorOverlay.focus();
 		renderShortcuts();
 		tui.requestRender();
@@ -955,6 +1007,135 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 	};
 }
 
+class ComposerSurface extends Container {
+	constructor(
+		private readonly editor: Editor,
+		private readonly theme: TuiTheme,
+	) {
+		super();
+		this.addChild(editor);
+	}
+
+	override render(width: number): string[] {
+		const availableWidth = normalizeWidth(width);
+		if (availableWidth < 12) {
+			return this.editor.render(availableWidth);
+		}
+
+		const innerWidth = availableWidth - 2;
+		const editorLines = this.editor.render(innerWidth);
+		const bottomBorderIndex = editorLines.findIndex(
+			(line, index) => index > 0 && isEditorBorderLine(line, innerWidth),
+		);
+		const body =
+			bottomBorderIndex === -1
+				? editorLines.slice(1)
+				: [
+						editorLines.slice(1, bottomBorderIndex),
+						editorLines.slice(bottomBorderIndex + 1),
+					].flat();
+		const content = body.length === 0 ? [""] : body;
+
+		return [
+			this.theme.composerBorder(`╭${"─".repeat(innerWidth)}╮`),
+			...content.map((line, index) => {
+				const prompted =
+					index === 0
+						? `${this.theme.assistant("› ")}${sliceByColumn(line, 2, innerWidth - 2, true)}`
+						: line;
+				return `${this.theme.composerBorder("│")}${fitLine(prompted, innerWidth)}${this.theme.composerBorder("│")}`;
+			}),
+			this.theme.composerBorder(`╰${"─".repeat(innerWidth)}╯`),
+		];
+	}
+}
+
+class ComposerStatusLine implements Component {
+	constructor(
+		private readonly state: TuiState | undefined,
+		private readonly notice:
+			| { readonly text: string; readonly level: CommandNoticeLevel }
+			| undefined,
+		private readonly theme: TuiTheme,
+	) {}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		const availableWidth = normalizeWidth(width);
+		if (availableWidth === 0) {
+			return [];
+		}
+		const metadata = this.renderMetadata(availableWidth);
+		const left = this.renderLeft();
+		if (left === undefined) {
+			return metadata === "" ? [] : [rightAlign(metadata, availableWidth)];
+		}
+		if (metadata === "") {
+			return [truncateToWidth(left, availableWidth, "…")];
+		}
+		if (visibleWidth(left) + visibleWidth(metadata) + 2 <= availableWidth) {
+			return [
+				`${left}${" ".repeat(
+					availableWidth - visibleWidth(left) - visibleWidth(metadata),
+				)}${metadata}`,
+			];
+		}
+		if (this.notice !== undefined) {
+			return [
+				truncateToWidth(left, availableWidth, "…"),
+				rightAlign(metadata, availableWidth),
+			];
+		}
+		return [rightAlign(metadata, availableWidth)];
+	}
+
+	private renderLeft(): string | undefined {
+		if (this.notice !== undefined) {
+			const style =
+				this.notice.level === "error"
+					? this.theme.error
+					: this.notice.level === "warning"
+						? this.theme.warning
+						: this.theme.assistant;
+			return style(this.notice.text);
+		}
+		if (this.state?.running === true) {
+			return this.theme.muted(
+				this.state.queuedCount > 0
+					? `Running · ${this.state.queuedCount} queued`
+					: "Running",
+			);
+		}
+		if (this.state?.inputMode === "locked") {
+			return this.theme.muted("Starting");
+		}
+		if (this.state?.lastUsage !== undefined) {
+			return this.theme.muted(
+				`Last · ${formatTokenCount(this.state.lastUsage.inputTokens)} in · ${formatTokenCount(this.state.lastUsage.outputTokens)} out`,
+			);
+		}
+		return undefined;
+	}
+
+	private renderMetadata(width: number): string {
+		if (this.state === undefined) {
+			return "";
+		}
+		const effort = `effort ${this.state.reasoning}`;
+		if (visibleWidth(effort) >= width) {
+			return this.theme.assistant(truncateToWidth(effort, width, "…"));
+		}
+		const separator = " · ";
+		const modelWidth = width - visibleWidth(separator) - visibleWidth(effort);
+		if (modelWidth < 4) {
+			return this.theme.assistant(effort);
+		}
+		const model = truncateToWidth(this.state.model, modelWidth, "…");
+		return `${this.theme.primary(model)}${this.theme.muted(separator)}${this.theme.assistant(effort)}`;
+	}
+}
+
 class FilterableSelectList implements Component {
 	private readonly list: SelectList;
 	private filter = "";
@@ -985,8 +1166,8 @@ class FilterableSelectList implements Component {
 		return [
 			this.theme.muted(
 				this.filter.length === 0
-					? "Filter: type to narrow"
-					: `Filter: ${this.filter}`,
+					? "Search  Type to filter"
+					: `Search  ${this.filter}`,
 			),
 			...this.list.render(width),
 		];
@@ -1015,11 +1196,51 @@ class FilterableSelectList implements Component {
 	}
 }
 
-function formatLastUsage(state: TuiState): string {
-	if (state.lastUsage === undefined) {
-		return "";
+function pickerPresentation(kind: "session" | "model" | "theme"): {
+	readonly title: string;
+	readonly subtitle: string;
+} {
+	switch (kind) {
+		case "session":
+			return {
+				title: "Sessions",
+				subtitle: "Resume a previous conversation",
+			};
+		case "model":
+			return {
+				title: "Models",
+				subtitle: "Choose the model for this session",
+			};
+		case "theme":
+			return {
+				title: "Theme",
+				subtitle: "Preview and apply an interface theme",
+			};
 	}
-	return ` · last response in ${formatTokenCount(state.lastUsage.inputTokens)} · out ${formatTokenCount(state.lastUsage.outputTokens)}`;
+}
+
+function normalizeWidth(width: number): number {
+	return Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
+}
+
+function isEditorBorderLine(line: string, width: number): boolean {
+	const plain = stripTerminalSequences(line);
+	return (
+		visibleWidth(plain) === width &&
+		(/^─+$/.test(plain) ||
+			plain.startsWith("─── ↑ ") ||
+			plain.startsWith("─── ↓ "))
+	);
+}
+
+function fitLine(line: string, width: number): string {
+	const fitted = truncateToWidth(line, width, "");
+	return `${fitted}${" ".repeat(Math.max(0, width - visibleWidth(fitted)))}`;
+}
+
+function rightAlign(line: string, width: number): string {
+	const fitted = truncateToWidth(line, width, "…");
+	return `${" ".repeat(Math.max(0, width - visibleWidth(fitted)))}${fitted}`;
 }
 
 function formatTokenCount(value: number): string {

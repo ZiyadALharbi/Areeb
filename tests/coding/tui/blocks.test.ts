@@ -16,9 +16,9 @@ describe("TUI transcript blocks", () => {
 		const status = new MessageBlock("status", "waiting", theme);
 		const tool = new ToolBlock("bash", theme);
 
-		expect(user.render(40).map(stripTerminalSequences)).toEqual(["│  hello"]);
+		expect(user.render(40).map(stripTerminalSequences)).toEqual(["› hello"]);
 		expect(assistant.render(40).map(stripTerminalSequences)).toEqual([
-			"│  welcome",
+			"welcome",
 		]);
 		expect(status.render(40).map(stripTerminalSequences)).toEqual([
 			"│  waiting",
@@ -26,7 +26,7 @@ describe("TUI transcript blocks", () => {
 		expect(tool.render(40).map(stripTerminalSequences)).toEqual(["◆  bash"]);
 	});
 
-	test("wraps every physical line within the requested width", () => {
+	test("wraps assistant text naturally within the requested width", () => {
 		const block = new MessageBlock(
 			"assistant",
 			"A long response wraps at words and keeps its semantic rail visible.",
@@ -36,9 +36,7 @@ describe("TUI transcript blocks", () => {
 
 		expect(lines.length).toBeGreaterThan(1);
 		expect(lines.every((line) => visibleWidth(line) <= 20)).toBe(true);
-		expect(
-			lines.map(stripTerminalSequences).every((line) => line.startsWith("│  ")),
-		).toBe(true);
+		expect(lines.map(stripTerminalSequences).join(" ")).not.toContain("│");
 	});
 
 	test("renders sanitized multiline thinking with an accented label and muted italic body", () => {
@@ -74,7 +72,7 @@ describe("TUI transcript blocks", () => {
 
 		expect(assistant.join("\n")).toContain("Heading");
 		expect(assistant.join("\n")).toContain("- bold and code");
-		expect(user).toEqual(["│  **bold** and `code`"]);
+		expect(user).toEqual(["› **bold** and `code`"]);
 		expect(assistant.every((line) => visibleWidth(line) <= 30)).toBe(true);
 	});
 
@@ -98,20 +96,20 @@ describe("TUI transcript blocks", () => {
 			.map(stripTerminalSequences);
 
 		expect(lines.length).toBeGreaterThan(1);
-		expect(lines.map((line) => line.slice(3)).join("")).toBe(token);
+		expect(lines.map((line) => line.slice(2)).join("")).toBe(token);
 	});
 
-	test("preserves explicit blank lines and renders empty text as one rail", () => {
+	test("preserves explicit blank lines and renders empty user text as a prompt", () => {
 		expect(
 			new MessageBlock("assistant", "first\n\nlast", theme)
 				.render(40)
 				.map(stripTerminalSequences),
-		).toEqual(["│  first", "│", "│  last"]);
+		).toEqual(["first", "", "last"]);
 		expect(
 			new MessageBlock("user", "", theme)
 				.render(40)
 				.map(stripTerminalSequences),
-		).toEqual(["│"]);
+		).toEqual(["›"]);
 	});
 
 	test("handles CJK, emoji, and combining characters by visible width", () => {

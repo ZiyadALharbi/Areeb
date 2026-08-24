@@ -236,7 +236,7 @@ describe("createTuiApp pickers", () => {
 		expect(app.editor.getText()).toBe("preserved draft");
 	});
 
-	test("renders flat filterable rows and contextual running status", () => {
+	test("renders framed filterable rows and contextual running status", () => {
 		const state = createTuiState({
 			sessionId: SESSION_ID,
 			model: "model-a",
@@ -259,10 +259,11 @@ describe("createTuiApp pickers", () => {
 		const pickerOutput = stripTerminalSequences(
 			picker?.render(100).join("\n") ?? "",
 		);
-		expect(pickerOutput).toContain("Filter: type to narrow");
+		expect(pickerOutput).toContain("Models");
+		expect(pickerOutput).toContain("Search  Type to filter");
 		expect(pickerOutput).toContain("model-a");
 		expect(pickerOutput).toContain("fake");
-		expect(pickerOutput).not.toMatch(/[┌┐└┘]/);
+		expect(pickerOutput).toMatch(/[╭╮╰╯]/);
 		expect(stripTerminalSequences(app.tui.render(100).join("\n"))).toContain(
 			"menu shortcuts",
 		);
@@ -274,7 +275,7 @@ describe("createTuiApp pickers", () => {
 		app.refresh(state);
 		const output = stripTerminalSequences(app.tui.render(100).join("\n"));
 		expect(output).toContain("running shortcuts");
-		expect(output).toContain("queued 2");
+		expect(output).toContain("2 queued");
 		expect(app.editor.disableSubmit).toBe(false);
 	});
 
@@ -340,7 +341,7 @@ describe("createTuiApp pickers", () => {
 		const app = createTuiApp(appOptions({ state }));
 		const output = stripTerminalSequences(app.tui.render(120).join("\n"));
 
-		expect(output).toContain("last response in 12.4k · out 860");
+		expect(output).toContain("Last · 12.4k in · 860 out");
 		expect(output).not.toContain("%");
 	});
 
@@ -354,17 +355,17 @@ describe("createTuiApp pickers", () => {
 		const app = createTuiApp(appOptions({ state }));
 
 		expect(stripTerminalSequences(app.tui.render(120).join("\n"))).toContain(
-			"thinking: off",
+			"model-a · effort off",
 		);
 		state.reasoning = "high";
 		app.refresh(state);
 		expect(stripTerminalSequences(app.tui.render(32).join("\n"))).toContain(
-			"thinking: high",
+			"model-a · effort high",
 		);
 		state.reasoning = "max";
 		app.refresh(state);
 		expect(stripTerminalSequences(app.tui.render(24).join("\n"))).toContain(
-			"thinking: max",
+			"model-a · effort max",
 		);
 	});
 

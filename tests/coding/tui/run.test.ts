@@ -584,6 +584,10 @@ describe("runInteractiveMode", () => {
 			expect(terminal.writes.join("\n")).not.toContain(
 				Buffer.from("private reasoning").toString("base64"),
 			);
+			expect(app.presentations).toContainEqual({
+				text: "Copied",
+				level: "info",
+			});
 
 			app.submit("/quit");
 			expect(await running).toBe(0);
