@@ -93,16 +93,13 @@ export class ProviderPicker implements Component, Focusable {
 						visibleWidth(right),
 				),
 			);
+			const type = provider.authType === "oauth" ? "Subscription" : "API key";
 			lines.push(
 				`${selected ? this.theme.assistant(prefix) : prefix}${this.theme.markdown.bold(
-					selected ? this.theme.primary(left) : this.theme.muted(left),
+					this.theme.primary(left),
 				)}${padding}${right}`,
 			);
-			lines.push(
-				this.theme.muted(
-					`  ${provider.authType === "oauth" ? "OAuth" : "API key"} · ${provider.authLabel}`,
-				),
-			);
+			lines.push(`  ${this.theme.muted(type)}`);
 		}
 		if (filtered.length > this.maxVisible) {
 			lines.push(
