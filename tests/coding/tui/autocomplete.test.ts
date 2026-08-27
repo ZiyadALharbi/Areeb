@@ -82,7 +82,7 @@ describe("buildCompletionState", () => {
 
 	test("ranks exact names, aliases, fuzzy matches, and search terms", () => {
 		const commands = [
-			command("session", { aliases: ["status"] }),
+			command("session", { aliases: ["info"] }),
 			command("new", { searchTerms: ["clear"] }),
 			command("resources"),
 		];
@@ -91,7 +91,7 @@ describe("buildCompletionState", () => {
 			"/session",
 			"/resources",
 		]);
-		expect(values(complete("/status", { commands })?.items ?? [])[0]).toBe(
+		expect(values(complete("/info", { commands })?.items ?? [])[0]).toBe(
 			"/session",
 		);
 		expect(values(complete("/clear", { commands })?.items ?? [])).toEqual([

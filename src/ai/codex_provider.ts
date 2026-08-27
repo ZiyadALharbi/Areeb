@@ -24,6 +24,8 @@ import type {
 export const CODEX_RESPONSES_BASE_URL =
 	"https://chatgpt.com/backend-api/codex/responses";
 
+// The catalog endpoint rejects requests that do not report a supported Codex version.
+const CODEX_CLIENT_VERSION = "0.150.1";
 const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_MAX_RETRY_DELAY_MS = 60_000;
 
@@ -967,6 +969,7 @@ function codexModelsUrl(responsesUrl: string): string {
 	const url = new URL(responsesUrl);
 	url.pathname = url.pathname.replace(/\/responses\/?$/, "/models");
 	url.search = "";
+	url.searchParams.set("client_version", CODEX_CLIENT_VERSION);
 	url.hash = "";
 	return url.toString();
 }

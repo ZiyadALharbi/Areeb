@@ -36,8 +36,8 @@ import {
 } from "./autocomplete.ts";
 import {
 	MessageBlock,
+	SPINNER_INTERVAL,
 	ThinkingBlock,
-	TOOL_SPINNER_INTERVAL,
 	ToolBlock,
 	ToolGroupBlock,
 } from "./blocks.ts";
@@ -224,17 +224,19 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 	const toolGroupsById = new Map<string, ToolGroupBlock>();
 
 	const syncToolSpinner = (state: TuiState): void => {
-		const hasActiveTool =
+		const lastStreaming = state.assistantBlocks?.at(-1);
+		const hasActiveSpinner =
 			state.running &&
-			state.items.some(
+			(state.items.some(
 				(item) => item.role === "tool" && item.isError === undefined,
-			);
-		if (hasActiveTool && toolSpinnerTimer === undefined) {
+			) ||
+				lastStreaming?.role === "thinking");
+		if (hasActiveSpinner && toolSpinnerTimer === undefined) {
 			toolSpinnerTimer = setInterval(
 				() => tui.requestRender(),
-				TOOL_SPINNER_INTERVAL,
+				SPINNER_INTERVAL,
 			);
-		} else if (!hasActiveTool && toolSpinnerTimer !== undefined) {
+		} else if (!hasActiveSpinner && toolSpinnerTimer !== undefined) {
 			clearInterval(toolSpinnerTimer);
 			toolSpinnerTimer = undefined;
 		}

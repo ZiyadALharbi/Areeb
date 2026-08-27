@@ -249,7 +249,7 @@ describe("default slash commands", () => {
 			"compact",
 			"export",
 			"session",
-			"status",
+			"context",
 			"resources",
 			"hotkeys",
 			"resume",
@@ -382,7 +382,7 @@ describe("default slash commands", () => {
 		expect(help.outcome.text).toContain(
 			"/resources — Show loaded resources and discovery diagnostics",
 		);
-		expect(help.outcome.text).not.toContain("/context");
+		expect(help.outcome.text).toContain("/context — Show active context usage");
 		expect(help.outcome.text).toContain(
 			"/reload — Reload local resources and project context",
 		);
@@ -619,15 +619,15 @@ Info:
 		};
 		const fullContext = context([], undefined, false, [], [], [], fullEstimate);
 
-		expect(await registry.dispatch("/status extra", fullContext)).toEqual({
+		expect(await registry.dispatch("/context extra", fullContext)).toEqual({
 			handled: true,
 			outcome: {
 				kind: "message",
 				level: "error",
-				text: "Usage: /status",
+				text: "Usage: /context",
 			},
 		});
-		expect(await registry.dispatch("/status", fullContext)).toEqual({
+		expect(await registry.dispatch("/context", fullContext)).toEqual({
 			handled: true,
 			outcome: {
 				kind: "message",
@@ -659,7 +659,7 @@ Window source: configured catalog`,
 			discoveryError: "catalog unavailable",
 		};
 		const anchorContext = context([], undefined, false, [], [], [], anchored);
-		expect(await registry.dispatch("/status", anchorContext)).toMatchObject({
+		expect(await registry.dispatch("/context", anchorContext)).toMatchObject({
 			outcome: {
 				text: `Context
 Estimated: 20,000 / 128,000 tokens (16%)

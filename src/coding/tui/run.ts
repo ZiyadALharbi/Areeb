@@ -382,7 +382,7 @@ export async function runInteractiveMode(
 			return;
 		}
 		const providers = await controller.listAuthProviders(mode === "logout");
-		const listAuthProviders = controller.listAuthProviders;
+		const listAuthProviders = controller.listAuthProviders.bind(controller);
 		if (providers.length === 0) {
 			app.presentCommand(
 				mode === "logout" ? "No saved credentials" : "No login providers",
@@ -841,7 +841,7 @@ function commandOverlayTitle(input: string): string | undefined {
 			return "Available commands";
 		case "/session":
 			return "Session";
-		case "/status":
+		case "/context":
 			return "Context";
 		case "/resources":
 			return "Resources";

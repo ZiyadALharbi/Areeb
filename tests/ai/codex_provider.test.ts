@@ -46,8 +46,13 @@ describe("CodexProvider", () => {
 		]);
 		expect(request?.method).toBe("GET");
 		expect(new URL(request?.url ?? "https://invalid").pathname).toBe(
-			"/codex/models",
+			"/backend-api/codex/models",
 		);
+		expect(
+			new URL(request?.url ?? "https://invalid").searchParams.get(
+				"client_version",
+			),
+		).toBe("0.150.1");
 		expect(request?.headers.get("authorization")).toBe("Bearer access-token");
 		expect(request?.headers.get("chatgpt-account-id")).toBe("account");
 	});
@@ -110,7 +115,10 @@ describe("CodexProvider", () => {
 					value: {
 						type: "message",
 						role: "assistant",
-						content: [{ type: "output_text", text: "I will look." }],
+						status: "completed",
+						content: [
+							{ type: "output_text", text: "I will look.", annotations: [] },
+						],
 					},
 				},
 				{

@@ -293,12 +293,12 @@ export function createDefaultCommandRegistry(): CommandRegistry {
 		},
 	});
 	registry.register({
-		name: "status",
+		name: "context",
 		description: "Show active context usage",
-		usage: "/status",
+		usage: "/context",
 		async handler(context, argumentsText) {
 			if (argumentsText.length > 0) {
-				return usageError("/status");
+				return usageError("/context");
 			}
 			return {
 				kind: "message",

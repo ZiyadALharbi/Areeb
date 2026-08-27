@@ -16,6 +16,8 @@ import type {
 import { EventStream } from "../../../src/ai/event-stream.ts";
 import type { ReasoningLevel, UserMessage } from "../../../src/ai/types.ts";
 import { createDefaultCommandRegistry } from "../../../src/coding/commands.ts";
+import type { ContextUsageEstimate } from "../../../src/coding/context-window.ts";
+import type { ProviderAuthView } from "../../../src/coding/provider-runtime.ts";
 import type { ResourceDiagnostic } from "../../../src/coding/resources.ts";
 import type { CodingSessionTuiService } from "../../../src/coding/session.ts";
 import { TuiEventAdapter } from "../../../src/coding/tui/adapter.ts";
@@ -43,6 +45,26 @@ const restoredUser: UserMessage = {
 	role: "user",
 	content: [{ type: "text", text: "restored" }],
 	timestamp: 1,
+};
+
+const EMPTY_CONTEXT_USAGE: ContextUsageEstimate = {
+	revision: 0,
+	requestShapeRevision: 0,
+	usedTokens: 0,
+	windowTokens: 128_000,
+	percent: 0,
+	mode: "full-estimate",
+	usesProviderUsage: false,
+	breakdown: {
+		mode: "full-estimate",
+		systemTokens: 0,
+		messageTokens: 0,
+		toolTokens: 0,
+		imageTokens: 0,
+		messageCount: 0,
+		toolCount: 0,
+	},
+	contextWindowSource: "fallback",
 };
 
 class CopyTerminal implements Terminal {
@@ -79,6 +101,7 @@ class ManualSession implements InteractiveController {
 	readonly model = "fake-model";
 	readonly provider = "fake";
 	readonly resourceDiagnostics: ResourceDiagnostic[] = [];
+	readonly contextUsage = EMPTY_CONTEXT_USAGE;
 	readonly completionCatalog = {
 		commands: createDefaultCommandRegistry().list(),
 		skillNames: ["review"],
@@ -214,6 +237,29 @@ class ManualSession implements InteractiveController {
 			throw new Error("Prompt has not started");
 		}
 		return this.stream;
+	}
+}
+
+class ProviderAuthSession extends ManualSession {
+	private credentialSaved = true;
+
+	async listAuthProviders(
+		savedOnly = false,
+	): Promise<readonly ProviderAuthView[]> {
+		const provider: ProviderAuthView = {
+			id: "openai",
+			displayName: "OpenAI",
+			authType: "api_key",
+			authLabel: "api key",
+			status: this.credentialSaved ? "connected" : "not connected",
+			stored: this.credentialSaved,
+		};
+		return savedOnly && !provider.stored ? [] : [provider];
+	}
+
+	async logout(): Promise<boolean> {
+		this.credentialSaved = false;
+		return true;
 	}
 }
 
@@ -420,6 +466,46 @@ async function waitUntil(condition: () => boolean): Promise<void> {
 }
 
 describe("runInteractiveMode", () => {
+	test("preserves the controller receiver after a provider-picker logout", async () => {
+		const session = new ProviderAuthSession();
+		session.commandHandler = async (input) =>
+			input === "/logout"
+				? { handled: true, outcome: { kind: "logout-picker" } }
+				: { handled: true, outcome: { kind: "quit" } };
+		const app = createAppController();
+		let selectProvider:
+			| ((provider: ProviderAuthView) => Promise<boolean>)
+			| undefined;
+		const running = runInteractiveMode(session, {
+			createApp(options) {
+				return {
+					...app.createApp(options),
+					openProviderPicker(_mode, _providers, onSelect) {
+						selectProvider = onSelect;
+						return true;
+					},
+				};
+			},
+			theme: AREEB_DARK_THEME,
+		});
+
+		app.submit("/logout");
+		await waitUntil(() => selectProvider !== undefined);
+		const provider = (await session.listAuthProviders(true))[0];
+		if (provider === undefined || selectProvider === undefined) {
+			throw new Error("Logout provider picker did not open");
+		}
+		expect(await selectProvider(provider)).toBe(true);
+		expect(app.presentations).toContainEqual({
+			text: "Logged out of OpenAI",
+			level: "info",
+		});
+
+		await waitUntil(() => session.state.inputMode === "idle");
+		app.submit("/quit");
+		expect(await running).toBe(0);
+	});
+
 	test("opens the inline effort picker for an idle effort command", async () => {
 		const session = new ManualSession();
 		session.commandHandler = async (input) => {

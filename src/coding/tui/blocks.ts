@@ -6,7 +6,6 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import cliSpinners from "cli-spinners";
 import type { TuiTheme } from "./theme.ts";
 
 const MESSAGE_GLYPH = "│";
@@ -16,9 +15,9 @@ const USER_PADDING = 2;
 const TOOL_PREVIEW_MAX_LINES = 16;
 const DETAIL_INSET = 2;
 const HIDDEN_CODE_FENCE = "\u{e000}";
-const TOOL_SPINNER = cliSpinners.toggle4;
+const STATUS_SEPARATOR = " · ";
 
-const THINKING_SPINNER_FRAMES = Object.freeze([
+const SPINNER_FRAMES = Object.freeze([
 	"⠋",
 	"⠙",
 	"⠹",
@@ -31,7 +30,7 @@ const THINKING_SPINNER_FRAMES = Object.freeze([
 	"⠏",
 ]);
 
-export const TOOL_SPINNER_INTERVAL = TOOL_SPINNER.interval;
+export const SPINNER_INTERVAL = 80;
 
 export type MessageBlockKind = "user" | "assistant" | "status" | "error";
 
@@ -133,7 +132,7 @@ export class MessageBlock implements Component {
 		if (!text) {
 			return [""];
 		}
-		const margin = width > ASSISTANT_MARGIN * 2 ? ASSISTANT_MARGIN : 0;
+		const margin = contentMargin(width);
 		const contentWidth = width - margin * 2;
 		try {
 			this.markdown.setText(text);
@@ -145,18 +144,24 @@ export class MessageBlock implements Component {
 			if (markdownLines.length === 0) {
 				return [""];
 			}
-			return markdownLines.flatMap((line) =>
-				wrapTextWithAnsi(line, contentWidth).map((fragment) => {
-					const trimmed = trimTerminalLineEnd(fragment);
-					return trimmed ? `${" ".repeat(margin)}${trimmed}` : "";
-				}),
-			);
+			return [
+				"",
+				...markdownLines.flatMap((line) =>
+					wrapTextWithAnsi(line, contentWidth).map((fragment) => {
+						const trimmed = trimTerminalLineEnd(fragment);
+						return trimmed ? `${" ".repeat(margin)}${trimmed}` : "";
+					}),
+				),
+			];
 		} catch {
 			// Streaming can temporarily expose malformed Markdown. Literal text is
 			// always safe and keeps the transcript usable until the next update.
-			return wrapLiteralText(text, contentWidth).map((line) =>
-				line ? `${" ".repeat(margin)}${this.theme.primary(line)}` : "",
-			);
+			return [
+				"",
+				...wrapLiteralText(text, contentWidth).map((line) =>
+					line ? `${" ".repeat(margin)}${this.theme.primary(line)}` : "",
+				),
+			];
 		}
 	}
 
@@ -277,21 +282,8 @@ export class ToolGroupBlock implements Component {
 			return [];
 		}
 
-		const active = this.tools.some((tool) => tool.active === true);
-		const failed = this.tools.some((tool) => tool.isError === true);
-		const incomplete = this.tools.some((tool) => tool.isError === undefined);
-		const marker = active
-			? this.theme.assistant(toolSpinnerFrame())
-			: failed
-				? this.theme.error("●")
-				: incomplete
-					? this.theme.muted("●")
-					: this.theme.success(TOOL_SPINNER.frames[0] ?? "■");
-		const count = this.tools.length;
-		const summary = `Ran ${count} command${count === 1 ? "" : "s"}`;
-		const shortcut = `(Ctrl+O to ${this.expanded ? "Collapse" : "Expand"})`;
-		const header = `${marker} ${this.theme.primary(summary)} ${this.theme.shortcut(shortcut)}`;
-		const rendered = [truncateToWidth(header, availableWidth, "…")];
+		const header = renderToolHeader(this.tools, availableWidth, this.theme);
+		const rendered = [header];
 		if (!this.expanded) {
 			return rendered;
 		}
@@ -568,15 +560,42 @@ function stripThinkingMarkdown(text: string): string {
 		.trim();
 }
 
-function toolSpinnerFrame(): string {
-	const index =
-		Math.floor(Date.now() / TOOL_SPINNER.interval) % TOOL_SPINNER.frames.length;
-	return TOOL_SPINNER.frames[index] ?? TOOL_SPINNER.frames[0] ?? "■";
+function contentMargin(width: number): number {
+	return width > ASSISTANT_MARGIN * 2 ? ASSISTANT_MARGIN : 0;
 }
 
-function thinkingSpinnerFrame(): string {
-	const index = Math.floor(Date.now() / 80) % THINKING_SPINNER_FRAMES.length;
-	return THINKING_SPINNER_FRAMES[index] ?? THINKING_SPINNER_FRAMES[0] ?? "⠋";
+function spinnerFrame(): string {
+	const index =
+		Math.floor(Date.now() / SPINNER_INTERVAL) % SPINNER_FRAMES.length;
+	return SPINNER_FRAMES[index] ?? SPINNER_FRAMES[0] ?? "⠋";
+}
+
+function renderToolHeader(
+	tools: readonly ToolActivity[],
+	width: number,
+	theme: TuiTheme,
+): string {
+	const active = tools.some((tool) => tool.active === true);
+	const failed = tools.some((tool) => tool.isError === true);
+	const incomplete = tools.some((tool) => tool.isError === undefined);
+	const count = tools.length;
+	const noun = `command${count === 1 ? "" : "s"}`;
+	const prefix = " ".repeat(contentMargin(width));
+	if (active) {
+		return truncateToWidth(
+			`${prefix}${theme.assistant(spinnerFrame())} ${theme.assistant(`running ${count} ${noun}`)}`,
+			width,
+			"…",
+		);
+	}
+
+	const summary = theme.primary(`Ran ${count} ${noun}`);
+	const status = failed
+		? `${theme.muted(STATUS_SEPARATOR)}${theme.error("failed")}`
+		: incomplete
+			? ""
+			: `${theme.muted(STATUS_SEPARATOR)}${theme.success("success")}`;
+	return truncateToWidth(`${prefix}${summary}${status}`, width, "…");
 }
 
 function renderThinkingHeader(
@@ -586,25 +605,21 @@ function renderThinkingHeader(
 	width: number,
 	theme: TuiTheme,
 ): string {
-	const marker = active ? `${theme.assistant(thinkingSpinnerFrame())} ` : "";
-	const label = theme.assistant("Thinking...");
-	const shortcut = theme.shortcut(
-		`(Ctrl+T to ${expanded ? "Collapse" : "Expand"})`,
-	);
-	const leading = `${marker}${label}`;
-	const withoutPreview = `${leading} ${shortcut}`;
-	if (expanded || visibleWidth(withoutPreview) >= width) {
-		return truncateToWidth(withoutPreview, width, "…");
+	const prefix = " ".repeat(contentMargin(width));
+	const marker = active ? `${theme.assistant(spinnerFrame())} ` : "";
+	const label = active ? "Thinking..." : "Thought";
+	const leading = `${prefix}${marker}${theme.assistant(label)}`;
+	if (expanded || visibleWidth(leading) >= width) {
+		return truncateToWidth(leading, width, "…");
 	}
 
-	const separator = " · ";
 	const previewWidth =
-		width - visibleWidth(withoutPreview) - visibleWidth(separator);
+		width - visibleWidth(leading) - visibleWidth(STATUS_SEPARATOR);
 	if (previewWidth <= 0) {
-		return withoutPreview;
+		return leading;
 	}
 	const summaries = text.split(/\n\s*\n/);
 	const previewText = (summaries.at(-1) ?? text).replace(/\s+/g, " ").trim();
 	const preview = truncateToWidth(previewText, previewWidth, "…");
-	return `${leading}${theme.muted(`${separator}${preview}`)} ${shortcut}`;
+	return `${leading}${theme.muted(`${STATUS_SEPARATOR}${preview}`)}`;
 }

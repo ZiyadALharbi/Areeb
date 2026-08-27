@@ -15,6 +15,7 @@ describe("TUI transcript blocks", () => {
 		const user = new MessageBlock("user", "hello", theme);
 		const assistant = new MessageBlock("assistant", "welcome", theme);
 		const status = new MessageBlock("status", "waiting", theme);
+		const thinking = new ThinkingBlock("Planning the change", theme);
 		const tool = new ToolBlock("bash", theme, { isError: false });
 
 		const userLines = user.render(40).map(stripTerminalSequences);
@@ -25,13 +26,17 @@ describe("TUI transcript blocks", () => {
 		expect(userLines.every((line) => visibleWidth(line) === 40)).toBe(true);
 		expect(user.render(40).join("\n")).toContain("38;2;57;118;94");
 		expect(assistant.render(40).map(stripTerminalSequences)).toEqual([
+			"",
 			" welcome",
 		]);
 		expect(status.render(40).map(stripTerminalSequences)).toEqual([
 			"│  waiting",
 		]);
+		expect(thinking.render(40).map(stripTerminalSequences)).toEqual([
+			" Thought · Planning the change",
+		]);
 		expect(tool.render(40).map(stripTerminalSequences)).toEqual([
-			"■ Ran 1 command (Ctrl+O to Expand)",
+			" Ran 1 command · success",
 		]);
 	});
 
@@ -48,7 +53,7 @@ describe("TUI transcript blocks", () => {
 		expect(lines.map(stripTerminalSequences).join(" ")).not.toContain("│");
 	});
 
-	test("renders compact thinking with a shortcut and sanitized expanded content", () => {
+	test("renders compact thinking with sanitized expanded content", () => {
 		const rendered = new ThinkingBlock(
 			"\u001b[31m**first thought** that wraps\u001b[0m\nsecond",
 			theme,
@@ -56,8 +61,11 @@ describe("TUI transcript blocks", () => {
 		).render(18);
 		const plain = rendered.map(stripTerminalSequences);
 
-		expect(plain[0]).toStartWith("Thinking...");
+		expect(plain[0]).toStartWith(" Thought");
+		expect(plain[0]).not.toContain("Thinking...");
 		expect(plain[0]).not.toContain("●");
+		expect(plain[0]).not.toContain("Ctrl+T");
+		expect(plain[0]).not.toContain("Ctrl+O");
 		expect(plain.join("\n")).toContain("first");
 		expect(plain.join("\n")).toContain("thought");
 		expect(plain.join("\n")).toContain("wraps");
@@ -78,9 +86,21 @@ describe("TUI transcript blocks", () => {
 		const plain = rendered.map(stripTerminalSequences);
 
 		expect(plain).toEqual([
-			"Thinking... · Examining header utilities and provider integrations (Ctrl+T to Expand)",
+			" Thought · Examining header utilities and provider integrations",
 		]);
 		expect(plain[0]).not.toContain("●");
+		expect(rendered[0]).toContain("38;2;138;190;183");
+	});
+
+	test("spins while thinking and keeps the assistant color", () => {
+		const rendered = new ThinkingBlock("Inspecting files", theme, {
+			active: true,
+		}).render(60);
+		const plain = rendered.map(stripTerminalSequences);
+
+		expect(plain).toHaveLength(1);
+		expect(plain[0]).toMatch(/ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Thinking... · Inspecting files/);
+		expect(plain[0]).not.toContain("Thought");
 		expect(rendered[0]).toContain("38;2;138;190;183");
 	});
 
@@ -91,7 +111,7 @@ describe("TUI transcript blocks", () => {
 		).render(100);
 
 		expect(rendered.map(stripTerminalSequences)).toEqual([
-			"Thinking... · Checking lifecycle cleanup (Ctrl+T to Expand)",
+			" Thought · Checking lifecycle cleanup",
 		]);
 	});
 
@@ -166,7 +186,7 @@ describe("TUI transcript blocks", () => {
 			new MessageBlock("assistant", "first\n\nlast", theme)
 				.render(40)
 				.map(stripTerminalSequences),
-		).toEqual([" first", "", " last"]);
+		).toEqual(["", " first", "", " last"]);
 		const emptyUser = new MessageBlock("user", "", theme)
 			.render(40)
 			.map(stripTerminalSequences);
@@ -206,7 +226,7 @@ describe("TUI transcript blocks", () => {
 
 		expect(lines).toHaveLength(1);
 		expect(visibleWidth(lines[0] ?? "")).toBeLessThanOrEqual(12);
-		expect(stripTerminalSequences(lines[0] ?? "")).toBe("■ Ran 1 com…");
+		expect(stripTerminalSequences(lines[0] ?? "")).toBe(" Ran 1 comm…");
 	});
 
 	test("keeps tool output collapsed until expanded and bounds its lines", () => {
@@ -250,7 +270,7 @@ describe("TUI transcript blocks", () => {
 		const rendered = tool.render(30);
 
 		expect(rendered.map(stripTerminalSequences)).toEqual([
-			"● Ran 1 command (Ctrl+O to Co…",
+			" Ran 1 command · failed",
 			"  └ edit",
 			"    @@ -1 +1 @@",
 			"    - old",
@@ -300,16 +320,19 @@ describe("TUI transcript blocks", () => {
 		]);
 		const active = group.render(60).map(stripTerminalSequences);
 		expect(active).toHaveLength(1);
-		expect(active[0]).toContain("Ran 2 commands (Ctrl+O to Expand)");
-		expect(active[0]).not.toStartWith("●");
+		expect(active[0]).toMatch(/ [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] running 2 commands/);
+		expect(active[0]).not.toContain("Ran");
+		expect(active[0]).not.toContain("Ctrl+O");
+		expect(active[0]).not.toContain("Ctrl+T");
 
 		group.update([
 			{ toolName: "read", isError: false },
 			{ toolName: "edit", isError: false },
 		]);
 		expect(group.render(60).map(stripTerminalSequences)).toEqual([
-			"■ Ran 2 commands (Ctrl+O to Expand)",
+			" Ran 2 commands · success",
 		]);
+		expect(group.render(60)[0]).toContain("38;2;0;189;125");
 	});
 
 	test("strips injected terminal styling and adds no labels, boxes, or backgrounds", () => {
