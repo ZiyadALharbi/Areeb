@@ -769,8 +769,6 @@ export class CodingSession<
 				contextFileCount: this.resourceSnapshot.contextFiles.length,
 				diagnostics: this.resourceDiagnostics,
 			}),
-			getContextFiles: () =>
-				this.resourceSnapshot.contextFiles.map((file) => file.path),
 			reloadResources: () => this.reloadResources(),
 			getSessionInfo: async () => {
 				const name = await this.session.getName();

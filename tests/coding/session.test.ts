@@ -1420,9 +1420,6 @@ Resource diagnostics: 0 warnings, 0 info`);
 				{ path: contextPath, content: "Updated global context." },
 				{ path: "caller://fixed", content: "Original caller context." },
 			]);
-			expect(await coding.handleCommand("/context")).toMatchObject({
-				outcome: { text: `${contextPath}\ncaller://fixed` },
-			});
 			expect(coding.systemPrompt).toContain("Updated global context.");
 			expect(coding.systemPrompt).toContain("Original caller context.");
 			expect(coding.systemPrompt).not.toContain("Mutated by caller.");

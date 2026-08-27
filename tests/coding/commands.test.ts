@@ -39,7 +39,6 @@ function context(
 		contextFileCount: 0,
 		diagnostics: [],
 	},
-	contextFiles: readonly string[] = [],
 	systemPromptChanged = false,
 	sessions: readonly CommandSessionListItem[] | Error = [],
 	models: readonly CommandModelListItem[] = [],
@@ -58,7 +57,6 @@ function context(
 		listModels: () => models,
 		listAuthProviders: () => providers,
 		getResourceSummary: () => resourceSummary,
-		getContextFiles: () => [...contextFiles],
 		getContextUsage: () => contextUsage,
 		async reloadResources() {
 			return { ...resourceSummary, systemPromptChanged };
@@ -252,7 +250,6 @@ describe("default slash commands", () => {
 			"export",
 			"session",
 			"status",
-			"context",
 			"resources",
 			"hotkeys",
 			"resume",
@@ -329,7 +326,6 @@ describe("default slash commands", () => {
 		const commandContext = context(
 			["provider-auth"],
 			undefined,
-			[],
 			false,
 			[],
 			[],
@@ -386,9 +382,7 @@ describe("default slash commands", () => {
 		expect(help.outcome.text).toContain(
 			"/resources — Show loaded resources and discovery diagnostics",
 		);
-		expect(help.outcome.text).toContain(
-			"/context — Show active project context files",
-		);
+		expect(help.outcome.text).not.toContain("/context");
 		expect(help.outcome.text).toContain(
 			"/reload — Reload local resources and project context",
 		);
@@ -510,7 +504,6 @@ describe("default slash commands", () => {
 		const commandContext = context(
 			["session-controller", "model-selection"],
 			undefined,
-			[],
 			false,
 			[],
 			models,
@@ -624,16 +617,7 @@ Info:
 			},
 			contextWindowSource: "configured",
 		};
-		const fullContext = context(
-			[],
-			undefined,
-			[],
-			false,
-			[],
-			[],
-			[],
-			fullEstimate,
-		);
+		const fullContext = context([], undefined, false, [], [], [], fullEstimate);
 
 		expect(await registry.dispatch("/status extra", fullContext)).toEqual({
 			handled: true,
@@ -674,16 +658,7 @@ Window source: configured catalog`,
 			effectiveContextWindowPercent: 90,
 			discoveryError: "catalog unavailable",
 		};
-		const anchorContext = context(
-			[],
-			undefined,
-			[],
-			false,
-			[],
-			[],
-			[],
-			anchored,
-		);
+		const anchorContext = context([], undefined, false, [], [], [], anchored);
 		expect(await registry.dispatch("/status", anchorContext)).toMatchObject({
 			outcome: {
 				text: `Context
@@ -698,7 +673,7 @@ Catalog discovery: catalog unavailable`,
 		});
 	});
 
-	test("lists context paths and reloads resources with argument validation", async () => {
+	test("reloads resources with argument validation", async () => {
 		const registry = createDefaultCommandRegistry();
 		const summary: CommandResourceSummary = {
 			skillCount: 2,
@@ -706,32 +681,8 @@ Catalog discovery: catalog unavailable`,
 			contextFileCount: 2,
 			diagnostics: [],
 		};
-		const commandContext = context(
-			[],
-			summary,
-			["/workspace/AGENTS.md", "/workspace/.areeb/AGENTS.md"],
-			true,
-		);
+		const commandContext = context([], summary, true);
 
-		expect(await registry.dispatch("/context extra", commandContext)).toEqual({
-			handled: true,
-			outcome: {
-				kind: "message",
-				level: "error",
-				text: "Usage: /context",
-			},
-		});
-		expect(await registry.dispatch("/context", commandContext)).toEqual({
-			handled: true,
-			outcome: {
-				kind: "message",
-				level: "info",
-				text: "/workspace/AGENTS.md\n/workspace/.areeb/AGENTS.md",
-			},
-		});
-		expect(await registry.dispatch("/context", context())).toMatchObject({
-			outcome: { text: "No project context files loaded" },
-		});
 		expect(await registry.dispatch("/reload extra", commandContext)).toEqual({
 			handled: true,
 			outcome: {

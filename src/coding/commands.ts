@@ -74,7 +74,6 @@ export interface CommandContext {
 	readonly getSessionInfo: () => Promise<CommandSessionInfo>;
 	readonly getContextUsage: () => ContextUsageEstimate;
 	readonly getResourceSummary: () => CommandResourceSummary;
-	readonly getContextFiles: () => readonly string[];
 	readonly reloadResources: () => Promise<CommandResourceReloadResult>;
 	readonly getSessionName: () => Promise<string | undefined>;
 	readonly setSessionName: (name: string) => Promise<void>;
@@ -305,25 +304,6 @@ export function createDefaultCommandRegistry(): CommandRegistry {
 				kind: "message",
 				level: "info",
 				text: formatContextStatus(context.getContextUsage()),
-			};
-		},
-	});
-	registry.register({
-		name: "context",
-		description: "Show active project context files",
-		usage: "/context",
-		async handler(context, argumentsText) {
-			if (argumentsText.length > 0) {
-				return usageError("/context");
-			}
-			const files = context.getContextFiles();
-			return {
-				kind: "message",
-				level: "info",
-				text:
-					files.length === 0
-						? "No project context files loaded"
-						: files.join("\n"),
 			};
 		},
 	});
