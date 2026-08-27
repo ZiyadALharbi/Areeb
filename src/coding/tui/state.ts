@@ -7,6 +7,13 @@ export interface StreamingAssistantBlock {
 	readonly text: string;
 }
 
+export interface TuiEditDetails {
+	readonly path: string;
+	readonly diff: string;
+	readonly patch: string;
+	readonly firstChangedLine?: number;
+}
+
 export type ChatItem =
 	| { readonly role: "user"; readonly text: string }
 	| { readonly role: "assistant"; readonly text: string }
@@ -17,7 +24,7 @@ export type ChatItem =
 			readonly toolName: string;
 			readonly toolCallId: string;
 			readonly preview?: string;
-			readonly patch?: string;
+			readonly edit?: TuiEditDetails;
 			readonly isError?: boolean;
 	  }
 	| { readonly role: "status"; readonly text: string }

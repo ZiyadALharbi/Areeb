@@ -1004,7 +1004,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 						toolName: tool.toolName,
 						active: state.running && tool.isError === undefined,
 						preview: tool.preview,
-						patch: tool.patch,
+						edit: tool.edit,
 						isError: tool.isError,
 					})),
 				);
@@ -1654,7 +1654,7 @@ function createChatItemBlock(item: ChatItem, theme: TuiTheme): Component {
 		case "tool":
 			return new ToolBlock(item.toolName, theme, {
 				preview: item.preview,
-				patch: item.patch,
+				edit: item.edit,
 				isError: item.isError,
 			});
 	}

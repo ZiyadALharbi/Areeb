@@ -343,7 +343,8 @@ export function createBashToolDefinition(
 	return {
 		name: "bash",
 		description: `Execute a bash command in the configured working directory. Combined stdout/stderr is limited to the last ${maxLines} lines or ${formatSize(maxBytes)}, with full truncated output saved to a temp file.`,
-		promptSnippet: "Run shell commands",
+		promptSnippet:
+			"Run commands, tests, and operations not covered by file tools",
 		promptGuidelines: [
 			"Use bash for commands, tests, and filesystem operations not covered by a more specific tool.",
 			"Set timeout only when a command needs an explicit upper bound.",

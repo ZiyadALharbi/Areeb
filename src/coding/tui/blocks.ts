@@ -6,6 +6,7 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import type { TuiEditDetails } from "./state.ts";
 import type { TuiTheme } from "./theme.ts";
 
 const MESSAGE_GLYPH = "│";
@@ -218,7 +219,7 @@ export interface ToolBlockOptions {
 	readonly expanded?: boolean;
 	readonly active?: boolean;
 	readonly preview?: string;
-	readonly patch?: string;
+	readonly edit?: TuiEditDetails;
 	readonly isError?: boolean;
 }
 
@@ -297,22 +298,38 @@ export class ToolGroupBlock implements Component {
 			const branch = index === this.tools.length - 1 ? "└" : "├";
 			const cleanName =
 				stripTerminalSequences(tool.toolName).split(/\r\n|\r|\n/, 1)[0] ?? "";
-			rendered.push(
-				truncateToWidth(
-					`${" ".repeat(DETAIL_INSET)}${this.theme.tool(branch)} ${this.theme.primary(cleanName)}`,
-					availableWidth,
-					"…",
-				),
-			);
-			const detail = tool.patch ?? tool.preview;
-			if (detail === undefined || detail.length === 0) {
+			if (tool.edit === undefined) {
+				rendered.push(
+					truncateToWidth(
+						`${" ".repeat(DETAIL_INSET)}${this.theme.tool(branch)} ${this.theme.primary(cleanName)}`,
+						availableWidth,
+						"…",
+					),
+				);
+			} else {
+				const path = sanitizePath(tool.edit.path);
+				rendered.push(
+					truncateToWidth(
+						`${" ".repeat(contentMargin(availableWidth))}${this.theme.tool("◆")} ${this.theme.primary("Edit")} ${this.theme.warning(path)}`,
+						availableWidth,
+						"…",
+					),
+					"",
+				);
+			}
+			const cleanPreview =
+				tool.preview === undefined
+					? undefined
+					: stripTerminalSequences(tool.preview);
+			if (tool.edit === undefined && !cleanPreview) {
 				continue;
 			}
-			const cleanDetail = stripTerminalSequences(detail);
 			const detailLines = limitPhysicalLines(
-				tool.patch === undefined
-					? wrapLiteralText(cleanDetail, detailWidth).map((text) => ({ text }))
-					: wrapDiffText(cleanDetail, detailWidth, this.theme),
+				tool.edit === undefined
+					? wrapLiteralText(cleanPreview ?? "", detailWidth).map((text) => ({
+							text,
+						}))
+					: wrapDiffLines(formatEditDiff(tool.edit), detailWidth, this.theme),
 				detailWidth,
 			);
 			const prefix = " ".repeat(detailPrefixWidth);
@@ -438,29 +455,87 @@ interface StyledLine {
 	readonly style?: TuiTheme["primary"];
 }
 
-function wrapDiffText(
-	text: string,
+function wrapDiffLines(
+	logicalLines: readonly DiffLine[],
 	width: number,
 	theme: TuiTheme,
 ): StyledLine[] {
 	const lines: StyledLine[] = [];
-	for (const logicalLine of formatDiffLines(text)) {
-		const style = diffStyle(logicalLine.kind, theme);
-		const wrapped = wrapLiteralText(logicalLine.text, width);
-		lines.push(...wrapped.map((fragment) => ({ text: fragment, style })));
+	const numberWidth = logicalLines.reduce(
+		(maximum, line) =>
+			Math.max(maximum, line.lineNumber?.toString().length ?? 0),
+		0,
+	);
+	const showNumbers = numberWidth > 0 && width > numberWidth + 2;
+	const contentWidth = showNumbers ? width - numberWidth - 2 : width;
+	for (const logicalLine of logicalLines) {
+		const contentStyle = diffStyle(logicalLine.kind, theme);
+		const numberStyle =
+			logicalLine.kind === "added"
+				? theme.diffAdded
+				: logicalLine.kind === "removed"
+					? theme.diffRemoved
+					: theme.diffMeta;
+		const wrapped = wrapLiteralText(logicalLine.text, contentWidth);
+		for (const [index, fragment] of wrapped.entries()) {
+			const number =
+				index === 0 && logicalLine.lineNumber !== undefined
+					? logicalLine.lineNumber.toString().padStart(numberWidth, " ")
+					: " ".repeat(numberWidth);
+			const prefix = showNumbers ? `${number}  ` : "";
+			lines.push({
+				text: `${prefix}${fragment}`,
+				style: () => `${numberStyle(prefix)}${contentStyle(fragment)}`,
+			});
+		}
 	}
 	return lines;
 }
 
-type DiffLineKind = "file" | "hunk" | "added" | "removed" | "context" | "meta";
+type DiffLineKind = "hunk" | "added" | "removed" | "context" | "meta";
 
 interface DiffLine {
 	readonly kind: DiffLineKind;
 	readonly text: string;
+	readonly lineNumber?: number;
 }
 
-function formatDiffLines(text: string): DiffLine[] {
+function formatEditDiff(edit: TuiEditDetails): DiffLine[] {
+	const displayLines = formatDisplayDiff(stripTerminalSequences(edit.diff));
+	return displayLines.length > 0
+		? displayLines
+		: formatUnifiedDiff(stripTerminalSequences(edit.patch));
+}
+
+function formatDisplayDiff(text: string): DiffLine[] {
+	if (text.length === 0) {
+		return [];
+	}
 	const lines: DiffLine[] = [];
+	for (const line of text.split(/\r\n|\r|\n/)) {
+		const match = /^([ +-])(\s*\d+) (.*)$/.exec(line);
+		if (match === null) {
+			lines.push({ kind: "meta", text: line.trimStart() });
+			continue;
+		}
+		const marker = match[1];
+		const lineNumber = Number(match[2]);
+		const content = match[3] ?? "";
+		if (marker === "+") {
+			lines.push({ kind: "added", text: `+ ${content}`, lineNumber });
+		} else if (marker === "-") {
+			lines.push({ kind: "removed", text: `- ${content}`, lineNumber });
+		} else {
+			lines.push({ kind: "context", text: `  ${content}`, lineNumber });
+		}
+	}
+	return lines;
+}
+
+function formatUnifiedDiff(text: string): DiffLine[] {
+	const lines: DiffLine[] = [];
+	let oldLine: number | undefined;
+	let newLine: number | undefined;
 	for (const line of text.split(/\r\n|\r|\n/)) {
 		if (
 			line.startsWith("diff ") ||
@@ -470,20 +545,45 @@ function formatDiffLines(text: string): DiffLine[] {
 			continue;
 		}
 		if (line.startsWith("+++ ")) {
-			const path = line.slice(4).replace(/^b\//, "");
-			if (path !== "/dev/null") {
-				lines.push({ kind: "file", text: path });
-			}
 			continue;
 		}
 		if (line.startsWith("@@")) {
+			const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+			if (hunk !== null) {
+				oldLine = Number(hunk[1]);
+				newLine = Number(hunk[2]);
+			}
 			lines.push({ kind: "hunk", text: line });
 		} else if (line.startsWith("+")) {
-			lines.push({ kind: "added", text: `+ ${line.slice(1)}` });
+			lines.push({
+				kind: "added",
+				text: `+ ${line.slice(1)}`,
+				...(newLine === undefined ? {} : { lineNumber: newLine }),
+			});
+			if (newLine !== undefined) {
+				newLine += 1;
+			}
 		} else if (line.startsWith("-")) {
-			lines.push({ kind: "removed", text: `- ${line.slice(1)}` });
+			lines.push({
+				kind: "removed",
+				text: `- ${line.slice(1)}`,
+				...(oldLine === undefined ? {} : { lineNumber: oldLine }),
+			});
+			if (oldLine !== undefined) {
+				oldLine += 1;
+			}
 		} else if (line.startsWith(" ")) {
-			lines.push({ kind: "context", text: `  ${line.slice(1)}` });
+			lines.push({
+				kind: "context",
+				text: `  ${line.slice(1)}`,
+				...(newLine === undefined ? {} : { lineNumber: newLine }),
+			});
+			if (oldLine !== undefined) {
+				oldLine += 1;
+			}
+			if (newLine !== undefined) {
+				newLine += 1;
+			}
 		} else {
 			lines.push({ kind: "meta", text: line });
 		}
@@ -491,10 +591,12 @@ function formatDiffLines(text: string): DiffLine[] {
 	return lines;
 }
 
+function sanitizePath(path: string): string {
+	return stripTerminalSequences(path).replace(/\p{Cc}/gu, "�");
+}
+
 function diffStyle(kind: DiffLineKind, theme: TuiTheme): TuiTheme["primary"] {
 	switch (kind) {
-		case "file":
-			return (text) => theme.markdown.bold(theme.primary(text));
 		case "hunk":
 			return theme.diffHunk;
 		case "added":

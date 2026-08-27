@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { z } from "zod";
 import { buildSystemPrompt } from "../../src/coding/prompt-builder.ts";
 import type { Skill } from "../../src/coding/skills.ts";
+import { createCodingToolDefinitions } from "../../src/coding/tools/index.ts";
 import type { CodingToolDefinition } from "../../src/coding/types.ts";
 
 function tool(
@@ -68,6 +69,7 @@ Guidelines:
 - Follow the project's documented workflows, commands, and package manager
 - After changing code, run the applicable formatting, linting, type-checking, and test commands
 - Report verification accurately and only claim results from commands you actually ran
+- Summarize changed files and verification results without reproducing patches or diff blocks unless the user explicitly requests the diff
 - Request confirmation before destructive actions or decisions with materially unclear requirements
 - Show file paths clearly when working with files
 
@@ -90,11 +92,32 @@ Guidelines:
 - Follow the project's documented workflows, commands, and package manager
 - After changing code, run the applicable formatting, linting, type-checking, and test commands
 - Report verification accurately and only claim results from commands you actually ran
+- Summarize changed files and verification results without reproducing patches or diff blocks unless the user explicitly requests the diff
 - Request confirmation before destructive actions or decisions with materially unclear requirements
 - Be concise in your responses
 - Show file paths clearly when working with files
 
 Current working directory: /repo`,
+		);
+	});
+
+	test("directs existing-file changes through the structured edit flow", () => {
+		const prompt = buildSystemPrompt({
+			cwd: "/repo",
+			tools: createCodingToolDefinitions("/repo"),
+		});
+
+		expect(prompt).toContain(
+			"- edit: Modify existing text files with exact replacements and emit the canonical structured diff",
+		);
+		expect(prompt).toContain(
+			"- Use edit for changes to existing text files so Areeb receives the canonical structured diff; do not use bash or write when edit can apply the change",
+		);
+		expect(prompt).toContain(
+			"- Do not use bash to modify existing text files when edit is available; edit provides Areeb's structured diff metadata.",
+		);
+		expect(prompt).toContain(
+			"- Do not run git diff merely to show an edit or reproduce the edit patch in assistant Markdown; summarize changed files and verification instead unless the user explicitly requests the diff",
 		);
 	});
 
