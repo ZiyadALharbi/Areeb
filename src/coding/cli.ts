@@ -522,6 +522,20 @@ async function loadCodingSession(
 		...(providerRuntime.unavailableReason === undefined
 			? {}
 			: { unavailableReason: providerRuntime.unavailableReason }),
+		contextWindowTokens: providerRuntime.contextWindowTokens,
+		contextWindowSource: providerRuntime.contextWindowSource,
+		...(providerRuntime.contextWindowDiscoveryError === undefined
+			? {}
+			: {
+					contextWindowDiscoveryError:
+						providerRuntime.contextWindowDiscoveryError,
+				}),
+		...(providerRuntime.effectiveContextWindowPercent === undefined
+			? {}
+			: {
+					effectiveContextWindowPercent:
+						providerRuntime.effectiveContextWindowPercent,
+				}),
 		resourcePaths: areebPaths({
 			cwd: options.cwd,
 			...(options.userRoot === undefined ? {} : { userRoot: options.userRoot }),
@@ -556,6 +570,20 @@ async function prepareCodingSessionModelChange(
 		...(providerRuntime.unavailableReason === undefined
 			? {}
 			: { unavailableReason: providerRuntime.unavailableReason }),
+		contextWindowTokens: providerRuntime.contextWindowTokens,
+		contextWindowSource: providerRuntime.contextWindowSource,
+		...(providerRuntime.contextWindowDiscoveryError === undefined
+			? {}
+			: {
+					contextWindowDiscoveryError:
+						providerRuntime.contextWindowDiscoveryError,
+				}),
+		...(providerRuntime.effectiveContextWindowPercent === undefined
+			? {}
+			: {
+					effectiveContextWindowPercent:
+						providerRuntime.effectiveContextWindowPercent,
+				}),
 		resourcePaths: areebPaths({
 			cwd: options.cwd,
 			...(options.userRoot === undefined ? {} : { userRoot: options.userRoot }),

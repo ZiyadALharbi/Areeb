@@ -18,7 +18,9 @@ import {
 	createAssistantMessageEventStream,
 } from "./event-stream.ts";
 import type {
+	DiscoveredModelLimit,
 	ModelProvider,
+	ProviderContextProjection,
 	ProviderRetryConfig,
 	StreamOptions,
 } from "./provider_protocol.ts";
@@ -53,6 +55,7 @@ export interface OpenAICompatibleConfig {
 	readonly headers?: Readonly<Record<string, string>>;
 	readonly compat?: OpenAICompatibleCompat;
 	readonly retry?: ProviderRetryConfig;
+	readonly fetch?: typeof globalThis.fetch;
 }
 
 type SuccessfulStopReason = Extract<
@@ -92,18 +95,64 @@ export class OpenAICompatibleProvider implements ModelProvider {
 	readonly providerId: string;
 
 	private readonly client: OpenAI;
+	private readonly baseUrl: string;
+	private readonly apiKey: string;
+	private readonly headers: Readonly<Record<string, string>>;
+	private readonly fetch: typeof globalThis.fetch;
 	private readonly compat: OpenAICompatibleCompat;
 	private readonly retry: ProviderRetryConfig;
 
 	constructor(config: OpenAICompatibleConfig) {
 		this.providerId = config.providerId;
+		this.baseUrl = config.baseUrl.replace(/\/+$/, "");
+		this.apiKey = config.apiKey ?? "not-needed";
+		this.headers = { ...config.headers };
+		this.fetch = config.fetch ?? globalThis.fetch;
 		this.compat = config.compat ?? {};
 		this.retry = { ...config.retry };
 		this.client = new OpenAI({
-			apiKey: config.apiKey ?? "not-needed",
-			baseURL: config.baseUrl,
+			apiKey: this.apiKey,
+			baseURL: this.baseUrl,
 			defaultHeaders: config.headers,
 		});
+	}
+
+	projectContext(
+		_model: string,
+		context: ModelContext,
+	): ProviderContextProjection {
+		return {
+			systemPrompt: context.systemPrompt ?? "",
+			messages: convertProjectedMessages(context.messages).map((message) => {
+				const elided = elideImagePayloads(message.value);
+				return {
+					sourceIndex: message.sourceIndex,
+					value: elided.value,
+					...(elided.imageCount === 0 ? {} : { imageCount: elided.imageCount }),
+				};
+			}),
+			tools: convertTools(context.tools ?? []),
+		};
+	}
+
+	async discoverModelLimits(
+		signal?: AbortSignal,
+	): Promise<readonly DiscoveredModelLimit[]> {
+		const response = await this.fetch(openAIModelsUrl(this.baseUrl), {
+			method: "GET",
+			headers: {
+				...this.headers,
+				...(this.apiKey === "not-needed"
+					? {}
+					: { authorization: `Bearer ${this.apiKey}` }),
+				accept: "application/json",
+			},
+			signal,
+		});
+		if (!response.ok) {
+			throw new Error(`Model catalog request failed: HTTP ${response.status}`);
+		}
+		return readDiscoveredModelLimits(await response.json());
 	}
 
 	streamResponse(
@@ -499,8 +548,25 @@ function convertMessages(context: ModelContext): ChatCompletionMessageParam[] {
 		messages.push({ role: "system", content: context.systemPrompt });
 	}
 
-	for (let index = 0; index < context.messages.length; index += 1) {
-		const message = context.messages[index];
+	messages.push(
+		...convertProjectedMessages(context.messages).map(
+			(message) => message.value,
+		),
+	);
+	return messages;
+}
+
+interface OpenAIProjectedMessage {
+	readonly sourceIndex: number;
+	readonly value: ChatCompletionMessageParam;
+}
+
+function convertProjectedMessages(
+	messages: readonly Message[],
+): OpenAIProjectedMessage[] {
+	const projected: OpenAIProjectedMessage[] = [];
+	for (let index = 0; index < messages.length; index += 1) {
+		const message = messages[index];
 		if (!message) {
 			continue;
 		}
@@ -521,7 +587,10 @@ function convertMessages(context: ModelContext): ChatCompletionMessageParam[] {
 					},
 				);
 				if (content.length > 0) {
-					messages.push({ role: "user", content });
+					projected.push({
+						sourceIndex: index,
+						value: { role: "user", content },
+					});
 				}
 				break;
 			}
@@ -548,17 +617,17 @@ function convertMessages(context: ModelContext): ChatCompletionMessageParam[] {
 					content: text.length > 0 ? text : null,
 					...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
 				};
-				messages.push(assistantMessage);
+				projected.push({ sourceIndex: index, value: assistantMessage });
 				break;
 			}
 			case "tool_result": {
 				const toolResultMessages: Message[] = [];
 				let nextIndex = index;
 				while (
-					nextIndex < context.messages.length &&
-					context.messages[nextIndex]?.role === "tool_result"
+					nextIndex < messages.length &&
+					messages[nextIndex]?.role === "tool_result"
 				) {
-					const toolResult = context.messages[nextIndex];
+					const toolResult = messages[nextIndex];
 					if (toolResult) {
 						toolResultMessages.push(toolResult);
 					}
@@ -577,15 +646,18 @@ function convertMessages(context: ModelContext): ChatCompletionMessageParam[] {
 					const resultImages = toolResult.content.filter(
 						(part) => part.type === "image",
 					);
-					messages.push({
-						role: "tool",
-						tool_call_id: toolResult.toolCallId,
-						content:
-							text.length > 0
-								? text
-								: resultImages.length > 0
-									? "(see attached image)"
-									: "",
+					projected.push({
+						sourceIndex: index + toolResultMessages.indexOf(toolResult),
+						value: {
+							role: "tool",
+							tool_call_id: toolResult.toolCallId,
+							content:
+								text.length > 0
+									? text
+									: resultImages.length > 0
+										? "(see attached image)"
+										: "",
+						},
 					});
 					images.push(
 						...resultImages.map(
@@ -600,15 +672,18 @@ function convertMessages(context: ModelContext): ChatCompletionMessageParam[] {
 				}
 
 				if (images.length > 0) {
-					messages.push({
-						role: "user",
-						content: [
-							{
-								type: "text",
-								text: "Attached image(s) from tool result:",
-							},
-							...images,
-						],
+					projected.push({
+						sourceIndex: nextIndex - 1,
+						value: {
+							role: "user",
+							content: [
+								{
+									type: "text",
+									text: "Attached image(s) from tool result:",
+								},
+								...images,
+							],
+						},
 					});
 				}
 				index = nextIndex - 1;
@@ -617,7 +692,77 @@ function convertMessages(context: ModelContext): ChatCompletionMessageParam[] {
 		}
 	}
 
-	return messages;
+	return projected;
+}
+
+function elideImagePayloads(value: unknown): {
+	readonly value: unknown;
+	readonly imageCount: number;
+} {
+	let imageCount = 0;
+	const visit = (candidate: unknown): unknown => {
+		if (Array.isArray(candidate)) {
+			return candidate.map(visit);
+		}
+		if (typeof candidate !== "object" || candidate === null) {
+			return candidate;
+		}
+		const record = candidate as Record<string, unknown>;
+		const copy: Record<string, unknown> = {};
+		for (const [key, nested] of Object.entries(record)) {
+			if (
+				(key === "url" || key === "image_url") &&
+				typeof nested === "string" &&
+				nested.startsWith("data:")
+			) {
+				imageCount += 1;
+				copy[key] = "[image]";
+			} else {
+				copy[key] = visit(nested);
+			}
+		}
+		return copy;
+	};
+	return { value: visit(value), imageCount };
+}
+
+function openAIModelsUrl(baseUrl: string): string {
+	const url = new URL(baseUrl);
+	const path = url.pathname.replace(/\/+$/, "");
+	url.pathname = path.endsWith("/v1") ? `${path}/models` : `${path}/v1/models`;
+	return url.toString();
+}
+
+function readDiscoveredModelLimits(value: unknown): DiscoveredModelLimit[] {
+	const items =
+		typeof value === "object" &&
+		value !== null &&
+		Array.isArray(Reflect.get(value, "data"))
+			? (Reflect.get(value, "data") as unknown[])
+			: Array.isArray(value)
+				? value
+				: [];
+	return items.flatMap((item) => {
+		if (typeof item !== "object" || item === null) {
+			return [];
+		}
+		const model = Reflect.get(item, "id");
+		const contextWindowTokens = [
+			"context_length",
+			"max_model_len",
+			"context_window",
+		].flatMap((field) => {
+			const candidate = Reflect.get(item, field);
+			return isPositiveFinite(candidate) ? [candidate] : [];
+		})[0];
+		return typeof model === "string" && contextWindowTokens !== undefined
+			? [{ model, contextWindowTokens }]
+			: [];
+	});
+}
+
+function isPositiveFinite(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
 function convertTools(tools: readonly ToolDefinition[]): ChatCompletionTool[] {

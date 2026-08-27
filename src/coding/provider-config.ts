@@ -18,6 +18,10 @@ import {
 } from "../ai/openai_compatible_provider.ts";
 import type { ModelProvider } from "../ai/provider_protocol.ts";
 import { REASONING_LEVELS } from "../ai/types.ts";
+import {
+	type ContextWindowSource,
+	FALLBACK_CONTEXT_WINDOW_TOKENS,
+} from "./context-window.ts";
 import { areebPaths } from "./paths.ts";
 
 export const PROVIDER_SETTINGS_VERSION = 1;
@@ -51,6 +55,7 @@ export interface OpenAICompatibleProviderConfig {
 	readonly maxRetries: number;
 	readonly maxRetryDelaySeconds: number;
 	readonly compat: OpenAICompatibleCompat;
+	readonly contextWindows: Readonly<Record<string, number>>;
 }
 
 export interface ProviderSettings {
@@ -92,6 +97,10 @@ export interface ProviderRuntime {
 	readonly selection: ProviderSelection;
 	/** HTTP request timeout in milliseconds. */
 	readonly timeoutMs?: number;
+	readonly contextWindowTokens: number;
+	readonly contextWindowSource: ContextWindowSource;
+	readonly contextWindowDiscoveryError?: string;
+	readonly effectiveContextWindowPercent?: number;
 }
 
 export interface LoadProviderSettingsOptions {
@@ -110,6 +119,7 @@ export interface SetupOpenAICompatibleProviderOptions
 	readonly timeoutSeconds?: number;
 	readonly maxRetries?: number;
 	readonly maxRetryDelaySeconds?: number;
+	readonly contextWindows?: Readonly<Record<string, number>>;
 	readonly setDefault?: boolean;
 }
 
@@ -164,6 +174,9 @@ const rawProviderSchema = z
 			.optional(),
 		supports_reasoning_effort: z.boolean().optional(),
 		thinking_level_map: thinkingLevelMapSchema.optional(),
+		context_windows: z
+			.record(modelIdSchema, z.number().int().safe().positive())
+			.optional(),
 	})
 	.strict();
 
@@ -364,6 +377,13 @@ export function createProviderRuntime(
 		provider,
 		selection: canonical,
 		...(timeoutMs === undefined ? {} : { timeoutMs }),
+		contextWindowTokens:
+			providerConfig.contextWindows[canonical.model] ??
+			FALLBACK_CONTEXT_WINDOW_TOKENS,
+		contextWindowSource:
+			providerConfig.contextWindows[canonical.model] === undefined
+				? "fallback"
+				: "configured",
 	});
 }
 
@@ -436,6 +456,9 @@ export async function setupOpenAICompatibleProvider(
 				: {
 						max_retry_delay_seconds: options.maxRetryDelaySeconds,
 					}),
+			...(options.contextWindows === undefined
+				? {}
+				: { context_windows: { ...options.contextWindows } }),
 		};
 		if (options.apiKeyEnv === null) {
 			delete nextProvider.api_key_env;
@@ -651,6 +674,9 @@ function normalizeBuiltInOpenAI(
 			...(overlay?.thinking_level_map === undefined
 				? {}
 				: { thinking_level_map: overlay.thinking_level_map }),
+			...(overlay?.context_windows === undefined
+				? {}
+				: { context_windows: overlay.context_windows }),
 		},
 		path,
 		true,
@@ -705,6 +731,15 @@ function normalizeProvider(
 			`must appear in ${basePath}.models`,
 		);
 	}
+	for (const model of Object.keys(raw.context_windows ?? {})) {
+		if (!raw.models.includes(model)) {
+			throwConfig(
+				path,
+				`${basePath}.context_windows.${model}`,
+				`references model not present in ${basePath}.models`,
+			);
+		}
+	}
 	const thinkingLevelMap = Object.freeze({
 		off: "none",
 		...(raw.thinking_level_map ?? {}),
@@ -734,6 +769,7 @@ function normalizeProvider(
 		maxRetryDelaySeconds:
 			raw.max_retry_delay_seconds ?? DEFAULT_PROVIDER_MAX_RETRY_DELAY_SECONDS,
 		compat,
+		contextWindows: Object.freeze({ ...(raw.context_windows ?? {}) }),
 	});
 }
 

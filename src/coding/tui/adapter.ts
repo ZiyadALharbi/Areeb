@@ -53,6 +53,7 @@ export class TuiEventAdapter {
 				return changed;
 			}
 			case "message_start":
+			case "request_context":
 			case "turn_start":
 			case "turn_end":
 			case "tool_execution_update":

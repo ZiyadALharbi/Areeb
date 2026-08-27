@@ -7,7 +7,11 @@ import {
 import { createAssistantMessageEventStream } from "../ai/event-stream.ts";
 import type { OpenAICompatibleConfig } from "../ai/openai_compatible_provider.ts";
 import { OpenAICompatibleProvider } from "../ai/openai_compatible_provider.ts";
-import type { ModelProvider, StreamOptions } from "../ai/provider_protocol.ts";
+import type {
+	DiscoveredModelLimit,
+	ModelProvider,
+	StreamOptions,
+} from "../ai/provider_protocol.ts";
 import type { ModelContext } from "../ai/types.ts";
 import type { CredentialStore } from "./auth-store.ts";
 import type {
@@ -65,6 +69,10 @@ export interface CreateCredentialRuntimeOptions {
 export class ProviderRuntimeService {
 	private readonly env: ProviderEnvironment;
 	private readonly now: () => number;
+	private readonly discoveryByProvider = new WeakMap<
+		ModelProvider,
+		Promise<ModelLimitDiscovery>
+	>();
 
 	constructor(private readonly options: ProviderRuntimeServiceOptions) {
 		this.env = options.env ?? process.env;
@@ -357,7 +365,14 @@ export class ProviderRuntimeService {
 			};
 			const provider =
 				this.options.createCodexProvider?.(config) ?? new CodexProvider(config);
-			return Object.freeze({ provider, selection: canonical });
+			return this.resolveRuntimeWindow(
+				Object.freeze({
+					provider,
+					selection: canonical,
+					contextWindowTokens: 128_000,
+					contextWindowSource: "fallback" as const,
+				}),
+			);
 		}
 
 		if (canonical.provider === "openai") {
@@ -389,21 +404,31 @@ export class ProviderRuntimeService {
 			const provider =
 				this.options.createProvider?.(adapterConfig) ??
 				new OpenAICompatibleProvider(adapterConfig);
-			return Object.freeze({
-				provider,
-				selection: canonical,
-				...(configured.timeoutSeconds === undefined
-					? {}
-					: { timeoutMs: configured.timeoutSeconds * 1_000 }),
-			});
+			return this.resolveRuntimeWindow(
+				Object.freeze({
+					provider,
+					selection: canonical,
+					...(configured.timeoutSeconds === undefined
+						? {}
+						: { timeoutMs: configured.timeoutSeconds * 1_000 }),
+					contextWindowTokens:
+						configured.contextWindows[canonical.model] ?? 128_000,
+					contextWindowSource:
+						configured.contextWindows[canonical.model] === undefined
+							? ("fallback" as const)
+							: ("configured" as const),
+				}),
+			);
 		}
 
-		return createConfiguredProviderRuntime(this.options.settings, canonical, {
-			env: this.env,
-			...(this.options.createProvider === undefined
-				? {}
-				: { createProvider: this.options.createProvider }),
-		});
+		return this.resolveRuntimeWindow(
+			createConfiguredProviderRuntime(this.options.settings, canonical, {
+				env: this.env,
+				...(this.options.createProvider === undefined
+					? {}
+					: { createProvider: this.options.createProvider }),
+			}),
+		);
 	}
 
 	private unavailableRuntime(
@@ -418,7 +443,53 @@ export class ProviderRuntimeService {
 			provider: new UnavailableModelProvider(selection.provider, reason),
 			selection,
 			unavailableReason: reason,
+			contextWindowTokens:
+				this.options.settings.providers[selection.provider]?.contextWindows[
+					selection.model
+				] ?? 128_000,
+			contextWindowSource:
+				this.options.settings.providers[selection.provider]?.contextWindows[
+					selection.model
+				] === undefined
+					? "fallback"
+					: "configured",
 		});
+	}
+
+	private async resolveRuntimeWindow<T extends ProviderRuntime>(
+		runtime: T,
+	): Promise<T> {
+		if (runtime.provider.discoverModelLimits === undefined) {
+			return runtime;
+		}
+		let discovery = this.discoveryByProvider.get(runtime.provider);
+		if (discovery === undefined) {
+			discovery = discoverModelLimits(runtime.provider);
+			this.discoveryByProvider.set(runtime.provider, discovery);
+		}
+		const outcome = await discovery;
+		const live = outcome.limits.find(
+			(limit) => limit.model === runtime.selection.model,
+		);
+		if (live !== undefined && isPositiveFinite(live.contextWindowTokens)) {
+			return Object.freeze({
+				...runtime,
+				contextWindowTokens: live.contextWindowTokens,
+				contextWindowSource: "live",
+				...(isPositiveFinite(live.effectiveContextWindowPercent)
+					? {
+							effectiveContextWindowPercent: live.effectiveContextWindowPercent,
+						}
+					: {}),
+			}) as T;
+		}
+		if (outcome.error === undefined) {
+			return runtime;
+		}
+		return Object.freeze({
+			...runtime,
+			contextWindowDiscoveryError: outcome.error,
+		}) as T;
 	}
 
 	private resolveProviderDefault(providerId: string): ProviderSelection {
@@ -467,6 +538,33 @@ export class ProviderRuntimeService {
 			accountId: extractCodexAccountId(credential.access),
 		});
 	}
+}
+
+interface ModelLimitDiscovery {
+	readonly limits: readonly DiscoveredModelLimit[];
+	readonly error?: string;
+}
+
+async function discoverModelLimits(
+	provider: ModelProvider,
+): Promise<ModelLimitDiscovery> {
+	try {
+		const limits = await provider.discoverModelLimits?.();
+		return Object.freeze({ limits: Object.freeze([...(limits ?? [])]) });
+	} catch (error) {
+		return Object.freeze({
+			limits: Object.freeze([]),
+			error: errorMessage(error),
+		});
+	}
+}
+
+function isPositiveFinite(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
 
 function assertSelectionMatchesStored(options: ProviderSelectionOptions): void {

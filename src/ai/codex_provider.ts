@@ -4,7 +4,9 @@ import {
 	createAssistantMessageEventStream,
 } from "./event-stream.ts";
 import type {
+	DiscoveredModelLimit,
 	ModelProvider,
+	ProviderContextProjection,
 	ProviderRetryConfig,
 	StreamOptions,
 } from "./provider_protocol.ts";
@@ -99,6 +101,46 @@ export class CodexProvider implements ModelProvider {
 		const stream = createAssistantMessageEventStream();
 		void this.consume(stream, model, context, options);
 		return stream;
+	}
+
+	projectContext(
+		_model: string,
+		context: ModelContext,
+	): ProviderContextProjection {
+		return {
+			systemPrompt: context.systemPrompt ?? "You are a helpful assistant.",
+			messages: convertProjectedMessages(context.messages).map((message) => {
+				const elided = elideImagePayloads(message.value);
+				return {
+					sourceIndex: message.sourceIndex,
+					value: elided.value,
+					...(elided.imageCount === 0 ? {} : { imageCount: elided.imageCount }),
+				};
+			}),
+			tools: convertTools(context.tools ?? []),
+		};
+	}
+
+	async discoverModelLimits(
+		signal?: AbortSignal,
+	): Promise<readonly DiscoveredModelLimit[]> {
+		const auth = await this.getAuth(signal);
+		const response = await this.fetch(codexModelsUrl(this.baseUrl), {
+			method: "GET",
+			headers: {
+				...this.headers,
+				authorization: `Bearer ${auth.access}`,
+				"chatgpt-account-id": auth.accountId,
+				originator: "areeb",
+				"user-agent": codexUserAgent(),
+				accept: "application/json",
+			},
+			signal,
+		});
+		if (!response.ok) {
+			throw new Error(`Model catalog request failed: HTTP ${response.status}`);
+		}
+		return readDiscoveredModelLimits(await response.json());
 	}
 
 	private async consume(
@@ -244,22 +286,36 @@ function buildRequest(
 }
 
 function convertMessages(messages: readonly Message[]): unknown[] {
-	const input: unknown[] = [];
-	for (const message of messages) {
+	return convertProjectedMessages(messages).map((message) => message.value);
+}
+
+interface CodexProjectedMessage {
+	readonly sourceIndex: number;
+	readonly value: unknown;
+}
+
+function convertProjectedMessages(
+	messages: readonly Message[],
+): CodexProjectedMessage[] {
+	const input: CodexProjectedMessage[] = [];
+	for (const [sourceIndex, message] of messages.entries()) {
 		switch (message.role) {
 			case "user":
 				if (message.content.length > 0) {
 					input.push({
-						type: "message",
-						role: "user",
-						content: message.content.map((part) =>
-							part.type === "text"
-								? { type: "input_text", text: part.text }
-								: {
-										type: "input_image",
-										image_url: `data:${part.mimeType};base64,${part.data}`,
-									},
-						),
+						sourceIndex,
+						value: {
+							type: "message",
+							role: "user",
+							content: message.content.map((part) =>
+								part.type === "text"
+									? { type: "input_text", text: part.text }
+									: {
+											type: "input_image",
+											image_url: `data:${part.mimeType};base64,${part.data}`,
+										},
+							),
+						},
 					});
 				}
 				break;
@@ -268,7 +324,7 @@ function convertMessages(messages: readonly Message[]): unknown[] {
 					if (part.type === "thinking" && part.signature) {
 						const replay = parseReplayItem(part.signature);
 						if (replay !== undefined) {
-							input.push(replay);
+							input.push({ sourceIndex, value: replay });
 						}
 					}
 				}
@@ -278,16 +334,19 @@ function convertMessages(messages: readonly Message[]): unknown[] {
 					.join("");
 				if (text) {
 					input.push({
-						type: "message",
-						role: "assistant",
-						status: "completed",
-						content: [
-							{
-								type: "output_text",
-								text,
-								annotations: [],
-							},
-						],
+						sourceIndex,
+						value: {
+							type: "message",
+							role: "assistant",
+							status: "completed",
+							content: [
+								{
+									type: "output_text",
+									text,
+									annotations: [],
+								},
+							],
+						},
 					});
 				}
 				for (const toolCall of message.content.filter(
@@ -295,11 +354,14 @@ function convertMessages(messages: readonly Message[]): unknown[] {
 				)) {
 					const [callId, itemId] = splitToolId(toolCall.id);
 					input.push({
-						type: "function_call",
-						...(itemId === undefined ? {} : { id: itemId }),
-						call_id: callId,
-						name: toolCall.name,
-						arguments: JSON.stringify(toolCall.arguments),
+						sourceIndex,
+						value: {
+							type: "function_call",
+							...(itemId === undefined ? {} : { id: itemId }),
+							call_id: callId,
+							name: toolCall.name,
+							arguments: JSON.stringify(toolCall.arguments),
+						},
 					});
 				}
 				break;
@@ -311,15 +373,48 @@ function convertMessages(messages: readonly Message[]): unknown[] {
 					.map((part) => part.text)
 					.join("\n");
 				input.push({
-					type: "function_call_output",
-					call_id: callId,
-					output: text || "(tool returned non-text content)",
+					sourceIndex,
+					value: {
+						type: "function_call_output",
+						call_id: callId,
+						output: text || "(tool returned non-text content)",
+					},
 				});
 				break;
 			}
 		}
 	}
 	return input;
+}
+
+function elideImagePayloads(value: unknown): {
+	readonly value: unknown;
+	readonly imageCount: number;
+} {
+	let imageCount = 0;
+	const visit = (candidate: unknown): unknown => {
+		if (Array.isArray(candidate)) {
+			return candidate.map(visit);
+		}
+		if (typeof candidate !== "object" || candidate === null) {
+			return candidate;
+		}
+		const copy: Record<string, unknown> = {};
+		for (const [key, nested] of Object.entries(candidate)) {
+			if (
+				key === "image_url" &&
+				typeof nested === "string" &&
+				nested.startsWith("data:")
+			) {
+				imageCount += 1;
+				copy[key] = "[image]";
+			} else {
+				copy[key] = visit(nested);
+			}
+		}
+		return copy;
+	};
+	return { value: visit(value), imageCount };
 }
 
 function convertTools(tools: readonly ToolDefinition[]): unknown[] {
@@ -866,6 +961,60 @@ function normalizeCodexUrl(value: string): string {
 	return base.endsWith("/codex")
 		? `${base}/responses`
 		: `${base}/codex/responses`;
+}
+
+function codexModelsUrl(responsesUrl: string): string {
+	const url = new URL(responsesUrl);
+	url.pathname = url.pathname.replace(/\/responses\/?$/, "/models");
+	url.search = "";
+	url.hash = "";
+	return url.toString();
+}
+
+function readDiscoveredModelLimits(value: unknown): DiscoveredModelLimit[] {
+	const items = Array.isArray(value)
+		? value
+		: typeof value === "object" && value !== null
+			? ["models", "data"].flatMap((field) => {
+					const candidate = Reflect.get(value, field);
+					return Array.isArray(candidate) ? candidate : [];
+				})
+			: [];
+	return items.flatMap((item) => {
+		if (typeof item !== "object" || item === null) {
+			return [];
+		}
+		const model = ["slug", "id", "model", "name"].flatMap((field) => {
+			const candidate = Reflect.get(item, field);
+			return typeof candidate === "string" && candidate.length > 0
+				? [candidate]
+				: [];
+		})[0];
+		const contextWindowTokens = [
+			"context_window",
+			"max_context_window",
+		].flatMap((field) => {
+			const candidate = Reflect.get(item, field);
+			return isPositiveFinite(candidate) ? [candidate] : [];
+		})[0];
+		if (model === undefined || contextWindowTokens === undefined) {
+			return [];
+		}
+		const effective = Reflect.get(item, "effective_context_window_percent");
+		return [
+			{
+				model,
+				contextWindowTokens,
+				...(isPositiveFinite(effective)
+					? { effectiveContextWindowPercent: effective }
+					: {}),
+			},
+		];
+	});
+}
+
+function isPositiveFinite(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
 function parseReplayItem(signature: string): object | undefined {

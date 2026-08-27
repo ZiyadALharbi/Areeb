@@ -17,6 +17,7 @@ import type {
 import type { AuthInteraction, AuthPrompt, AuthType } from "../../ai/auth.ts";
 import type { ReasoningLevel } from "../../ai/types.ts";
 import type { CommandHotkey, CommandSessionListItem } from "../commands.ts";
+import type { ContextUsageEstimate } from "../context-window.ts";
 import { areebPaths } from "../paths.ts";
 import type { ProviderAuthView } from "../provider-runtime.ts";
 import { type ResourceDiagnostic, ResourceError } from "../resources.ts";
@@ -52,6 +53,7 @@ export interface InteractiveController {
 	readonly adapter: TuiEventAdapter;
 	readonly isRunning: boolean;
 	readonly queuedMessages: QueuedMessages;
+	readonly contextUsage: ContextUsageEstimate;
 	readonly resourceDiagnostics: readonly ResourceDiagnostic[];
 	readonly completionCatalog: CompletionCatalog;
 	readonly unavailableReason?: string;
@@ -123,7 +125,7 @@ export const INTERACTIVE_HOTKEYS: readonly InteractiveHotkey[] = Object.freeze([
 ]);
 
 export const INTERACTIVE_SHORTCUTS: TuiShortcutSet = Object.freeze({
-	idle: "Ctrl+S:sessions  │  Ctrl+M:model  │  Ctrl+P:commands  │  Ctrl+C:quit",
+	idle: "Ctrl+S:sessions  │  Ctrl+M:model  │  Ctrl+P:commands  │  Ctrl+C:quit  │  Ctrl+O:tool  │  Ctrl+T:thinking",
 	menu: "Type:filter  │  Up/Down:move  │  Enter:select  │  Esc:close",
 	running: "Enter:queue  │  Esc:interrupt  │  Ctrl+C:quit",
 });
@@ -459,6 +461,7 @@ export async function runInteractiveMode(
 						logout: performProviderLogout,
 					},
 				);
+				syncContextUsage(controller);
 				app.refresh(controller.state);
 			} else if (!exitRequested && controller.unavailableReason !== undefined) {
 				app.presentCommand(controller.unavailableReason, "warning");
@@ -479,6 +482,7 @@ export async function runInteractiveMode(
 		controller.state.running = false;
 		controller.state.inputMode = "idle";
 		controller.state.queuedCount = controller.queuedMessages.count;
+		syncContextUsage(controller);
 		submissionActive = false;
 		try {
 			app.refresh(controller.state);
@@ -651,7 +655,8 @@ async function consumePrompt(
 		const queueCount = controller.queuedMessages.count;
 		const queueChanged = controller.state.queuedCount !== queueCount;
 		controller.state.queuedCount = queueCount;
-		if (adapter.apply(event) || queueChanged) {
+		const contextChanged = syncContextUsage(controller);
+		if (adapter.apply(event) || queueChanged || contextChanged) {
 			app.refresh(controller.state);
 		}
 	}
@@ -659,6 +664,16 @@ async function consumePrompt(
 	if (terminalEvents === 0) {
 		throw new Error("Agent stream ended without a terminal event");
 	}
+}
+
+function syncContextUsage(controller: InteractiveController): boolean {
+	if (
+		controller.state.contextUsage?.revision === controller.contextUsage.revision
+	) {
+		return false;
+	}
+	controller.state.contextUsage = controller.contextUsage;
+	return true;
 }
 
 async function applyCommandResult(
@@ -826,6 +841,8 @@ function commandOverlayTitle(input: string): string | undefined {
 			return "Available commands";
 		case "/session":
 			return "Session";
+		case "/status":
+			return "Context";
 		case "/resources":
 			return "Resources";
 		case "/hotkeys":

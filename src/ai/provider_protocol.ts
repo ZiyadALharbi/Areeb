@@ -21,8 +21,40 @@ export interface ProviderRetryConfig {
 	readonly isRetryable?: (error: unknown) => boolean;
 }
 
+export interface ProviderProjectedMessage {
+	/** Index in ModelContext.messages that produced this provider-visible item. */
+	readonly sourceIndex: number;
+	/** Side-effect-free wire-shaped value with binary image payloads elided. */
+	readonly value: unknown;
+	/** Images represented by this item and estimated separately from text. */
+	readonly imageCount?: number;
+}
+
+export interface ProviderContextProjection {
+	readonly systemPrompt: string;
+	readonly messages: readonly ProviderProjectedMessage[];
+	readonly tools: readonly unknown[];
+}
+
+export interface DiscoveredModelLimit {
+	readonly model: string;
+	readonly contextWindowTokens: number;
+	readonly effectiveContextWindowPercent?: number;
+}
+
 export interface ModelProvider {
 	readonly providerId: string;
+
+	/** Project a converted context through this adapter's replay serialization. */
+	projectContext?(
+		model: string,
+		context: ModelContext,
+	): ProviderContextProjection;
+
+	/** Fetch the authenticated model catalog for this provider instance. */
+	discoverModelLimits?(
+		signal?: AbortSignal,
+	): Promise<readonly DiscoveredModelLimit[]>;
 
 	streamResponse(
 		model: string,

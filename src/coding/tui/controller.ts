@@ -14,6 +14,7 @@ import type {
 	CommandSessionListItem,
 	SlashCommand,
 } from "../commands.ts";
+import type { ContextUsageEstimate } from "../context-window.ts";
 import type { ProviderAuthView } from "../provider-runtime.ts";
 import type { ResourceDiagnostic } from "../resources.ts";
 import type {
@@ -48,6 +49,7 @@ export interface TuiControllerSession {
 	readonly reasoning: ReasoningLevel;
 	readonly isRunning: boolean;
 	readonly queuedMessages: QueuedMessages;
+	readonly contextUsage: ContextUsageEstimate;
 	readonly resourceDiagnostics: readonly ResourceDiagnostic[];
 	readonly commands: readonly SlashCommand[];
 	readonly skills: readonly { readonly name: string }[];
@@ -192,6 +194,10 @@ export class TuiController {
 
 	get queuedMessages(): QueuedMessages {
 		return this.active.session.queuedMessages;
+	}
+
+	get contextUsage(): ContextUsageEstimate {
+		return this.active.session.contextUsage;
 	}
 
 	get resourceDiagnostics(): readonly ResourceDiagnostic[] {
@@ -639,6 +645,7 @@ function buildBundle(session: TuiControllerSession): ActiveBundle {
 	state.queuedCount = session.queuedMessages.count;
 	const adapter = new TuiEventAdapter(state);
 	adapter.restore(session.messages);
+	state.contextUsage = session.contextUsage;
 	return { session, state, adapter };
 }
 

@@ -6,7 +6,11 @@ import type {
 	UserMessage,
 } from "../ai/types.ts";
 import { isReasoningLevel } from "../ai/types.ts";
-import { runAgentLoop, runAgentLoopContinue } from "./agent_loop.ts";
+import {
+	prepareModelContext,
+	runAgentLoop,
+	runAgentLoopContinue,
+} from "./agent_loop.ts";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -92,6 +96,18 @@ export class AgentHarness {
 
 	get pendingMessageCount(): number {
 		return this.steeringQueue.length + this.followUpQueue.length;
+	}
+
+	/** Prepares the same converted context used by the next provider request. */
+	prepareContext(): Promise<import("../ai/types.ts").ModelContext> {
+		return prepareModelContext({
+			systemPrompt: this.currentSystemPrompt,
+			messages: [...this.transcript],
+			tools: [...this.tools],
+			...(this.messageConverter
+				? { messageConverter: this.messageConverter }
+				: {}),
+		});
 	}
 
 	prompt(

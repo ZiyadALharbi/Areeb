@@ -1,5 +1,6 @@
 import type { AgentEndReason } from "../../agent/types.ts";
 import type { ReasoningLevel, Usage } from "../../ai/types.ts";
+import type { ContextUsageEstimate } from "../context-window.ts";
 
 export interface StreamingAssistantBlock {
 	readonly role: "assistant" | "thinking";
@@ -35,6 +36,7 @@ export interface TuiState {
 	inputMode: "idle" | "locked" | "running";
 	queuedCount: number;
 	lastUsage?: Usage;
+	contextUsage?: ContextUsageEstimate;
 	terminalReason?: AgentEndReason;
 }
 
