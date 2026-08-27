@@ -485,7 +485,7 @@ describe("createTuiApp pickers", () => {
 		app.dispose?.();
 	});
 
-	test("shows model and effort on the composer bottom border", () => {
+	test("shows model and reasoning on the composer bottom border", () => {
 		const state = createTuiState({
 			sessionId: SESSION_ID,
 			model: "model-a",
@@ -497,18 +497,18 @@ describe("createTuiApp pickers", () => {
 		const wide = stripTerminalSequences(app.tui.render(120).join("\n"));
 		const wideMetadataLine = wide
 			.split("\n")
-			.find((line) => line.includes("model-a · effort off"));
+			.find((line) => line.includes("model-a · off"));
 		expect(wideMetadataLine).toStartWith("╰");
 		expect(wideMetadataLine).toEndWith("╯");
 		state.reasoning = "high";
 		app.refresh(state);
 		expect(stripTerminalSequences(app.tui.render(32).join("\n"))).toContain(
-			"model-a · effort high",
+			"model-a · high",
 		);
 		state.reasoning = "max";
 		app.refresh(state);
 		expect(stripTerminalSequences(app.tui.render(24).join("\n"))).toContain(
-			"model-a · effort max",
+			"model-a · max",
 		);
 	});
 

@@ -59,9 +59,19 @@ async function collect(
 
 describe("OpenAICompatibleProvider", () => {
 	test("discovers exact positive model limits from the authenticated catalog", async () => {
-		let request: Request | undefined;
+		let request:
+			| {
+					readonly method: string;
+					readonly url: string;
+					readonly headers: Headers;
+			  }
+			| undefined;
 		const { baseUrl } = startServer((received) => {
-			request = received;
+			request = {
+				method: received.method,
+				url: received.url,
+				headers: new Headers(received.headers),
+			};
 			return Response.json({
 				data: [
 					{

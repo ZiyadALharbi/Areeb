@@ -161,6 +161,7 @@ describe("runAgentLoop", () => {
 			"turn_start",
 			"message_start",
 			"message_end",
+			"request_context",
 			"message_start",
 			"message_update",
 			"message_update",

@@ -1202,6 +1202,24 @@ Resource diagnostics: 0 warnings, 0 info`);
 					severity: "info",
 					name: "shared",
 				},
+				{
+					kind: "skill",
+					code: "untrusted",
+					severity: "info",
+					path: paths.projectAgentSkills,
+				},
+				{
+					kind: "skill",
+					code: "untrusted",
+					severity: "info",
+					path: paths.projectSkills,
+				},
+				{
+					kind: "prompt-template",
+					code: "untrusted",
+					severity: "info",
+					path: paths.projectPrompts,
+				},
 			]);
 			const resources = await coding.handleCommand("/resources");
 			if (!resources.handled || resources.outcome.kind !== "message") {
@@ -1307,7 +1325,9 @@ Resource diagnostics: 0 warnings, 0 info`);
 					resourcePaths: paths,
 				}),
 			);
-			expect(untrusted.resourceDiagnostics).toEqual([]);
+			expect(
+				untrusted.resourceDiagnostics.map((diagnostic) => diagnostic.code),
+			).toEqual(["untrusted", "untrusted", "untrusted"]);
 
 			const trustedSession = await createMemorySession(cwd);
 			const trusted = await CodingSession.load(
@@ -1631,7 +1651,7 @@ Resource diagnostics: 0 warnings, 0 info`);
 
 	test("composes custom prompt additions in provider-visible order", async () => {
 		const provider = new FakeProvider([textScript("done")]);
-		const session = await createMemorySession("C:\\workspace\\project");
+		const session = await createMemorySession("/workspace/project");
 		const coding = await CodingSession.load(
 			config(session, provider, {
 				systemPrompt: "Custom base",
@@ -1656,7 +1676,7 @@ Trusted context
 
 </project_context>
 
-Current working directory: C:/workspace/project`);
+Current working directory: /workspace/project`);
 		expect(coding.systemPrompt).not.toContain("Must not replace custom base");
 
 		await coding.prompt("inspect").result();

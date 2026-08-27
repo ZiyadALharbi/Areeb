@@ -232,7 +232,7 @@ function projectGenericMessage(
 			return part;
 		}
 		imageCount += 1;
-		return { type: "image", mimeType: part.mimeType };
+		return { type: "image", mimeType: part.mimeType, data: "[image]" };
 	});
 	const value =
 		message.role === "assistant"
@@ -265,7 +265,7 @@ function projectGenericTool(tool: ToolDefinition): unknown {
 	return {
 		name: tool.name,
 		description: tool.description,
-		parameters,
+		inputSchema: parameters,
 	};
 }
 

@@ -436,6 +436,14 @@ export async function setupOpenAICompatibleProvider(
 				);
 			}
 		}
+		const contextWindows =
+			options.contextWindows === undefined && options.models !== undefined
+				? Object.fromEntries(
+						Object.entries(existingRaw?.context_windows ?? {}).filter(
+							([model]) => options.models?.includes(model) === true,
+						),
+					)
+				: options.contextWindows;
 
 		const nextProvider: RawProvider = {
 			...(existingRaw ?? {}),
@@ -456,9 +464,9 @@ export async function setupOpenAICompatibleProvider(
 				: {
 						max_retry_delay_seconds: options.maxRetryDelaySeconds,
 					}),
-			...(options.contextWindows === undefined
+			...(contextWindows === undefined
 				? {}
-				: { context_windows: { ...options.contextWindows } }),
+				: { context_windows: { ...contextWindows } }),
 		};
 		if (options.apiKeyEnv === null) {
 			delete nextProvider.api_key_env;
@@ -688,6 +696,7 @@ function normalizeCustomProvider(
 	raw: RawProvider,
 	path: string,
 ): OpenAICompatibleProviderConfig {
+	assertContextWindowModels(raw, path, `$.providers.${providerId}`);
 	for (const [field, value] of [
 		["type", raw.type],
 		["base_url", raw.base_url],
@@ -731,15 +740,7 @@ function normalizeProvider(
 			`must appear in ${basePath}.models`,
 		);
 	}
-	for (const model of Object.keys(raw.context_windows ?? {})) {
-		if (!raw.models.includes(model)) {
-			throwConfig(
-				path,
-				`${basePath}.context_windows.${model}`,
-				`references model not present in ${basePath}.models`,
-			);
-		}
-	}
+	assertContextWindowModels(raw, path, basePath);
 	const thinkingLevelMap = Object.freeze({
 		off: "none",
 		...(raw.thinking_level_map ?? {}),
@@ -897,6 +898,25 @@ function assertNoDuplicateModels(
 		}
 		if (model !== undefined) {
 			seen.add(model);
+		}
+	}
+}
+
+function assertContextWindowModels(
+	raw: RawProvider,
+	path: string,
+	basePath: string,
+): void {
+	if (raw.models === undefined) {
+		return;
+	}
+	for (const model of Object.keys(raw.context_windows ?? {})) {
+		if (!raw.models.includes(model)) {
+			throwConfig(
+				path,
+				`${basePath}.context_windows.${model}`,
+				`references model not present in ${basePath}.models`,
+			);
 		}
 	}
 }

@@ -12,6 +12,7 @@ const BASELINE_GUIDELINES = [
 	"Follow the project's documented workflows, commands, and package manager",
 	"After changing code, run the applicable formatting, linting, type-checking, and test commands",
 	"Report verification accurately and only claim results from commands you actually ran",
+	"Summarize changed files and verification results without reproducing patches or diff blocks unless the user explicitly requests the diff",
 	"Request confirmation before destructive actions or decisions with materially unclear requirements",
 	"Be concise in your responses",
 	"Show file paths clearly when working with files",
