@@ -144,8 +144,6 @@ export function createEditToolDefinition(
 			"Modify existing text files with exact replacements and emit the canonical structured diff",
 		promptGuidelines: [
 			"Use edit for changes to existing text files so Areeb receives the canonical structured diff; do not use bash or write when edit can apply the change",
-			"Do not use bash to modify existing text files when edit is available; edit provides Areeb's structured diff metadata.",
-			"Do not run git diff merely to show an edit or reproduce the edit patch in assistant Markdown; summarize changed files and verification instead unless the user explicitly requests the diff",
 			"When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls",
 			"Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.",
 			"Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.",

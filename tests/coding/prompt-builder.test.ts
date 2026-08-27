@@ -69,7 +69,6 @@ Guidelines:
 - Follow the project's documented workflows, commands, and package manager
 - After changing code, run the applicable formatting, linting, type-checking, and test commands
 - Report verification accurately and only claim results from commands you actually ran
-- Summarize changed files and verification results without reproducing patches or diff blocks unless the user explicitly requests the diff
 - Request confirmation before destructive actions or decisions with materially unclear requirements
 - Show file paths clearly when working with files
 
@@ -92,7 +91,6 @@ Guidelines:
 - Follow the project's documented workflows, commands, and package manager
 - After changing code, run the applicable formatting, linting, type-checking, and test commands
 - Report verification accurately and only claim results from commands you actually ran
-- Summarize changed files and verification results without reproducing patches or diff blocks unless the user explicitly requests the diff
 - Request confirmation before destructive actions or decisions with materially unclear requirements
 - Be concise in your responses
 - Show file paths clearly when working with files
@@ -112,12 +110,6 @@ Current working directory: /repo`,
 		);
 		expect(prompt).toContain(
 			"- Use edit for changes to existing text files so Areeb receives the canonical structured diff; do not use bash or write when edit can apply the change",
-		);
-		expect(prompt).toContain(
-			"- Do not use bash to modify existing text files when edit is available; edit provides Areeb's structured diff metadata.",
-		);
-		expect(prompt).toContain(
-			"- Do not run git diff merely to show an edit or reproduce the edit patch in assistant Markdown; summarize changed files and verification instead unless the user explicitly requests the diff",
 		);
 	});
 
