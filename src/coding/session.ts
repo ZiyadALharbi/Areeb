@@ -86,7 +86,7 @@ export interface CodingSessionConfig<
 	readonly effectiveContextWindowPercent?: number;
 	/** Override the canonical user and project resource paths. */
 	readonly resourcePaths?: AreebPaths;
-	/** Project resources are ignored unless the caller explicitly trusts them. */
+	/** Project skills and prompt templates are ignored unless the caller explicitly trusts them. */
 	readonly trustProjectResources?: boolean;
 }
 

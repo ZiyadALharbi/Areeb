@@ -19,7 +19,6 @@ export interface LoadProjectContextOptions {
 	readonly agentsRoot: string;
 	readonly projectRoot: string;
 	readonly projectAgentsRoot: string;
-	readonly trustProjectResources?: boolean;
 	readonly contextFiles?: readonly ProjectContextFile[];
 }
 
@@ -38,18 +37,16 @@ export async function loadProjectContext(
 		}
 	}
 
-	if (options.trustProjectResources === true) {
-		for (const directory of await discoverProjectDirectories(options.cwd)) {
-			const instructions = await selectInstructionFile(directory);
-			if (instructions !== undefined) {
-				selectedPaths.push(instructions);
-			}
+	for (const directory of await discoverProjectDirectories(options.cwd)) {
+		const instructions = await selectInstructionFile(directory);
+		if (instructions !== undefined) {
+			selectedPaths.push(instructions);
 		}
-		for (const directory of [options.projectAgentsRoot, options.projectRoot]) {
-			const instructions = await selectInstructionFile(directory);
-			if (instructions !== undefined) {
-				selectedPaths.push(instructions);
-			}
+	}
+	for (const directory of [options.projectAgentsRoot, options.projectRoot]) {
+		const instructions = await selectInstructionFile(directory);
+		if (instructions !== undefined) {
+			selectedPaths.push(instructions);
 		}
 	}
 

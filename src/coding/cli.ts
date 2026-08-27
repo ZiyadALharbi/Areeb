@@ -52,7 +52,7 @@ Options:
       --model <model>        Select an exact configured model
       --effort <level>       Thinking effort: off, low, medium, high, xhigh, or max
       --output <mode>        Output mode: text, json, or transcript (default: text)
-      --trust-project        Load project-controlled resources and instructions
+      --trust-project        Load project skills and prompt templates
   -h, --help                 Show this help
 
 Provider settings: ~/.areeb/providers.json

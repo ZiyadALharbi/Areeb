@@ -22,6 +22,7 @@
 	},
 	"scripts": {
 		"check": "biome check . && tsc --noEmit",
+		"format": "biome check --write .",
 		"test": "bun test",
 		"build": "bun build ./index.ts --outdir ./dist --target bun"
 	}

@@ -1,3 +1,4 @@
+import { stat } from "node:fs/promises";
 import type { AreebPaths } from "./paths.ts";
 import {
 	loadProjectContext,
@@ -126,10 +127,13 @@ export async function assembleSessionResources(
 			agentsRoot: inputs.paths.agentsRoot,
 			projectRoot: inputs.paths.projectRoot,
 			projectAgentsRoot: inputs.paths.projectAgentsRoot,
-			trustProjectResources: inputs.trustProjectResources,
 			contextFiles: inputs.callerContextFiles,
 		}),
 	]);
+
+	const skipped = inputs.trustProjectResources
+		? []
+		: await skippedProjectResourceDiagnostics(inputs);
 
 	return Object.freeze({
 		skills: skillResult.skills,
@@ -138,6 +142,7 @@ export async function assembleSessionResources(
 		diagnostics: Object.freeze([
 			...skillResult.diagnostics,
 			...promptTemplateResult.diagnostics,
+			...skipped,
 		]),
 	});
 }
@@ -159,4 +164,48 @@ export function buildSessionSystemPrompt(
 		extraGuidelines: inputs.extraGuidelines,
 		contextFiles: resources.contextFiles,
 	});
+}
+
+async function skippedProjectResourceDiagnostics(
+	inputs: SessionResourceInputs,
+): Promise<readonly ResourceDiagnostic[]> {
+	const diagnostics: ResourceDiagnostic[] = [];
+	const skillDirectories = [
+		...(await discoverProjectAgentSkillDirectories(
+			inputs.cwd,
+			inputs.paths.userAgentSkills,
+		)),
+		inputs.paths.projectSkills,
+	];
+	for (const directory of skillDirectories) {
+		if (await directoryExists(directory)) {
+			diagnostics.push({
+				kind: "skill",
+				code: "untrusted",
+				severity: "info",
+				path: directory,
+				message:
+					"Project skills were skipped; pass --trust-project to load them",
+			});
+		}
+	}
+	if (await directoryExists(inputs.paths.projectPrompts)) {
+		diagnostics.push({
+			kind: "prompt-template",
+			code: "untrusted",
+			severity: "info",
+			path: inputs.paths.projectPrompts,
+			message:
+				"Project prompt templates were skipped; pass --trust-project to load them",
+		});
+	}
+	return diagnostics;
+}
+
+async function directoryExists(path: string): Promise<boolean> {
+	try {
+		return (await stat(path)).isDirectory();
+	} catch {
+		return false;
+	}
 }

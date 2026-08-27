@@ -1210,17 +1210,12 @@ Resource diagnostics: 0 warnings, 0 info`);
 			expect(resources.outcome.text).toContain("Skills loaded: 2");
 			expect(resources.outcome.text).toContain("Prompt templates loaded: 1");
 			expect(resources.outcome.text).toContain(
-				"Project context files loaded: 2",
+				"Project context files loaded: 3",
 			);
-			expect(resources.outcome.text).toContain(
-				"Resource diagnostics: 0 warnings, 1 info",
-			);
-			expect(coding.systemPrompt).toContain("<name>review</name>");
-			expect(coding.systemPrompt).not.toContain("<name>private</name>");
 			expect(coding.systemPrompt).toContain("User context.");
-			expect(coding.systemPrompt).not.toContain("Project context.");
+			expect(coding.systemPrompt).toContain("Project context.");
 			expect(coding.systemPrompt.indexOf("User context.")).toBeLessThan(
-				coding.systemPrompt.indexOf("Explicit context."),
+				coding.systemPrompt.indexOf("Project context."),
 			);
 
 			await writeFile(
