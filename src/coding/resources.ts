@@ -12,7 +12,8 @@ export type ResourceDiagnosticCode =
 	| "parse-failed"
 	| "validation-failed"
 	| "duplicate"
-	| "overridden";
+	| "overridden"
+	| "untrusted";
 
 export interface ResourceDiagnostic {
 	readonly kind: ResourceKind;

@@ -58,6 +58,54 @@ async function collect(
 }
 
 describe("OpenAICompatibleProvider", () => {
+	test("discovers exact positive model limits from the authenticated catalog", async () => {
+		let request:
+			| {
+					readonly method: string;
+					readonly url: string;
+					readonly headers: Headers;
+			  }
+			| undefined;
+		const { baseUrl } = startServer((received) => {
+			request = {
+				method: received.method,
+				url: received.url,
+				headers: new Headers(received.headers),
+			};
+			return Response.json({
+				data: [
+					{
+						id: "model-a",
+						context_length: 200_000,
+						max_model_len: 100_000,
+					},
+					{ id: "model-b", max_model_len: 64_000 },
+					{ id: "model-c", context_window: 32_000 },
+					{ id: "invalid-zero", context_length: 0 },
+					{ id: "invalid-string", context_length: "128000" },
+				],
+			});
+		});
+		const provider = new OpenAICompatibleProvider({
+			providerId: "compatible",
+			baseUrl,
+			apiKey: "secret",
+			headers: { "X-Areeb-Test": "present" },
+		});
+
+		expect(await provider.discoverModelLimits()).toEqual([
+			{ model: "model-a", contextWindowTokens: 200_000 },
+			{ model: "model-b", contextWindowTokens: 64_000 },
+			{ model: "model-c", contextWindowTokens: 32_000 },
+		]);
+		expect(request?.method).toBe("GET");
+		expect(new URL(request?.url ?? "https://invalid").pathname).toBe(
+			"/v1/models",
+		);
+		expect(request?.headers.get("authorization")).toBe("Bearer secret");
+		expect(request?.headers.get("x-areeb-test")).toBe("present");
+	});
+
 	test("builds a multimodal Chat Completions request and streams Areeb events", async () => {
 		let requestBody: Record<string, unknown> | undefined;
 		let requestHeaders: Headers | undefined;
@@ -302,6 +350,96 @@ describe("OpenAICompatibleProvider", () => {
 				},
 			],
 		});
+	});
+
+	test("projects the exact provider-visible history without private thinking", () => {
+		const provider = new OpenAICompatibleProvider({
+			providerId: "compatible",
+			baseUrl: "https://api.example/v1",
+		});
+		const projection = provider.projectContext("model", {
+			systemPrompt: "System",
+			messages: [
+				{
+					role: "assistant",
+					content: [
+						{ type: "thinking", thinking: "must stay private" },
+						{ type: "text", text: "Visible answer" },
+						{
+							type: "tool_call",
+							id: "call-1",
+							name: "lookup",
+							arguments: { query: "Areeb" },
+						},
+					],
+					provider: "compatible",
+					model: "model",
+					usage: {
+						inputTokens: 10,
+						outputTokens: 5,
+						cacheReadTokens: 0,
+						cacheWriteTokens: 0,
+						totalTokens: 15,
+					},
+					stopReason: "tool_call",
+					timestamp: 1,
+				},
+				{
+					role: "tool_result",
+					toolCallId: "call-1",
+					toolName: "lookup",
+					content: [{ type: "text", text: "Result" }],
+					isError: false,
+					timestamp: 2,
+				},
+			],
+			tools: [
+				{
+					name: "lookup",
+					description: "Look up a value",
+					inputSchema: z.object({ query: z.string() }),
+				},
+			],
+		});
+
+		expect(projection.systemPrompt).toBe("System");
+		expect(projection.messages).toEqual([
+			{
+				sourceIndex: 0,
+				value: {
+					role: "assistant",
+					content: "Visible answer",
+					tool_calls: [
+						{
+							id: "call-1",
+							type: "function",
+							function: {
+								name: "lookup",
+								arguments: '{"query":"Areeb"}',
+							},
+						},
+					],
+				},
+			},
+			{
+				sourceIndex: 1,
+				value: { role: "tool", tool_call_id: "call-1", content: "Result" },
+			},
+		]);
+		expect(projection.tools).toEqual([
+			expect.objectContaining({
+				type: "function",
+				function: expect.objectContaining({
+					name: "lookup",
+					description: "Look up a value",
+					parameters: expect.objectContaining({
+						type: "object",
+						required: ["query"],
+					}),
+				}),
+			}),
+		]);
+		expect(JSON.stringify(projection)).not.toContain("must stay private");
 	});
 
 	test("omits tools when empty and normalizes compatible stop reasons", async () => {

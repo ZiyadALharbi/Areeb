@@ -2,6 +2,7 @@ import type { AssistantMessageEvent } from "../ai/events.ts";
 import type {
 	AssistantMessage,
 	Message,
+	ModelContext,
 	ToolResultMessage,
 } from "../ai/types.ts";
 import type {
@@ -173,21 +174,12 @@ async function streamAssistantResponse(
 	let emittedMessageStart = false;
 
 	try {
-		const messages = context.messageConverter
-			? await context.messageConverter([...context.messages])
-			: context.messages.filter(isModelMessage);
-		response = config.provider.streamResponse(
-			config.model,
-			{
-				systemPrompt: context.systemPrompt,
-				messages: [...messages],
-				tools: [...context.tools],
-			},
-			{
-				...config.streamOptions,
-				...(signal ? { signal } : {}),
-			},
-		);
+		const preparedContext = await prepareModelContext(context);
+		await emit({ type: "request_context", context: preparedContext });
+		response = config.provider.streamResponse(config.model, preparedContext, {
+			...config.streamOptions,
+			...(signal ? { signal } : {}),
+		});
 	} catch (error) {
 		return emitProviderFailure(
 			config,
@@ -266,6 +258,20 @@ async function streamAssistantResponse(
 				return event.message;
 		}
 	}
+}
+
+/** Builds the canonical context supplied to a provider for the next request. */
+export async function prepareModelContext(
+	context: AgentContext,
+): Promise<ModelContext> {
+	const messages = context.messageConverter
+		? await context.messageConverter([...context.messages])
+		: context.messages.filter(isModelMessage);
+	return {
+		systemPrompt: context.systemPrompt,
+		messages: [...messages],
+		tools: [...context.tools],
+	};
 }
 
 async function emitProviderFailure(

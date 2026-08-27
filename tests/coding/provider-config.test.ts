@@ -110,6 +110,7 @@ describe("provider settings parsing and resolution", () => {
 							low: "high",
 							max: "max",
 						},
+						context_windows: { "reasoning-model": 64_000 },
 					},
 				},
 			},
@@ -120,9 +121,12 @@ describe("provider settings parsing and resolution", () => {
 			supportsReasoningEffort: true,
 			thinkingLevelMap: { off: null, low: "high", max: "max" },
 		});
+		expect(settings.providers.local?.contextWindows).toEqual({
+			"reasoning-model": 64_000,
+		});
 
 		let adapterConfig: OpenAICompatibleConfig | undefined;
-		createProviderRuntime(
+		const runtime = createProviderRuntime(
 			settings,
 			{ provider: "local", model: "reasoning-model" },
 			{
@@ -137,6 +141,10 @@ describe("provider settings parsing and resolution", () => {
 			thinkingFormat: "zai",
 			supportsReasoningEffort: true,
 			thinkingLevelMap: { off: null, low: "high", max: "max" },
+		});
+		expect(runtime).toMatchObject({
+			contextWindowTokens: 64_000,
+			contextWindowSource: "configured",
 		});
 	});
 
@@ -229,6 +237,32 @@ describe("provider settings parsing and resolution", () => {
 					providers: { local: { thinkingFormat: "zai" } },
 				},
 				"$.providers.local.thinkingFormat",
+			],
+			[
+				{
+					version: 1,
+					providers: {
+						local: {
+							models: ["model-a"],
+							default_model: "model-a",
+							context_windows: { "model-a": 0 },
+						},
+					},
+				},
+				"$.providers.local.context_windows.model-a",
+			],
+			[
+				{
+					version: 1,
+					providers: {
+						local: {
+							models: ["model-a"],
+							default_model: "model-a",
+							context_windows: { removed: 64_000 },
+						},
+					},
+				},
+				"$.providers.local.context_windows.removed",
 			],
 		] as const) {
 			expect(() => parseProviderSettings(document, { path, env: {} })).toThrow(
@@ -333,6 +367,7 @@ describe("provider settings persistence", () => {
 			models: ["qwen", "llama"],
 			defaultModel: "qwen",
 			timeoutSeconds: 120,
+			contextWindows: { qwen: 32_000, llama: 64_000 },
 		});
 		const filePath = join(userRoot, "providers.json");
 		const configured = JSON.parse(await readFile(filePath, "utf8")) as {
@@ -369,6 +404,7 @@ describe("provider settings persistence", () => {
 			models: ["llama"],
 			defaultModel: "llama",
 			timeoutSeconds: 120,
+			contextWindows: { llama: 64_000 },
 			compat: {
 				thinkingFormat: "zai",
 				supportsReasoningEffort: true,
@@ -380,6 +416,7 @@ describe("provider settings persistence", () => {
 		expect(JSON.parse(await readFile(filePath, "utf8"))).toMatchObject({
 			providers: {
 				local: {
+					context_windows: { llama: 64_000 },
 					thinking_format: "zai",
 					supports_reasoning_effort: true,
 					thinking_level_map: { off: null, high: "max" },

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { z } from "zod";
 import { buildSystemPrompt } from "../../src/coding/prompt-builder.ts";
 import type { Skill } from "../../src/coding/skills.ts";
+import { createCodingToolDefinitions } from "../../src/coding/tools/index.ts";
 import type { CodingToolDefinition } from "../../src/coding/types.ts";
 
 function tool(
@@ -95,6 +96,20 @@ Guidelines:
 - Show file paths clearly when working with files
 
 Current working directory: /repo`,
+		);
+	});
+
+	test("directs existing-file changes through the structured edit flow", () => {
+		const prompt = buildSystemPrompt({
+			cwd: "/repo",
+			tools: createCodingToolDefinitions("/repo"),
+		});
+
+		expect(prompt).toContain(
+			"- edit: Modify existing text files with exact replacements and emit the canonical structured diff",
+		);
+		expect(prompt).toContain(
+			"- Use edit for changes to existing text files so Areeb receives the canonical structured diff; do not use bash or write when edit can apply the change",
 		);
 	});
 

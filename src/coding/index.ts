@@ -29,7 +29,24 @@ export type {
 export {
 	CommandRegistry,
 	createDefaultCommandRegistry,
+	formatContextStatus,
 } from "./commands.ts";
+export type {
+	ContextUsageBreakdown,
+	ContextUsageEstimate,
+	ContextUsageInput,
+	ContextWindowSource,
+	FullEstimateBreakdown,
+	ProviderAnchorBreakdown,
+} from "./context-window.ts";
+export {
+	estimateContextUsage,
+	estimateTextTokens,
+	FALLBACK_CONTEXT_WINDOW_TOKENS,
+	FALLBACK_IMAGE_TOKENS,
+	formatContextUsageCompact,
+	projectModelContext,
+} from "./context-window.ts";
 export * from "./modes/index.ts";
 export type { AreebPathOptions, AreebPaths } from "./paths.ts";
 export { areebPaths } from "./paths.ts";

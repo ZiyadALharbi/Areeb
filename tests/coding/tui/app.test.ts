@@ -338,6 +338,25 @@ describe("createTuiApp pickers", () => {
 			cwd: "/project",
 			reasoning: "off",
 		});
+		state.contextUsage = {
+			revision: 1,
+			requestShapeRevision: 1,
+			usedTokens: 20_000,
+			windowTokens: 128_000,
+			percent: 16,
+			mode: "full-estimate",
+			usesProviderUsage: false,
+			breakdown: {
+				mode: "full-estimate",
+				systemTokens: 1_000,
+				messageTokens: 15_000,
+				toolTokens: 4_000,
+				imageTokens: 0,
+				messageCount: 4,
+				toolCount: 2,
+			},
+			contextWindowSource: "fallback",
+		};
 		const app = createTuiApp(
 			appOptions({
 				state,
@@ -371,6 +390,7 @@ describe("createTuiApp pickers", () => {
 		const output = stripTerminalSequences(app.tui.render(100).join("\n"));
 		expect(output).toContain("running shortcuts");
 		expect(output).toContain("2 queued");
+		expect(output).not.toContain("~20k / 128k (16%)");
 		expect(app.editor.disableSubmit).toBe(false);
 	});
 
@@ -415,28 +435,57 @@ describe("createTuiApp pickers", () => {
 		expect(app.editor.getText()).toBe("preserved draft");
 	});
 
-	test("shows honest last-response usage in the footer", () => {
+	test("shows canonical next-request context usage in the idle footer", () => {
 		const state = createTuiState({
 			sessionId: SESSION_ID,
 			model: "model-a",
 			cwd: "/project",
 			reasoning: "off",
 		});
-		state.lastUsage = {
-			inputTokens: 12_400,
-			outputTokens: 860,
-			cacheReadTokens: 0,
-			cacheWriteTokens: 0,
-			totalTokens: 13_260,
+		state.contextUsage = {
+			revision: 1,
+			requestShapeRevision: 1,
+			usedTokens: 20_000,
+			windowTokens: 128_000,
+			percent: 16,
+			mode: "full-estimate",
+			usesProviderUsage: false,
+			breakdown: {
+				mode: "full-estimate",
+				systemTokens: 1_000,
+				messageTokens: 15_000,
+				toolTokens: 4_000,
+				imageTokens: 0,
+				messageCount: 4,
+				toolCount: 2,
+			},
+			contextWindowSource: "fallback",
 		};
 		const app = createTuiApp(appOptions({ state }));
 		const output = stripTerminalSequences(app.tui.render(120).join("\n"));
+		const usageLine = output
+			.split("\n")
+			.find((line) => line.includes("~20k / 128k (16%)"));
 
-		expect(output).toContain("Last · 12.4k in · 860 out");
-		expect(output).not.toContain("%");
+		expect(usageLine).toBeDefined();
+		expect(usageLine?.trimEnd()).toEndWith("~20k / 128k (16%)");
+		expect(output).not.toContain("Last ·");
+
+		app.presentCommand("Settings saved", "info");
+		const notice = stripTerminalSequences(app.tui.render(120).join("\n"));
+		expect(notice).toContain("Settings saved");
+		expect(notice).not.toContain("~20k / 128k (16%)");
+		app.clearCommandPresentation();
+
+		state.inputMode = "locked";
+		app.refresh(state);
+		expect(
+			stripTerminalSequences(app.tui.render(120).join("\n")),
+		).not.toContain("~20k / 128k (16%)");
+		app.dispose?.();
 	});
 
-	test("shows model and effort on the composer bottom border", () => {
+	test("shows model and reasoning on the composer bottom border", () => {
 		const state = createTuiState({
 			sessionId: SESSION_ID,
 			model: "model-a",
@@ -448,18 +497,18 @@ describe("createTuiApp pickers", () => {
 		const wide = stripTerminalSequences(app.tui.render(120).join("\n"));
 		const wideMetadataLine = wide
 			.split("\n")
-			.find((line) => line.includes("model-a · effort off"));
+			.find((line) => line.includes("model-a · off"));
 		expect(wideMetadataLine).toStartWith("╰");
 		expect(wideMetadataLine).toEndWith("╯");
 		state.reasoning = "high";
 		app.refresh(state);
 		expect(stripTerminalSequences(app.tui.render(32).join("\n"))).toContain(
-			"model-a · effort high",
+			"model-a · high",
 		);
 		state.reasoning = "max";
 		app.refresh(state);
 		expect(stripTerminalSequences(app.tui.render(24).join("\n"))).toContain(
-			"model-a · effort max",
+			"model-a · max",
 		);
 	});
 

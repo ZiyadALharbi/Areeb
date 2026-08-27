@@ -1,9 +1,17 @@
 import type { AgentEndReason } from "../../agent/types.ts";
 import type { ReasoningLevel, Usage } from "../../ai/types.ts";
+import type { ContextUsageEstimate } from "../context-window.ts";
 
 export interface StreamingAssistantBlock {
 	readonly role: "assistant" | "thinking";
 	readonly text: string;
+}
+
+export interface TuiEditDetails {
+	readonly path: string;
+	readonly diff: string;
+	readonly patch: string;
+	readonly firstChangedLine?: number;
 }
 
 export type ChatItem =
@@ -16,7 +24,7 @@ export type ChatItem =
 			readonly toolName: string;
 			readonly toolCallId: string;
 			readonly preview?: string;
-			readonly patch?: string;
+			readonly edit?: TuiEditDetails;
 			readonly isError?: boolean;
 	  }
 	| { readonly role: "status"; readonly text: string }
@@ -35,6 +43,7 @@ export interface TuiState {
 	inputMode: "idle" | "locked" | "running";
 	queuedCount: number;
 	lastUsage?: Usage;
+	contextUsage?: ContextUsageEstimate;
 	terminalReason?: AgentEndReason;
 }
 

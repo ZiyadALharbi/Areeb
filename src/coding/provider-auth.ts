@@ -137,7 +137,7 @@ export function createDefaultProviderAuthRegistry(
 	return new ProviderAuthRegistry([
 		{
 			id: "openai-codex",
-			displayName: "ChatGPT Plus/Pro (Codex Subscription)",
+			displayName: "ChatGPT Plus/Pro",
 			authType: "oauth",
 			authLabel: "subscription",
 			models: OPENAI_CODEX_MODELS,

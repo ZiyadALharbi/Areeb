@@ -79,7 +79,6 @@ describe("project context discovery", () => {
 		const context = await loadProjectContext({
 			cwd,
 			...roots,
-			trustProjectResources: true,
 			contextFiles: [{ path: "caller://instructions", content: "caller" }],
 		});
 
@@ -104,34 +103,20 @@ describe("project context discovery", () => {
 		]);
 	});
 
-	test("does not inspect project instructions until trust is granted", async () => {
+	test("loads project instructions without trust", async () => {
 		const directory = await createTempDirectory();
 		const cwd = join(directory, "project");
 		const roots = contextRoots(directory, cwd);
 		await mkdir(roots.userRoot);
 		await mkdir(roots.agentsRoot);
-		await mkdir(join(cwd, "AGENTS.override.md"), { recursive: true });
-		await mkdir(roots.projectAgentsRoot, { recursive: true });
+		await mkdir(cwd, { recursive: true });
 		await writeFile(join(roots.userRoot, "AGENTS.md"), "user");
-		await mkdir(join(roots.projectAgentsRoot, "AGENTS.md"));
+		await writeFile(join(cwd, "AGENTS.md"), "project");
 
-		await expect(
-			loadProjectContext({
-				cwd,
-				...roots,
-				contextFiles: [{ path: "explicit", content: "trusted" }],
-			}),
-		).resolves.toEqual([
+		await expect(loadProjectContext({ cwd, ...roots })).resolves.toEqual([
 			{ path: join(roots.userRoot, "AGENTS.md"), content: "user" },
-			{ path: "explicit", content: "trusted" },
+			{ path: join(cwd, "AGENTS.md"), content: "project" },
 		]);
-		await expect(
-			loadProjectContext({
-				cwd,
-				...roots,
-				trustProjectResources: true,
-			}),
-		).rejects.toThrow("Resource is not a regular file");
 	});
 
 	test("uses the nearest Git file or directory boundary and cwd outside Git", async () => {
@@ -175,9 +160,7 @@ describe("project context discovery", () => {
 			join(cwd, "AGENTS.override.md"),
 		);
 
-		await expect(
-			loadProjectContext({ cwd, ...roots, trustProjectResources: true }),
-		).resolves.toEqual([
+		await expect(loadProjectContext({ cwd, ...roots })).resolves.toEqual([
 			{ path: join(repository, "AGENTS.md"), content: "shared" },
 		]);
 	});

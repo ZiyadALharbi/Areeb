@@ -1202,6 +1202,24 @@ Resource diagnostics: 0 warnings, 0 info`);
 					severity: "info",
 					name: "shared",
 				},
+				{
+					kind: "skill",
+					code: "untrusted",
+					severity: "info",
+					path: paths.projectAgentSkills,
+				},
+				{
+					kind: "skill",
+					code: "untrusted",
+					severity: "info",
+					path: paths.projectSkills,
+				},
+				{
+					kind: "prompt-template",
+					code: "untrusted",
+					severity: "info",
+					path: paths.projectPrompts,
+				},
 			]);
 			const resources = await coding.handleCommand("/resources");
 			if (!resources.handled || resources.outcome.kind !== "message") {
@@ -1210,17 +1228,12 @@ Resource diagnostics: 0 warnings, 0 info`);
 			expect(resources.outcome.text).toContain("Skills loaded: 2");
 			expect(resources.outcome.text).toContain("Prompt templates loaded: 1");
 			expect(resources.outcome.text).toContain(
-				"Project context files loaded: 2",
+				"Project context files loaded: 3",
 			);
-			expect(resources.outcome.text).toContain(
-				"Resource diagnostics: 0 warnings, 1 info",
-			);
-			expect(coding.systemPrompt).toContain("<name>review</name>");
-			expect(coding.systemPrompt).not.toContain("<name>private</name>");
 			expect(coding.systemPrompt).toContain("User context.");
-			expect(coding.systemPrompt).not.toContain("Project context.");
+			expect(coding.systemPrompt).toContain("Project context.");
 			expect(coding.systemPrompt.indexOf("User context.")).toBeLessThan(
-				coding.systemPrompt.indexOf("Explicit context."),
+				coding.systemPrompt.indexOf("Project context."),
 			);
 
 			await writeFile(
@@ -1312,7 +1325,9 @@ Resource diagnostics: 0 warnings, 0 info`);
 					resourcePaths: paths,
 				}),
 			);
-			expect(untrusted.resourceDiagnostics).toEqual([]);
+			expect(
+				untrusted.resourceDiagnostics.map((diagnostic) => diagnostic.code),
+			).toEqual(["untrusted", "untrusted", "untrusted"]);
 
 			const trustedSession = await createMemorySession(cwd);
 			const trusted = await CodingSession.load(
@@ -1425,9 +1440,6 @@ Resource diagnostics: 0 warnings, 0 info`);
 				{ path: contextPath, content: "Updated global context." },
 				{ path: "caller://fixed", content: "Original caller context." },
 			]);
-			expect(await coding.handleCommand("/context")).toMatchObject({
-				outcome: { text: `${contextPath}\ncaller://fixed` },
-			});
 			expect(coding.systemPrompt).toContain("Updated global context.");
 			expect(coding.systemPrompt).toContain("Original caller context.");
 			expect(coding.systemPrompt).not.toContain("Mutated by caller.");
@@ -1639,7 +1651,7 @@ Resource diagnostics: 0 warnings, 0 info`);
 
 	test("composes custom prompt additions in provider-visible order", async () => {
 		const provider = new FakeProvider([textScript("done")]);
-		const session = await createMemorySession("C:\\workspace\\project");
+		const session = await createMemorySession("/workspace/project");
 		const coding = await CodingSession.load(
 			config(session, provider, {
 				systemPrompt: "Custom base",
@@ -1664,7 +1676,7 @@ Trusted context
 
 </project_context>
 
-Current working directory: C:/workspace/project`);
+Current working directory: /workspace/project`);
 		expect(coding.systemPrompt).not.toContain("Must not replace custom base");
 
 		await coding.prompt("inspect").result();

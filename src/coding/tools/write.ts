@@ -63,9 +63,9 @@ export function createWriteToolDefinition(
 		name: "write",
 		description:
 			"Write a complete UTF-8 file. Creates parent directories and overwrites an existing file.",
-		promptSnippet: "Create or overwrite files",
+		promptSnippet: "Create new files or intentionally rewrite complete files",
 		promptGuidelines: [
-			"Use write for new files or intentional complete rewrites.",
+			"Use write for new files; use edit for changes to existing text files so Areeb can render structured diffs, reserving write for intentional complete rewrites that edit cannot apply cleanly.",
 		],
 		inputSchema: writeInputSchema,
 		async executor({ path, content }, signal) {

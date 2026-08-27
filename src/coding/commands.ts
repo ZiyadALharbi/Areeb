@@ -2,6 +2,7 @@ import { assertUuid } from "../agent/session/session.ts";
 import type { SessionModel } from "../agent/session/types.ts";
 import type { AuthType } from "../ai/auth.ts";
 import { isReasoningLevel, type ReasoningLevel } from "../ai/types.ts";
+import type { ContextUsageEstimate } from "./context-window.ts";
 import type { ResourceDiagnostic } from "./resources.ts";
 
 const COMMAND_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -71,8 +72,8 @@ export interface CommandContext {
 	readonly listModels: () => readonly CommandModelListItem[];
 	readonly listAuthProviders?: () => readonly CommandProviderAuthItem[];
 	readonly getSessionInfo: () => Promise<CommandSessionInfo>;
+	readonly getContextUsage: () => ContextUsageEstimate;
 	readonly getResourceSummary: () => CommandResourceSummary;
-	readonly getContextFiles: () => readonly string[];
 	readonly reloadResources: () => Promise<CommandResourceReloadResult>;
 	readonly getSessionName: () => Promise<string | undefined>;
 	readonly setSessionName: (name: string) => Promise<void>;
@@ -293,20 +294,16 @@ export function createDefaultCommandRegistry(): CommandRegistry {
 	});
 	registry.register({
 		name: "context",
-		description: "Show active project context files",
+		description: "Show active context usage",
 		usage: "/context",
 		async handler(context, argumentsText) {
 			if (argumentsText.length > 0) {
 				return usageError("/context");
 			}
-			const files = context.getContextFiles();
 			return {
 				kind: "message",
 				level: "info",
-				text:
-					files.length === 0
-						? "No project context files loaded"
-						: files.join("\n"),
+				text: formatContextStatus(context.getContextUsage()),
 			};
 		},
 	});
@@ -709,6 +706,58 @@ function formatReloadSummary(summary: CommandResourceReloadResult): string {
 		formatResourceSummary(summary),
 		`System prompt changed: ${summary.systemPromptChanged ? "yes" : "no"}`,
 	].join("\n");
+}
+
+export function formatContextStatus(usage: ContextUsageEstimate): string {
+	const lines = [
+		"Context",
+		`Estimated: ${formatInteger(usage.usedTokens)} / ${formatInteger(usage.windowTokens)} tokens (${usage.percent}%)`,
+	];
+	if (usage.breakdown.mode === "provider-anchor") {
+		lines.push(
+			"Mode: provider anchor",
+			`Provider prefix: ${formatInteger(usage.breakdown.providerTokens)} tokens`,
+			`Estimated trailing: ${formatInteger(usage.breakdown.trailingTokens)} tokens · ${formatCount(usage.breakdown.trailingMessageCount, "message")}`,
+		);
+	} else {
+		lines.push(
+			"Mode: full estimate",
+			`System: ${formatInteger(usage.breakdown.systemTokens)} tokens`,
+			`Messages: ${formatInteger(usage.breakdown.messageTokens)} tokens · ${formatCount(usage.breakdown.messageCount, "message")}`,
+			`Tools: ${formatInteger(usage.breakdown.toolTokens)} tokens · ${formatCount(usage.breakdown.toolCount, "tool")}`,
+		);
+	}
+	lines.push(`Window source: ${formatWindowSource(usage.contextWindowSource)}`);
+	if (usage.effectiveContextWindowPercent !== undefined) {
+		lines.push(
+			`Provider effective window metadata: ${usage.effectiveContextWindowPercent}%`,
+		);
+	}
+	if (usage.discoveryError !== undefined) {
+		lines.push(`Catalog discovery: ${usage.discoveryError}`);
+	}
+	return lines.join("\n");
+}
+
+function formatWindowSource(
+	source: ContextUsageEstimate["contextWindowSource"],
+): string {
+	switch (source) {
+		case "live":
+			return "provider live catalog";
+		case "configured":
+			return "configured catalog";
+		case "fallback":
+			return "fallback";
+	}
+}
+
+function formatInteger(value: number): string {
+	return Math.round(value).toLocaleString("en-US");
+}
+
+function formatCount(value: number, singular: string): string {
+	return `${formatInteger(value)} ${singular}${value === 1 ? "" : "s"}`;
 }
 
 function formatDiagnosticTotals(

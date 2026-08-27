@@ -14,7 +14,12 @@ import type {
 	QueueMode,
 } from "../agent/types.ts";
 import type { ModelProvider } from "../ai/provider_protocol.ts";
-import { isReasoningLevel, type ReasoningLevel } from "../ai/types.ts";
+import {
+	type AssistantMessage,
+	isReasoningLevel,
+	type ModelContext,
+	type ReasoningLevel,
+} from "../ai/types.ts";
 import {
 	type CommandContext,
 	type CommandHotkey,
@@ -27,6 +32,13 @@ import {
 	createDefaultCommandRegistry,
 	type SlashCommand,
 } from "./commands.ts";
+import {
+	type ContextUsageEstimate,
+	type ContextWindowSource,
+	estimateContextUsage,
+	FALLBACK_CONTEXT_WINDOW_TOKENS,
+	projectModelContext,
+} from "./context-window.ts";
 import { type AreebPaths, areebPaths } from "./paths.ts";
 import type { ProjectContextFile } from "./project-context.ts";
 import {
@@ -68,9 +80,13 @@ export interface CodingSessionConfig<
 	readonly messageConverter?: AgentMessageConverter;
 	readonly steeringMode?: QueueMode;
 	readonly followUpMode?: QueueMode;
+	readonly contextWindowTokens?: number;
+	readonly contextWindowSource?: ContextWindowSource;
+	readonly contextWindowDiscoveryError?: string;
+	readonly effectiveContextWindowPercent?: number;
 	/** Override the canonical user and project resource paths. */
 	readonly resourcePaths?: AreebPaths;
-	/** Project resources are ignored unless the caller explicitly trusts them. */
+	/** Project skills and prompt templates are ignored unless the caller explicitly trusts them. */
 	readonly trustProjectResources?: boolean;
 }
 
@@ -118,10 +134,16 @@ export class CodingSession<
 	private persistenceFailure: unknown;
 	private resourceReload: Promise<CommandResourceReloadResult> | undefined;
 	private reasoningMutation: Promise<void> | undefined;
+	private requestShapeRevision = 1;
+	private contextSnapshotRevision = 0;
+	private activeRequestRevision: number | undefined;
+	private contextUsageSnapshot!: ContextUsageEstimate;
+	private readonly messageRevisions = new WeakMap<object, number>();
 
 	private constructor(
 		private readonly session: SessionHandle<TMetadata>,
 		private readonly harness: AgentHarness,
+		private readonly modelProvider: ModelProvider,
 		private readonly sessionMetadata: TMetadata,
 		private readonly sessionProvider: string,
 		private readonly sessionModel: string,
@@ -132,6 +154,11 @@ export class CodingSession<
 		private readonly resourceInputs: SessionResourceInputs,
 		private resourceSnapshot: SessionResourceSnapshot,
 		private readonly commandRegistry: CommandRegistry,
+		private readonly windowTokens: number,
+		private readonly windowSource: ContextWindowSource,
+		private readonly windowDiscoveryError: string | undefined,
+		private readonly effectiveWindowPercent: number | undefined,
+		private readonly allowProviderAnchor: boolean,
 	) {}
 
 	static async load<TMetadata extends SessionMetadata = SessionMetadata>(
@@ -339,6 +366,7 @@ export class CodingSession<
 		const codingSession = new CodingSession(
 			config.session,
 			harness,
+			config.provider,
 			metadata,
 			runtimeModel.provider,
 			runtimeModel.model,
@@ -349,7 +377,14 @@ export class CodingSession<
 			resourceInputs,
 			resourceSnapshot,
 			commandRegistry,
+			config.contextWindowTokens ?? FALLBACK_CONTEXT_WINDOW_TOKENS,
+			config.contextWindowSource ??
+				(config.contextWindowTokens === undefined ? "fallback" : "configured"),
+			config.contextWindowDiscoveryError,
+			config.effectiveContextWindowPercent,
+			config.messageConverter === undefined,
 		);
+		await codingSession.refreshContextUsage(await harness.prepareContext());
 		return { session: codingSession, storedModel: { ...storedModel } };
 	}
 
@@ -379,6 +414,10 @@ export class CodingSession<
 
 	get systemPrompt(): string {
 		return this.assembledSystemPrompt;
+	}
+
+	get contextUsage(): ContextUsageEstimate {
+		return this.contextUsageSnapshot;
 	}
 
 	get tools(): readonly AgentTool[] {
@@ -552,12 +591,24 @@ export class CodingSession<
 
 	private attachPersistence(): void {
 		this.harness.subscribe(async (event) => {
+			if (event.type === "request_context") {
+				this.activeRequestRevision = this.requestShapeRevision;
+				await this.refreshContextUsage(event.context);
+				return;
+			}
 			if (event.type !== "message_end") {
 				return;
 			}
 
 			try {
 				await this.session.appendMessage(event.message);
+				if (isAssistantMessage(event.message)) {
+					this.messageRevisions.set(
+						event.message,
+						this.activeRequestRevision ?? this.requestShapeRevision,
+					);
+				}
+				await this.refreshContextUsage(await this.harness.prepareContext());
 			} catch (error) {
 				this.persistenceFailure = error;
 				throw error;
@@ -614,8 +665,11 @@ export class CodingSession<
 		if (systemPromptChanged) {
 			this.harness.replaceSystemPrompt(candidateSystemPrompt);
 		}
+		this.requestShapeRevision += 1;
+		this.activeRequestRevision = undefined;
 		this.resourceSnapshot = candidate;
 		this.assembledSystemPrompt = candidateSystemPrompt;
+		await this.refreshContextUsage(await this.harness.prepareContext());
 
 		return Object.freeze({
 			skillCount: candidate.skills.length,
@@ -623,6 +677,33 @@ export class CodingSession<
 			contextFileCount: candidate.contextFiles.length,
 			diagnostics: candidate.diagnostics,
 			systemPromptChanged,
+		});
+	}
+
+	private async refreshContextUsage(context: ModelContext): Promise<void> {
+		const projection =
+			this.modelProvider.projectContext?.(this.sessionModel, context) ??
+			projectModelContext(context);
+		this.contextSnapshotRevision += 1;
+		this.contextUsageSnapshot = estimateContextUsage({
+			context,
+			projection,
+			providerId: this.sessionProvider,
+			model: this.sessionModel,
+			requestShapeRevision: this.requestShapeRevision,
+			revision: this.contextSnapshotRevision,
+			windowTokens: this.windowTokens,
+			contextWindowSource: this.windowSource,
+			...(this.windowDiscoveryError === undefined
+				? {}
+				: { discoveryError: this.windowDiscoveryError }),
+			...(this.effectiveWindowPercent === undefined
+				? {}
+				: {
+						effectiveContextWindowPercent: this.effectiveWindowPercent,
+					}),
+			allowProviderAnchor: this.allowProviderAnchor,
+			getMessageRevision: (message) => this.messageRevisions.get(message),
 		});
 	}
 
@@ -688,8 +769,6 @@ export class CodingSession<
 				contextFileCount: this.resourceSnapshot.contextFiles.length,
 				diagnostics: this.resourceDiagnostics,
 			}),
-			getContextFiles: () =>
-				this.resourceSnapshot.contextFiles.map((file) => file.path),
 			reloadResources: () => this.reloadResources(),
 			getSessionInfo: async () => {
 				const name = await this.session.getName();
@@ -704,6 +783,7 @@ export class CodingSession<
 					isRunning: this.harness.isRunning,
 				};
 			},
+			getContextUsage: () => this.contextUsageSnapshot,
 			getSessionName: () => this.session.getName(),
 			setSessionName: (name) => this.session.setName(name),
 			getTuiInfo: () => {
@@ -745,11 +825,31 @@ function validateConfig(config: CodingSessionConfig): void {
 		);
 	}
 	if (
+		config.contextWindowTokens !== undefined &&
+		(!Number.isFinite(config.contextWindowTokens) ||
+			config.contextWindowTokens <= 0)
+	) {
+		throw new Error(
+			"CodingSession context window must be finite and greater than zero",
+		);
+	}
+	if (
 		config.systemPrompt !== undefined &&
 		config.systemPrompt.trim().length === 0
 	) {
 		throw new Error("Custom system prompt cannot be empty");
 	}
+}
+
+function isAssistantMessage(
+	message: AgentMessage,
+): message is AssistantMessage {
+	return (
+		typeof message === "object" &&
+		message !== null &&
+		"role" in message &&
+		message.role === "assistant"
+	);
 }
 
 function validateAvailableTools(tools: readonly CodingToolDefinition[]): void {

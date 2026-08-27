@@ -16,6 +16,7 @@ import type {
 import { EventStream } from "../../../src/ai/event-stream.ts";
 import type { ReasoningLevel, UserMessage } from "../../../src/ai/types.ts";
 import type { CommandResult } from "../../../src/coding/commands.ts";
+import type { ContextUsageEstimate } from "../../../src/coding/context-window.ts";
 import type { CodingSessionHostServices } from "../../../src/coding/session.ts";
 import {
 	CodingSessionManager,
@@ -30,6 +31,25 @@ import {
 const FIRST_ID = "00000000-0000-4000-8000-000000000001";
 const SECOND_ID = "00000000-0000-4000-8000-000000000002";
 const THIRD_ID = "00000000-0000-4000-8000-000000000003";
+const EMPTY_CONTEXT_USAGE: ContextUsageEstimate = {
+	revision: 0,
+	requestShapeRevision: 0,
+	usedTokens: 0,
+	windowTokens: 128_000,
+	percent: 0,
+	mode: "full-estimate",
+	usesProviderUsage: false,
+	breakdown: {
+		mode: "full-estimate",
+		systemTokens: 0,
+		messageTokens: 0,
+		toolTokens: 0,
+		imageTokens: 0,
+		messageCount: 0,
+		toolCount: 0,
+	},
+	contextWindowSource: "fallback",
+};
 
 function user(text: string): UserMessage {
 	return {
@@ -46,6 +66,7 @@ class StubSession implements TuiControllerSession {
 	readonly skills: { readonly name: string }[] = [];
 	readonly promptTemplates: { readonly name: string }[] = [];
 	readonly resourceDiagnostics = [];
+	readonly contextUsage = EMPTY_CONTEXT_USAGE;
 	readonly reasoningCalls: ReasoningLevel[] = [];
 	abortCount = 0;
 	isRunning = false;

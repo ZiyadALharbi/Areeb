@@ -1,3 +1,4 @@
+import { isAbsolute, normalize, relative, resolve, sep } from "node:path";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import type {
 	AgentEndReason,
@@ -10,7 +11,12 @@ import type {
 	Usage,
 	UserMessage,
 } from "../../ai/types.ts";
-import type { ChatItem, StreamingAssistantBlock, TuiState } from "./state.ts";
+import type {
+	ChatItem,
+	StreamingAssistantBlock,
+	TuiEditDetails,
+	TuiState,
+} from "./state.ts";
 
 const TOOL_PREVIEW_MAX_BYTES = 4 * 1024;
 const TOOL_PREVIEW_MAX_LINES = 16;
@@ -53,6 +59,7 @@ export class TuiEventAdapter {
 				return changed;
 			}
 			case "message_start":
+			case "request_context":
 			case "turn_start":
 			case "turn_end":
 			case "tool_execution_update":
@@ -211,7 +218,8 @@ export class TuiEventAdapter {
 		const existing = index === -1 ? undefined : this.state.items[index];
 		const preview =
 			result === undefined ? undefined : toolResultPreview(result);
-		const patch = result === undefined ? undefined : editPatch(result);
+		const edit =
+			result === undefined ? undefined : editDetails(result, this.state.cwd);
 		const item: ChatItem = {
 			...(existing?.role === "tool" ? existing : {}),
 			role: "tool",
@@ -222,7 +230,7 @@ export class TuiEventAdapter {
 				? {}
 				: {
 						...(preview === undefined ? {} : { preview }),
-						...(patch === undefined ? {} : { patch }),
+						...(edit === undefined ? {} : { edit }),
 						isError: result.isError,
 					}),
 		};
@@ -280,19 +288,59 @@ function toolResultPreview(message: ToolResultMessage): string | undefined {
 	return boundToolText(stripTerminalSequences(text));
 }
 
-function editPatch(message: ToolResultMessage): string | undefined {
+function editDetails(
+	message: ToolResultMessage,
+	cwd: string,
+): TuiEditDetails | undefined {
 	if (
 		message.toolName !== "edit" ||
 		typeof message.details !== "object" ||
 		message.details === null ||
 		Array.isArray(message.details) ||
+		!("path" in message.details) ||
+		typeof message.details.path !== "string" ||
+		message.details.path.trim().length === 0 ||
+		!("diff" in message.details) ||
+		typeof message.details.diff !== "string" ||
 		!("patch" in message.details) ||
 		typeof message.details.patch !== "string" ||
 		message.details.patch.trim().length === 0
 	) {
 		return undefined;
 	}
-	return boundToolText(stripTerminalSequences(message.details.patch));
+	const firstChangedLine =
+		"firstChangedLine" in message.details &&
+		typeof message.details.firstChangedLine === "number" &&
+		Number.isSafeInteger(message.details.firstChangedLine) &&
+		message.details.firstChangedLine > 0
+			? message.details.firstChangedLine
+			: undefined;
+	return {
+		path: normalizeEditPath(message.details.path, cwd),
+		diff: boundToolText(stripTerminalSequences(message.details.diff)),
+		patch: boundToolText(stripTerminalSequences(message.details.patch)),
+		...(firstChangedLine === undefined ? {} : { firstChangedLine }),
+	};
+}
+
+function normalizeEditPath(filePath: string, cwd: string): string {
+	const cleanPath = stripTerminalSequences(filePath).replace(/\p{Cc}/gu, "�");
+	const absoluteCwd = resolve(cwd);
+	const absolutePath = isAbsolute(cleanPath)
+		? normalize(cleanPath)
+		: resolve(absoluteCwd, cleanPath);
+	const projectPath = relative(absoluteCwd, absolutePath);
+	const displayPath =
+		projectPath !== "" &&
+		projectPath !== ".." &&
+		!projectPath.startsWith(`..${sep}`) &&
+		!isAbsolute(projectPath)
+			? projectPath
+			: absolutePath;
+	return takeUtf8Prefix(
+		displayPath.replaceAll("\\", "/"),
+		TOOL_PREVIEW_MAX_BYTES,
+	);
 }
 
 function usageEqual(left: Usage | undefined, right: Usage): boolean {
@@ -376,8 +424,20 @@ function toolItemsEqual(
 		left.toolName === right.toolName &&
 		left.toolCallId === right.toolCallId &&
 		left.preview === right.preview &&
-		left.patch === right.patch &&
+		editDetailsEqual(left.edit, right.edit) &&
 		left.isError === right.isError
+	);
+}
+
+function editDetailsEqual(
+	left: TuiEditDetails | undefined,
+	right: TuiEditDetails | undefined,
+): boolean {
+	return (
+		left?.path === right?.path &&
+		left?.diff === right?.diff &&
+		left?.patch === right?.patch &&
+		left?.firstChangedLine === right?.firstChangedLine
 	);
 }
 

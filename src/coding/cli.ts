@@ -52,7 +52,7 @@ Options:
       --model <model>        Select an exact configured model
       --effort <level>       Thinking effort: off, low, medium, high, xhigh, or max
       --output <mode>        Output mode: text, json, or transcript (default: text)
-      --trust-project        Load project-controlled resources and instructions
+      --trust-project        Load project skills and prompt templates
   -h, --help                 Show this help
 
 Provider settings: ~/.areeb/providers.json
@@ -522,6 +522,20 @@ async function loadCodingSession(
 		...(providerRuntime.unavailableReason === undefined
 			? {}
 			: { unavailableReason: providerRuntime.unavailableReason }),
+		contextWindowTokens: providerRuntime.contextWindowTokens,
+		contextWindowSource: providerRuntime.contextWindowSource,
+		...(providerRuntime.contextWindowDiscoveryError === undefined
+			? {}
+			: {
+					contextWindowDiscoveryError:
+						providerRuntime.contextWindowDiscoveryError,
+				}),
+		...(providerRuntime.effectiveContextWindowPercent === undefined
+			? {}
+			: {
+					effectiveContextWindowPercent:
+						providerRuntime.effectiveContextWindowPercent,
+				}),
 		resourcePaths: areebPaths({
 			cwd: options.cwd,
 			...(options.userRoot === undefined ? {} : { userRoot: options.userRoot }),
@@ -556,6 +570,20 @@ async function prepareCodingSessionModelChange(
 		...(providerRuntime.unavailableReason === undefined
 			? {}
 			: { unavailableReason: providerRuntime.unavailableReason }),
+		contextWindowTokens: providerRuntime.contextWindowTokens,
+		contextWindowSource: providerRuntime.contextWindowSource,
+		...(providerRuntime.contextWindowDiscoveryError === undefined
+			? {}
+			: {
+					contextWindowDiscoveryError:
+						providerRuntime.contextWindowDiscoveryError,
+				}),
+		...(providerRuntime.effectiveContextWindowPercent === undefined
+			? {}
+			: {
+					effectiveContextWindowPercent:
+						providerRuntime.effectiveContextWindowPercent,
+				}),
 		resourcePaths: areebPaths({
 			cwd: options.cwd,
 			...(options.userRoot === undefined ? {} : { userRoot: options.userRoot }),

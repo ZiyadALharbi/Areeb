@@ -9,6 +9,27 @@ import {
 	createDefaultCommandRegistry,
 	type SlashCommand,
 } from "../../src/coding/commands.ts";
+import type { ContextUsageEstimate } from "../../src/coding/context-window.ts";
+
+const DEFAULT_CONTEXT_USAGE: ContextUsageEstimate = {
+	revision: 1,
+	requestShapeRevision: 1,
+	usedTokens: 0,
+	windowTokens: 128_000,
+	percent: 0,
+	mode: "full-estimate",
+	usesProviderUsage: false,
+	breakdown: {
+		mode: "full-estimate",
+		systemTokens: 0,
+		messageTokens: 0,
+		toolTokens: 0,
+		imageTokens: 0,
+		messageCount: 0,
+		toolCount: 0,
+	},
+	contextWindowSource: "fallback",
+};
 
 function context(
 	capabilities: readonly Parameters<CommandContext["hasCapability"]>[0][] = [],
@@ -18,11 +39,11 @@ function context(
 		contextFileCount: 0,
 		diagnostics: [],
 	},
-	contextFiles: readonly string[] = [],
 	systemPromptChanged = false,
 	sessions: readonly CommandSessionListItem[] | Error = [],
 	models: readonly CommandModelListItem[] = [],
 	providers: readonly CommandProviderAuthItem[] = [],
+	contextUsage: ContextUsageEstimate = DEFAULT_CONTEXT_USAGE,
 ): CommandContext {
 	let name: string | undefined;
 	return {
@@ -36,7 +57,7 @@ function context(
 		listModels: () => models,
 		listAuthProviders: () => providers,
 		getResourceSummary: () => resourceSummary,
-		getContextFiles: () => [...contextFiles],
+		getContextUsage: () => contextUsage,
 		async reloadResources() {
 			return { ...resourceSummary, systemPromptChanged };
 		},
@@ -305,7 +326,6 @@ describe("default slash commands", () => {
 		const commandContext = context(
 			["provider-auth"],
 			undefined,
-			[],
 			false,
 			[],
 			[],
@@ -362,9 +382,7 @@ describe("default slash commands", () => {
 		expect(help.outcome.text).toContain(
 			"/resources — Show loaded resources and discovery diagnostics",
 		);
-		expect(help.outcome.text).toContain(
-			"/context — Show active project context files",
-		);
+		expect(help.outcome.text).toContain("/context — Show active context usage");
 		expect(help.outcome.text).toContain(
 			"/reload — Reload local resources and project context",
 		);
@@ -486,7 +504,6 @@ describe("default slash commands", () => {
 		const commandContext = context(
 			["session-controller", "model-selection"],
 			undefined,
-			[],
 			false,
 			[],
 			models,
@@ -579,22 +596,30 @@ Info:
 - [prompt-template/overridden] review: Prompt template was overridden (path: /user/review.md; winner: /project/review.md)`);
 	});
 
-	test("lists context paths and reloads resources with argument validation", async () => {
+	test("reports exact context usage with source-aware provenance", async () => {
 		const registry = createDefaultCommandRegistry();
-		const summary: CommandResourceSummary = {
-			skillCount: 2,
-			promptTemplateCount: 1,
-			contextFileCount: 2,
-			diagnostics: [],
+		const fullEstimate: ContextUsageEstimate = {
+			revision: 2,
+			requestShapeRevision: 1,
+			usedTokens: 20_000,
+			windowTokens: 128_000,
+			percent: 16,
+			mode: "full-estimate",
+			usesProviderUsage: false,
+			breakdown: {
+				mode: "full-estimate",
+				systemTokens: 1_000,
+				messageTokens: 15_000,
+				toolTokens: 4_000,
+				imageTokens: 0,
+				messageCount: 4,
+				toolCount: 2,
+			},
+			contextWindowSource: "configured",
 		};
-		const commandContext = context(
-			[],
-			summary,
-			["/workspace/AGENTS.md", "/workspace/.areeb/AGENTS.md"],
-			true,
-		);
+		const fullContext = context([], undefined, false, [], [], [], fullEstimate);
 
-		expect(await registry.dispatch("/context extra", commandContext)).toEqual({
+		expect(await registry.dispatch("/context extra", fullContext)).toEqual({
 			handled: true,
 			outcome: {
 				kind: "message",
@@ -602,17 +627,62 @@ Info:
 				text: "Usage: /context",
 			},
 		});
-		expect(await registry.dispatch("/context", commandContext)).toEqual({
+		expect(await registry.dispatch("/context", fullContext)).toEqual({
 			handled: true,
 			outcome: {
 				kind: "message",
 				level: "info",
-				text: "/workspace/AGENTS.md\n/workspace/.areeb/AGENTS.md",
+				text: `Context
+Estimated: 20,000 / 128,000 tokens (16%)
+Mode: full estimate
+System: 1,000 tokens
+Messages: 15,000 tokens · 4 messages
+Tools: 4,000 tokens · 2 tools
+Window source: configured catalog`,
 			},
 		});
-		expect(await registry.dispatch("/context", context())).toMatchObject({
-			outcome: { text: "No project context files loaded" },
+
+		const anchored: ContextUsageEstimate = {
+			...fullEstimate,
+			revision: 3,
+			mode: "provider-anchor",
+			usesProviderUsage: true,
+			breakdown: {
+				mode: "provider-anchor",
+				providerTokens: 18_000,
+				trailingTokens: 2_000,
+				imageTokens: 0,
+				trailingMessageCount: 1,
+			},
+			contextWindowSource: "live",
+			effectiveContextWindowPercent: 90,
+			discoveryError: "catalog unavailable",
+		};
+		const anchorContext = context([], undefined, false, [], [], [], anchored);
+		expect(await registry.dispatch("/context", anchorContext)).toMatchObject({
+			outcome: {
+				text: `Context
+Estimated: 20,000 / 128,000 tokens (16%)
+Mode: provider anchor
+Provider prefix: 18,000 tokens
+Estimated trailing: 2,000 tokens · 1 message
+Window source: provider live catalog
+Provider effective window metadata: 90%
+Catalog discovery: catalog unavailable`,
+			},
 		});
+	});
+
+	test("reloads resources with argument validation", async () => {
+		const registry = createDefaultCommandRegistry();
+		const summary: CommandResourceSummary = {
+			skillCount: 2,
+			promptTemplateCount: 1,
+			contextFileCount: 2,
+			diagnostics: [],
+		};
+		const commandContext = context([], summary, true);
+
 		expect(await registry.dispatch("/reload extra", commandContext)).toEqual({
 			handled: true,
 			outcome: {

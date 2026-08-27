@@ -12,7 +12,7 @@ describe("provider auth TUI", () => {
 			[
 				{
 					id: "openai-codex",
-					displayName: "ChatGPT Plus/Pro (Codex Subscription)",
+					displayName: "ChatGPT Plus/Pro",
 					authType: "oauth",
 					authLabel: "subscription",
 					status: "not connected",
@@ -32,12 +32,18 @@ describe("provider auth TUI", () => {
 			AREEB_DARK_THEME,
 		);
 		const lines = picker.render(80);
+		const styled = lines.join("\n");
 		const rendered = stripTerminalSequences(lines.join("\n"));
-		expect(rendered).toContain("ChatGPT Plus/Pro (Codex Subscription)");
-		expect(rendered).toContain("OAuth · subscription");
-		expect(rendered).toContain("API key · api key");
+		expect(rendered).toContain("ChatGPT Plus/Pro");
+		expect(rendered).toContain("Subscription");
+		expect(rendered).toContain("API key");
+		expect(rendered).not.toContain("OAuth ·");
+		expect(rendered).not.toContain("API key ·");
 		expect(rendered).toContain("connected (environment)");
-		expect(lines.join("\n")).toContain("\u001b[1m");
+		expect(styled).toContain("\u001b[1m");
+		expect(styled).toContain(AREEB_DARK_THEME.muted("Subscription"));
+		expect(styled).toContain(AREEB_DARK_THEME.primary("ChatGPT Plus/Pro"));
+		expect(styled).toContain(AREEB_DARK_THEME.primary("OpenAI"));
 	});
 
 	test("masks API keys and never renders the secret", async () => {

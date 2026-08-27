@@ -27,6 +27,7 @@ import type {
 	CommandModelListItem,
 	CommandSessionListItem,
 } from "../commands.ts";
+import { formatContextUsageCompact } from "../context-window.ts";
 import type { ProviderAuthView } from "../provider-runtime.ts";
 import {
 	buildCompletionState,
@@ -35,8 +36,8 @@ import {
 } from "./autocomplete.ts";
 import {
 	MessageBlock,
+	SPINNER_INTERVAL,
 	ThinkingBlock,
-	TOOL_SPINNER_INTERVAL,
 	ToolBlock,
 	ToolGroupBlock,
 } from "./blocks.ts";
@@ -64,7 +65,6 @@ const COMMAND_OVERLAY_MAX_LINES = 24;
 const COMMAND_OVERLAY_MAX_CHARACTERS = 8 * 1024;
 
 export type CommandNoticeLevel = "info" | "warning" | "error";
-
 export interface TuiShortcutSet {
 	readonly idle: string;
 	readonly menu: string;
@@ -224,17 +224,19 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 	const toolGroupsById = new Map<string, ToolGroupBlock>();
 
 	const syncToolSpinner = (state: TuiState): void => {
-		const hasActiveTool =
+		const lastStreaming = state.assistantBlocks?.at(-1);
+		const hasActiveSpinner =
 			state.running &&
-			state.items.some(
+			(state.items.some(
 				(item) => item.role === "tool" && item.isError === undefined,
-			);
-		if (hasActiveTool && toolSpinnerTimer === undefined) {
+			) ||
+				lastStreaming?.role === "thinking");
+		if (hasActiveSpinner && toolSpinnerTimer === undefined) {
 			toolSpinnerTimer = setInterval(
 				() => tui.requestRender(),
-				TOOL_SPINNER_INTERVAL,
+				SPINNER_INTERVAL,
 			);
-		} else if (!hasActiveTool && toolSpinnerTimer !== undefined) {
+		} else if (!hasActiveSpinner && toolSpinnerTimer !== undefined) {
 			clearInterval(toolSpinnerTimer);
 			toolSpinnerTimer = undefined;
 		}
@@ -1002,7 +1004,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 						toolName: tool.toolName,
 						active: state.running && tool.isError === undefined,
 						preview: tool.preview,
-						patch: tool.patch,
+						edit: tool.edit,
 						isError: tool.isError,
 					})),
 				);
@@ -1270,9 +1272,25 @@ class ComposerStatusLine implements Component {
 			return [];
 		}
 		const left = this.renderLeft();
-		return left === undefined
-			? []
-			: [truncateToWidth(left, availableWidth, "…")];
+		if (left !== undefined) {
+			return [truncateToWidth(left, availableWidth, "…")];
+		}
+		const usage = this.state?.contextUsage;
+		if (
+			usage === undefined ||
+			this.state?.running === true ||
+			this.state?.inputMode === "locked"
+		) {
+			return [];
+		}
+		const meter = truncateToWidth(
+			this.theme.muted(formatContextUsageCompact(usage)),
+			availableWidth,
+			"…",
+		);
+		return [
+			`${" ".repeat(Math.max(0, availableWidth - visibleWidth(meter)))}${meter}`,
+		];
 	}
 
 	private renderLeft(): string | undefined {
@@ -1292,11 +1310,6 @@ class ComposerStatusLine implements Component {
 		}
 		if (this.state?.inputMode === "locked") {
 			return undefined;
-		}
-		if (this.state?.lastUsage !== undefined) {
-			return this.theme.muted(
-				`Last · ${formatTokenCount(this.state.lastUsage.inputTokens)} in · ${formatTokenCount(this.state.lastUsage.outputTokens)} out`,
-			);
 		}
 		return undefined;
 	}
@@ -1430,14 +1443,6 @@ function fitLine(line: string, width: number): string {
 	return `${fitted}${" ".repeat(Math.max(0, width - visibleWidth(fitted)))}`;
 }
 
-function formatTokenCount(value: number): string {
-	if (value < 1_000) {
-		return String(value);
-	}
-	const formatted = (value / 1_000).toFixed(1);
-	return `${formatted.replace(/\.0$/, "")}k`;
-}
-
 function renderComposerMetadata(
 	state: TuiState | undefined,
 	width: number,
@@ -1446,7 +1451,7 @@ function renderComposerMetadata(
 	if (state === undefined || width === 0) {
 		return "";
 	}
-	const effort = `effort ${state.reasoning}`;
+	const effort = `${state.reasoning}`;
 	if (visibleWidth(effort) >= width) {
 		return theme.assistant(truncateToWidth(effort, width, "…"));
 	}
@@ -1649,7 +1654,7 @@ function createChatItemBlock(item: ChatItem, theme: TuiTheme): Component {
 		case "tool":
 			return new ToolBlock(item.toolName, theme, {
 				preview: item.preview,
-				patch: item.patch,
+				edit: item.edit,
 				isError: item.isError,
 			});
 	}

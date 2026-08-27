@@ -3,6 +3,7 @@ import type { AssistantMessageEvent } from "../ai/events.ts";
 import type { ModelProvider, StreamOptions } from "../ai/provider_protocol.ts";
 import type {
 	Message,
+	ModelContext,
 	ToolCall,
 	ToolDefinition,
 	ToolResultContent,
@@ -158,6 +159,7 @@ export type AgentEvent =
 			message: AgentMessage;
 			toolResults: ToolResultMessage[];
 	  }
+	| { type: "request_context"; context: ModelContext }
 
 	// Message lifecycle
 	| { type: "message_start"; message: AgentMessage }

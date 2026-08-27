@@ -30,6 +30,15 @@ const toolResult: ToolResultMessage = {
 	timestamp: 3,
 };
 
+function createWorkspaceState() {
+	return createTuiState({
+		sessionId: "session",
+		model: "model",
+		cwd: "/workspace",
+		reasoning: "high",
+	});
+}
+
 describe("TuiEventAdapter", () => {
 	test("restores visible transcript content including separate thinking rows", () => {
 		const state = createTuiState();
@@ -244,11 +253,12 @@ describe("TuiEventAdapter", () => {
 		});
 	});
 
-	test("stores bounded previews and validated edit patches", () => {
-		const state = createTuiState();
+	test("stores bounded previews and structured edit details", () => {
+		const state = createWorkspaceState();
 		const adapter = new TuiEventAdapter(state);
 		const editCall: ToolCall = { ...toolCall, id: "edit-1", name: "edit" };
-		const patch = "@@ -1 +1 @@\n-old\n+new";
+		const diff = " 1 context\n-2 old\n+2 new";
+		const patch = "@@ -1,2 +1,2 @@\n context\n-old\n+new";
 		const result: ToolResultMessage = {
 			role: "tool_result",
 			toolCallId: editCall.id,
@@ -262,7 +272,12 @@ describe("TuiEventAdapter", () => {
 					).join("\n"),
 				},
 			],
-			details: { patch },
+			details: {
+				path: "/workspace/src/file.ts",
+				diff,
+				patch,
+				firstChangedLine: 2,
+			},
 			isError: false,
 			timestamp: 4,
 		};
@@ -273,7 +288,12 @@ describe("TuiEventAdapter", () => {
 		if (item?.role !== "tool") {
 			throw new Error("Expected a tool item");
 		}
-		expect(item.patch).toBe(patch);
+		expect(item.edit).toEqual({
+			path: "src/file.ts",
+			diff,
+			patch,
+			firstChangedLine: 2,
+		});
 		expect(item.preview?.split("\n").length).toBeLessThanOrEqual(16);
 		expect(item.preview).toContain("omitted");
 		expect(
@@ -281,10 +301,14 @@ describe("TuiEventAdapter", () => {
 		).toBeLessThanOrEqual(4 * 1024);
 	});
 
-	test("bounds and sanitizes restored edit patches", () => {
-		const state = createTuiState();
+	test("bounds and sanitizes restored structured edit details", () => {
+		const state = createWorkspaceState();
 		const adapter = new TuiEventAdapter(state);
 		const editCall: ToolCall = { ...toolCall, id: "edit-large", name: "edit" };
+		const diff = Array.from(
+			{ length: 40 },
+			(_, index) => `+${index + 1} line ${index} ${"x".repeat(300)}`,
+		).join("\n");
 		const patch = Array.from(
 			{ length: 40 },
 			(_, index) => `+line ${index} ${"x".repeat(300)}`,
@@ -294,7 +318,12 @@ describe("TuiEventAdapter", () => {
 			toolCallId: editCall.id,
 			toolName: editCall.name,
 			content: [],
-			details: { patch: `\u001b[31m${patch}\u001b[0m` },
+			details: {
+				path: "/workspace/\u001b[31msrc/file.ts\u001b[0m",
+				diff: `\u001b[32m${diff}\u001b[0m`,
+				patch: `\u001b[31m${patch}\u001b[0m`,
+				firstChangedLine: 1,
+			},
 			isError: false,
 			timestamp: 5,
 		};
@@ -304,15 +333,19 @@ describe("TuiEventAdapter", () => {
 		if (item?.role !== "tool") {
 			throw new Error("Expected a restored tool item");
 		}
-		expect(item.patch).not.toContain("\u001b[");
-		expect(item.patch).toContain("omitted");
-		expect(item.patch?.split("\n").length).toBeLessThanOrEqual(16);
-		expect(new TextEncoder().encode(item.patch).byteLength).toBeLessThanOrEqual(
-			4 * 1024,
-		);
+		expect(item.edit?.path).toBe("src/file.ts");
+		for (const text of [item.edit?.diff, item.edit?.patch]) {
+			expect(text).not.toContain("\u001b[");
+			expect(text).toContain("omitted");
+			expect(text?.split("\n").length).toBeLessThanOrEqual(16);
+			expect(new TextEncoder().encode(text).byteLength).toBeLessThanOrEqual(
+				4 * 1024,
+			);
+		}
+		expect(item.edit?.firstChangedLine).toBe(1);
 	});
 
-	test("ignores images and malformed patches while retaining tool failures", () => {
+	test("ignores images and malformed edit details while retaining tool failures", () => {
 		const state = createTuiState();
 		const adapter = new TuiEventAdapter(state);
 		const editCall: ToolCall = { ...toolCall, id: "edit-2", name: "edit" };
@@ -321,7 +354,7 @@ describe("TuiEventAdapter", () => {
 			toolCallId: editCall.id,
 			toolName: editCall.name,
 			content: [{ type: "image", data: "ignored", mimeType: "image/png" }],
-			details: { patch: 42 },
+			details: { path: "/workspace/file.ts", diff: "+1 new", patch: 42 },
 			isError: true,
 			timestamp: 5,
 		};

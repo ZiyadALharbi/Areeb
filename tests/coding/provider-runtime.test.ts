@@ -19,6 +19,162 @@ function jwt(accountId: string): string {
 }
 
 describe("ProviderRuntimeService", () => {
+	test("prefers exact live model limits and coalesces discovery per provider instance", async () => {
+		const settings = parseProviderSettings(
+			{
+				version: 1,
+				default_provider: "local",
+				providers: {
+					local: {
+						type: "openai-compatible",
+						base_url: "https://api.example/v1",
+						models: ["model-a", "model-b"],
+						default_model: "model-a",
+						context_windows: { "model-a": 64_000, "model-b": 32_000 },
+					},
+				},
+			},
+			{ path: "/tmp/providers.json", env: {} },
+		);
+		let discoveryCalls = 0;
+		let releaseDiscovery!: () => void;
+		const discoveryStarted = new Promise<void>((resolve) => {
+			releaseDiscovery = resolve;
+		});
+		const provider = Object.assign(
+			new FakeProvider([], { providerId: "local" }),
+			{
+				async discoverModelLimits() {
+					discoveryCalls += 1;
+					await discoveryStarted;
+					return [
+						{
+							model: "model-a",
+							contextWindowTokens: 200_000,
+							effectiveContextWindowPercent: 90,
+						},
+					];
+				},
+			},
+		);
+		const service = new ProviderRuntimeService({
+			settings,
+			store: new MemoryCredentialStore(),
+			registry: createDefaultProviderAuthRegistry(),
+			env: {},
+			createProvider: () => provider,
+		});
+
+		const first = service.createRuntime({
+			provider: "local",
+			model: "model-a",
+		});
+		const second = service.createRuntime({
+			provider: "local",
+			model: "model-a",
+		});
+		await Promise.resolve();
+		expect(discoveryCalls).toBe(1);
+		releaseDiscovery();
+		expect(await Promise.all([first, second])).toEqual([
+			expect.objectContaining({
+				provider,
+				contextWindowTokens: 200_000,
+				contextWindowSource: "live",
+				effectiveContextWindowPercent: 90,
+			}),
+			expect.objectContaining({
+				provider,
+				contextWindowTokens: 200_000,
+				contextWindowSource: "live",
+			}),
+		]);
+
+		expect(
+			await service.createRuntime({ provider: "local", model: "model-b" }),
+		).toMatchObject({
+			contextWindowTokens: 32_000,
+			contextWindowSource: "configured",
+		});
+		expect(discoveryCalls).toBe(1);
+	});
+
+	test("keeps discovery failures nonfatal and isolated by provider instance", async () => {
+		const settings = parseProviderSettings(
+			{
+				version: 1,
+				default_provider: "alpha",
+				providers: {
+					alpha: {
+						type: "openai-compatible",
+						base_url: "https://alpha.example/v1",
+						models: ["shared"],
+						default_model: "shared",
+					},
+					beta: {
+						type: "openai-compatible",
+						base_url: "https://beta.example/v1",
+						models: ["shared"],
+						default_model: "shared",
+					},
+				},
+			},
+			{ path: "/tmp/providers.json", env: {} },
+		);
+		const calls = new Map<string, number>();
+		const providers = new Map(
+			["alpha", "beta"].map((providerId) => [
+				providerId,
+				Object.assign(new FakeProvider([], { providerId }), {
+					async discoverModelLimits() {
+						calls.set(providerId, (calls.get(providerId) ?? 0) + 1);
+						if (providerId === "alpha") {
+							throw new Error("alpha catalog unavailable");
+						}
+						return [{ model: "shared", contextWindowTokens: 96_000 }];
+					},
+				}),
+			]),
+		);
+		const service = new ProviderRuntimeService({
+			settings,
+			store: new MemoryCredentialStore(),
+			registry: createDefaultProviderAuthRegistry(),
+			env: {},
+			createProvider(config) {
+				const provider = providers.get(config.providerId);
+				if (provider === undefined) {
+					throw new Error(`Unexpected provider ${config.providerId}`);
+				}
+				return provider;
+			},
+		});
+
+		const [alpha, beta] = await Promise.all([
+			service.createRuntime({ provider: "alpha", model: "shared" }),
+			service.createRuntime({ provider: "beta", model: "shared" }),
+		]);
+		expect(alpha).toMatchObject({
+			contextWindowTokens: 128_000,
+			contextWindowSource: "fallback",
+			contextWindowDiscoveryError: "alpha catalog unavailable",
+		});
+		expect(beta).toMatchObject({
+			contextWindowTokens: 96_000,
+			contextWindowSource: "live",
+		});
+		expect(beta).not.toHaveProperty("contextWindowDiscoveryError");
+		expect(calls).toEqual(
+			new Map([
+				["alpha", 1],
+				["beta", 1],
+			]),
+		);
+
+		await service.createRuntime({ provider: "alpha", model: "shared" });
+		expect(calls.get("alpha")).toBe(1);
+	});
+
 	test("forwards provider thinking compatibility through authenticated runtimes", async () => {
 		const settings = parseProviderSettings(
 			{
