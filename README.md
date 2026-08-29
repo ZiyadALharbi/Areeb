@@ -56,13 +56,13 @@ command works.
 macOS and Linux:
 
 ```bash
-curl -fsSL https://areeb.dev/install.sh | sh
+curl -fsSL https://tryareeb.dev/install.sh | sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://areeb.dev/install.ps1 | iex
+irm https://tryareeb.dev/install.ps1 | iex
 ```
 
 The installers do not use `sudo`. You can inspect the
