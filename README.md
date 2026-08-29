@@ -49,16 +49,34 @@ reused without pulling in the application above it.
 ## Install
 
 Areeb is published on npm as [`@ziyad_1440/areeb`](https://www.npmjs.com/package/@ziyad_1440/areeb)
-and installs an `areeb` command. It runs on [Bun](https://bun.sh/), so install
-Bun first if it is not already available.
+and installs an `areeb` command. It runs on [Bun](https://bun.sh/). The
+installers add Bun when necessary, install Areeb globally, and verify that the
+command works.
 
-Install with Bun:
+macOS and Linux:
+
+```bash
+curl -fsSL https://areeb.dev/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://areeb.dev/install.ps1 | iex
+```
+
+The installers do not use `sudo`. You can inspect the
+[shell installer](website/public/install.sh) or
+[PowerShell installer](website/public/install.ps1) before running them.
+
+Already have Bun? Install Areeb directly:
 
 ```bash
 bun add --global @ziyad_1440/areeb
 ```
 
-Or with npm:
+You can also install the package with npm, but Bun is still required to run
+Areeb:
 
 ```bash
 npm install --global @ziyad_1440/areeb

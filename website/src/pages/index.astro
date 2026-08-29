@@ -3,6 +3,11 @@ import "../styles/global.css";
 
 const installOptions = [
   { id: "curl", label: "curl", command: "curl -fsSL https://areeb.dev/install.sh | sh" },
+  {
+    id: "powershell",
+    label: "PowerShell",
+    command: "irm https://areeb.dev/install.ps1 | iex",
+  },
   { id: "bun", label: "bun", command: "bun add -g @ziyad_1440/areeb" },
   { id: "npm", label: "npm", command: "npm install -g @ziyad_1440/areeb" },
   { id: "pnpm", label: "pnpm", command: "pnpm add -g @ziyad_1440/areeb" },
@@ -67,7 +72,7 @@ const installOptions = [
 
           <div class="hero-actions">
             <div class="install-control" data-install-control>
-              <div class="install-tabs" role="tablist" aria-label="Package manager">
+              <div class="install-tabs" role="tablist" aria-label="Installation method">
                 {installOptions.map((option, index) => (
                   <button
                     type="button"
@@ -181,7 +186,7 @@ const installOptions = [
           <p class="final-copy">One command. Then tell Areeb what you want to build.</p>
 
           <div class="install-control install-control-final" data-install-control>
-            <div class="install-tabs" role="tablist" aria-label="Package manager">
+            <div class="install-tabs" role="tablist" aria-label="Installation method">
               {installOptions.map((option, index) => (
                 <button
                   type="button"
