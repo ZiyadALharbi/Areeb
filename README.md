@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo/areeb-header.png" alt="Areeb — a terminal coding agent inspired by Pi" width="100%" />
+  <img src="assets/areeb-header.png" alt="Areeb — a terminal coding agent inspired by Pi" width="100%" />
 </p>
 
 <p align="center">
