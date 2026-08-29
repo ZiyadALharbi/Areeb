@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="https://areeb.dev/">Website</a>
+  <a href="">Website</a>
   ·
   <a href="#install">Install</a>
   ·
