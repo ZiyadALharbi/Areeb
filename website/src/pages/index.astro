@@ -1,0 +1,278 @@
+---
+import "../styles/global.css";
+
+const installOptions = [
+  { id: "curl", label: "curl", command: "curl -fsSL https://areeb.dev/install.sh | sh" },
+  { id: "bun", label: "bun", command: "bun add -g @ziyad_1440/areeb" },
+  { id: "npm", label: "npm", command: "npm install -g @ziyad_1440/areeb" },
+  { id: "pnpm", label: "pnpm", command: "pnpm add -g @ziyad_1440/areeb" },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta
+      name="description"
+      content="Areeb is a small coding agent inspired by Pi. It understands intent, works through the code, and verifies the result."
+    />
+    <meta name="theme-color" content="#070808" />
+    <link rel="icon" type="image/png" href="/areeb-mark.png" />
+    <title>Areeb — A sharp mind for your codebase</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header" aria-label="Primary navigation">
+      <a class="brand" href="#top" aria-label="Areeb, back to top">
+        <img src="/areeb-mark.png" alt="" width="44" height="44" />
+        <span>Areeb</span>
+      </a>
+
+      <nav>
+        <a class="nav-origin" href="#meaning">Why Areeb</a>
+        <a class="nav-secondary" href="#architecture">Architecture</a>
+        <a class="nav-secondary" href="#pi">Pi</a>
+        <a href="#install">Install</a>
+        <a class="nav-icon" href="https://x.com/Ziyad_1440" target="_blank" rel="noreferrer" aria-label="Areeb on X (opens in a new tab)">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24h-6.657l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231 5.45-6.231Zm-1.161 17.52h1.833L7.084 4.126H5.117L17.083 19.77Z"></path>
+          </svg>
+          <span class="sr-only">X</span>
+        </a>
+        <a class="nav-icon" href="https://github.com/ZiyadALharbi/Areeb" target="_blank" rel="noreferrer" aria-label="Areeb on GitHub (opens in a new tab)">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path fill-rule="evenodd" d="M12 2C6.477 2 2 6.588 2 12.25c0 4.53 2.865 8.374 6.839 9.73.5.095.682-.222.682-.494 0-.244-.009-.89-.014-1.746-2.782.62-3.369-1.374-3.369-1.374-.455-1.183-1.11-1.498-1.11-1.498-.908-.636.069-.623.069-.623 1.003.073 1.531 1.056 1.531 1.056.892 1.568 2.341 1.115 2.91.853.091-.663.349-1.115.635-1.372-2.221-.259-4.555-1.139-4.555-5.066 0-1.119.389-2.034 1.029-2.751-.103-.26-.446-1.302.098-2.713 0 0 .84-.276 2.75 1.05A9.318 9.318 0 0 1 12 6.987a9.32 9.32 0 0 1 2.504.345c1.91-1.326 2.749-1.05 2.749-1.05.545 1.411.202 2.453.1 2.713.64.717 1.027 1.632 1.027 2.751 0 3.937-2.338 4.804-4.566 5.058.359.317.679.943.679 1.902 0 1.373-.013 2.48-.013 2.817 0 .274.18.594.688.493C19.14 20.62 22 16.78 22 12.25 22 6.588 17.523 2 12 2Z" clip-rule="evenodd"></path>
+          </svg>
+          <span class="sr-only">GitHub</span>
+        </a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top" aria-labelledby="hero-title">
+        <div class="hero-content">
+          <h1 id="hero-title">
+            <span class="hero-name">Areeb</span>
+            <span class="identity-separator" aria-hidden="true"></span>
+            <span lang="ar" dir="rtl">أريب</span>
+          </h1>
+          <p class="tagline">A sharp mind for your codebase.</p>
+          <p class="hero-copy">
+            Areeb is a small coding agent inspired by Pi. It understands your intent, works through
+            the code, and verifies the result.
+          </p>
+
+          <div class="hero-actions">
+            <div class="install-control" data-install-control>
+              <div class="install-tabs" role="tablist" aria-label="Package manager">
+                {installOptions.map((option, index) => (
+                  <button
+                    type="button"
+                    role="tab"
+                    id={`hero-tab-${option.id}`}
+                    aria-selected={index === 0 ? "true" : "false"}
+                    aria-controls="hero-command"
+                    data-command={option.command}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              <div class="command-row" id="hero-command" role="tabpanel" aria-live="polite">
+                <span class="prompt" aria-hidden="true">$</span>
+                <code data-command-output>{installOptions[0].command}</code>
+                <button class="copy-button" type="button" data-copy aria-label="Copy install command">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M8 8h11v11H8z"></path>
+                    <path d="M5 16H4V4h12v1"></path>
+                  </svg>
+                  <span data-copy-label>Copy</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <a class="scroll-cue" href="#meaning" aria-label="Scroll to the meaning of Areeb">
+          <span>Scroll to discover</span>
+          <i aria-hidden="true"></i>
+        </a>
+      </section>
+
+      <section class="meaning section-shell" id="meaning" aria-labelledby="meaning-title">
+        <div class="section-label reveal">
+          <span>Why Areeb</span>
+          <span lang="ar" dir="rtl">لماذا أريب</span>
+        </div>
+
+        <div class="meaning-grid">
+          <h2 id="meaning-title" class="arabic-display reveal" lang="ar" dir="rtl">أَرِيب</h2>
+          <div class="meaning-copy reveal">
+            <p class="definition">Perceptive. Intelligent. Skilled at seeing what others miss.</p>
+            <p>
+              The name points to a special kind of intelligence that is useful, attentive, and
+              exact. Areeb means possessing sound judgment and high intellect.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="architecture section-shell" id="architecture" aria-labelledby="architecture-title">
+        <div class="architecture-intro reveal">
+          <div class="section-label">
+            <span>Architecture &amp; boundary</span>
+            <span>Where Areeb works</span>
+          </div>
+          <h2 id="architecture-title">A Three Layers Architecture</h2>
+          <p>
+            The project follows a layered architecture with clear separation of concerns. Each layer
+            has a focused responsibility and depends only on the layers below it.
+          </p>
+        </div>
+
+        <div class="boundary-wrap reveal" aria-label="AI flows through the Areeb agent boundary into coding">
+          <span class="boundary-label">Areeb operating boundary</span>
+          <div class="boundary-flow">
+            <div class="flow-node">
+              <span>01</span>
+              <strong>AI</strong>
+              <small>Reason</small>
+            </div>
+            <div class="flow-arrow" aria-hidden="true"><span></span><b>→</b></div>
+            <div class="flow-node flow-node-active">
+              <span>02</span>
+              <strong>Agent</strong>
+              <small>Understand · act · verify</small>
+            </div>
+            <div class="flow-arrow" aria-hidden="true"><span></span><b>→</b></div>
+            <div class="flow-node">
+              <span>03</span>
+              <strong>Coding</strong>
+              <small>Ship</small>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="pi-section section-shell" id="pi" aria-labelledby="pi-title">
+        <div class="pi-mark reveal" aria-hidden="true">π</div>
+        <div class="pi-content reveal">
+          <div class="section-label">
+            <span>Inspired by Pi</span>
+          </div>
+          <h2 id="pi-title">Built on the Solid Pi foundation</h2>
+          <p>
+            Areeb is a learning project inspired by Pi and its commitment to a lean, composable
+            coding agent. It builds on that foundation.
+          </p>
+          <a class="text-link" href="https://github.com/earendil-works/pi" target="_blank" rel="noreferrer">
+            Explore Pi <span aria-hidden="true">↗</span>
+          </a>
+        </div>
+      </section>
+
+      <section class="final-install section-shell" id="install" aria-labelledby="install-title">
+        <div class="final-install-inner reveal">
+          <p class="eyebrow">Ready when you are</p>
+          <h2 id="install-title">Bring a sharp mind<br />into your codebase.</h2>
+          <p class="final-copy">One command. Then tell Areeb what you want to build.</p>
+
+          <div class="install-control install-control-final" data-install-control>
+            <div class="install-tabs" role="tablist" aria-label="Package manager">
+              {installOptions.map((option, index) => (
+                <button
+                  type="button"
+                  role="tab"
+                  id={`final-tab-${option.id}`}
+                  aria-selected={index === 0 ? "true" : "false"}
+                  aria-controls="final-command"
+                  data-command={option.command}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <div class="command-row" id="final-command" role="tabpanel" aria-live="polite">
+              <span class="prompt" aria-hidden="true">$</span>
+              <code data-command-output>{installOptions[0].command}</code>
+              <button class="copy-button" type="button" data-copy aria-label="Copy install command">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M8 8h11v11H8z"></path>
+                  <path d="M5 16H4V4h12v1"></path>
+                </svg>
+                <span data-copy-label>Copy</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <a class="brand" href="#top" aria-label="Areeb, back to top">
+        <img src="/areeb-mark.png" alt="" width="40" height="40" />
+        <span>Areeb</span>
+      </a>
+      <p>A coding agent inspired by Pi</p>
+      <p>© {new Date().getFullYear()} Areeb</p>
+    </footer>
+
+    <script>
+      const installControls = document.querySelectorAll<HTMLElement>("[data-install-control]");
+
+      installControls.forEach((control) => {
+        const tabs = control.querySelectorAll<HTMLButtonElement>("[role='tab']");
+        const output = control.querySelector<HTMLElement>("[data-command-output]");
+        const copyButton = control.querySelector<HTMLButtonElement>("[data-copy]");
+        const copyLabel = control.querySelector<HTMLElement>("[data-copy-label]");
+
+        tabs.forEach((tab) => {
+          tab.addEventListener("click", () => {
+            tabs.forEach((item) => item.setAttribute("aria-selected", String(item === tab)));
+            if (output) output.textContent = tab.dataset.command ?? "";
+            if (copyLabel) copyLabel.textContent = "Copy";
+          });
+        });
+
+        copyButton?.addEventListener("click", async () => {
+          if (!output || !copyLabel) return;
+
+          try {
+            await navigator.clipboard.writeText(output.textContent ?? "");
+            copyLabel.textContent = "Copied";
+            copyButton.classList.add("is-copied");
+            window.setTimeout(() => {
+              copyLabel.textContent = "Copy";
+              copyButton.classList.remove("is-copied");
+            }, 1800);
+          } catch {
+            copyLabel.textContent = "Select command";
+          }
+        });
+      });
+
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const revealItems = document.querySelectorAll<HTMLElement>(".reveal");
+
+      if (reduceMotion || !("IntersectionObserver" in window)) {
+        revealItems.forEach((item) => item.classList.add("is-visible"));
+      } else {
+        const observer = new IntersectionObserver(
+          (entries) => {
+            entries.forEach((entry) => {
+              if (!entry.isIntersecting) return;
+              entry.target.classList.add("is-visible");
+              observer.unobserve(entry.target);
+            });
+          },
+          { threshold: 0.18 },
+        );
+
+        revealItems.forEach((item) => observer.observe(item));
+      }
+    </script>
+  </body>
+</html>
