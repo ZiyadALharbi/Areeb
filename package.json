@@ -1,7 +1,10 @@
 {
-	"name": "areeb",
+	"name": "@ziyad_1440/areeb",
 	"version": "0.1.0",
 	"module": "index.ts",
+	"license": "MIT",
+	"repository": "https://github.com/ZiyadALharbi/Areeb",
+	"description": "Areeb is a terminal coding agent for writing and editing software.",
 	"bin": {
 		"areeb": "./src/coding/cli.ts"
 	},
