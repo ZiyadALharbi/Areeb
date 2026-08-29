@@ -1,0 +1,187 @@
+import type { EventStream } from "../ai/event-stream.ts";
+import type { AssistantMessageEvent } from "../ai/events.ts";
+import type { ModelProvider, StreamOptions } from "../ai/provider_protocol.ts";
+import type {
+	Message,
+	ModelContext,
+	ToolCall,
+	ToolDefinition,
+	ToolResultContent,
+	ToolResultMessage,
+} from "../ai/types.ts";
+
+/**
+ * Applications can augment this interface with their own message types.
+ *
+ * @example
+ * declare module "./agent/types.ts" {
+ * 	interface CustomAgentMessages {
+ * 		approval_request: ApprovalRequestMessage;
+ * 	}
+ * }
+ */
+// biome-ignore lint/suspicious/noEmptyInterface: This interface is intentionally empty so consumers can augment it.
+export interface CustomAgentMessages {}
+
+export type AgentMessage =
+	| Message
+	| CustomAgentMessages[keyof CustomAgentMessages];
+
+/**
+ * Converts agent messages into model-compatible messages.
+ * Custom messages may be converted, expanded, or filtered out.
+ */
+export type AgentMessageConverter = (
+	messages: AgentMessage[],
+) => Message[] | Promise<Message[]>;
+
+/**
+ * Persistent conversation state. Runtime dependencies do not belong here.
+ */
+export interface AgentState {
+	systemPrompt?: string;
+	messages: AgentMessage[];
+}
+
+export type AgentToolCall = ToolCall;
+
+/**
+ * Output returned by a tool.
+ *
+ * The agent loop turns this into a ToolResultMessage by adding the tool-call
+ * ID, tool name, error status, and timestamp.
+ */
+export interface AgentToolResult<TDetails = unknown> {
+	content: ToolResultContent[];
+	details?: TDetails;
+	/** Allows a tool to intentionally return a model-visible failure. */
+	isError?: boolean;
+}
+
+/**
+ * An intermediate snapshot emitted while a tool is executing.
+ */
+export interface AgentToolUpdate<TDetails = unknown> {
+	content: ToolResultContent[];
+	details?: TDetails;
+}
+
+export type AgentToolUpdateCallback<TDetails = unknown> = (
+	update: AgentToolUpdate<TDetails>,
+) => void | Promise<void>;
+
+export interface AgentTool<TInput = unknown, TDetails = unknown>
+	extends ToolDefinition<TInput> {
+	execute(
+		input: TInput,
+		signal?: AbortSignal,
+		onUpdate?: AgentToolUpdateCallback<TDetails>,
+	): Promise<AgentToolResult<TDetails>>;
+}
+
+/**
+ * Persistent state combined with dependencies needed by the running loop.
+ */
+export interface AgentContext extends AgentState {
+	systemPrompt: string;
+	tools: AgentTool[];
+	messageConverter?: AgentMessageConverter;
+}
+
+export type AgentMessageDrain = () =>
+	| readonly AgentMessage[]
+	| Promise<readonly AgentMessage[]>;
+
+/** Runtime configuration for one pure agent-loop invocation. */
+export interface AgentLoopConfig {
+	provider: ModelProvider;
+	model: string;
+	streamOptions?: StreamOptions;
+	maxTurns?: number;
+	getSteeringMessages?: AgentMessageDrain;
+	getFollowUpMessages?: AgentMessageDrain;
+}
+
+export type QueueMode = "one_at_a_time" | "all";
+
+/** Shallow snapshots of the harness's pending prompt queues. */
+export interface QueuedMessages {
+	readonly steering: readonly AgentMessage[];
+	readonly followUp: readonly AgentMessage[];
+	readonly count: number;
+}
+
+export type AgentEventListener = (event: AgentEvent) => void | Promise<void>;
+
+/**
+ * Stable options owned by an AgentHarness.
+ *
+ * A run-specific AbortSignal is intentionally forbidden because the harness
+ * creates a fresh controller for every invocation.
+ */
+export type AgentHarnessStreamOptions = Omit<StreamOptions, "signal"> & {
+	readonly signal?: never;
+};
+
+export interface AgentHarnessConfig {
+	readonly provider: ModelProvider;
+	readonly model: string;
+	readonly systemPrompt: string;
+	readonly tools?: readonly AgentTool[];
+	readonly messageConverter?: AgentMessageConverter;
+	readonly streamOptions?: AgentHarnessStreamOptions;
+	readonly maxTurns?: number;
+	readonly steeringMode?: QueueMode;
+	readonly followUpMode?: QueueMode;
+}
+
+export type AgentEventSink = (event: AgentEvent) => void | Promise<void>;
+
+export type AgentEndReason =
+	| "completed"
+	| "provider_error"
+	| "aborted"
+	| "max_turns";
+
+export type AgentEvent =
+	// Agent lifecycle
+	| { type: "agent_start" }
+	| {
+			type: "agent_end";
+			messages: AgentMessage[];
+			reason: AgentEndReason;
+	  }
+
+	// Turn lifecycle
+	| { type: "turn_start" }
+	| {
+			type: "turn_end";
+			message: AgentMessage;
+			toolResults: ToolResultMessage[];
+	  }
+	| { type: "request_context"; context: ModelContext }
+
+	// Message lifecycle
+	| { type: "message_start"; message: AgentMessage }
+	| {
+			type: "message_update";
+			message: AgentMessage;
+			assistantMessageEvent: AssistantMessageEvent;
+	  }
+	| { type: "message_end"; message: AgentMessage }
+
+	// Tool execution lifecycle
+	| { type: "tool_execution_start"; toolCall: AgentToolCall }
+	| {
+			type: "tool_execution_update";
+			toolCall: AgentToolCall;
+			update: AgentToolUpdate;
+	  }
+	| {
+			type: "tool_execution_end";
+			toolCall: AgentToolCall;
+			result: ToolResultMessage;
+	  };
+
+/** A single agent invocation's events and invocation-local message result. */
+export type AgentRunStream = EventStream<AgentEvent, AgentMessage[]>;

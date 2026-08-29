@@ -1,0 +1,668 @@
+import type { SessionHandle, SessionModel } from "../../agent/session/types.ts";
+import type {
+	AgentMessage,
+	AgentRunStream,
+	QueuedMessages,
+} from "../../agent/types.ts";
+import type { AuthInteraction, AuthType } from "../../ai/auth.ts";
+import type { ReasoningLevel } from "../../ai/types.ts";
+import type {
+	CommandModelListItem,
+	CommandOutcome,
+	CommandProviderAuthItem,
+	CommandResult,
+	CommandSessionListItem,
+	SlashCommand,
+} from "../commands.ts";
+import type { ContextUsageEstimate } from "../context-window.ts";
+import type { ProviderAuthView } from "../provider-runtime.ts";
+import type { ResourceDiagnostic } from "../resources.ts";
+import type {
+	CodingSessionControllerService,
+	CodingSessionHostServices,
+	CodingSessionModelService,
+	CodingSessionProviderAuthService,
+	CodingSessionTuiService,
+} from "../session.ts";
+import type { CodingSessionRecord } from "../session-manager.ts";
+import { TuiEventAdapter } from "./adapter.ts";
+import type { CompletionCatalog } from "./autocomplete.ts";
+import { createTuiState, type TuiState } from "./state.ts";
+
+export type TuiTransitionOutcome = Exclude<
+	CommandOutcome,
+	| { readonly kind: "new-session" }
+	| { readonly kind: "resume" }
+	| { readonly kind: "set-model" }
+	| { readonly kind: "set-effort" }
+>;
+
+export type TuiCommandResult =
+	| { readonly handled: false }
+	| { readonly handled: true; readonly outcome: TuiTransitionOutcome };
+
+export interface TuiControllerSession {
+	readonly messages: readonly AgentMessage[];
+	readonly metadata: { readonly id: string; readonly cwd: string };
+	readonly provider: string;
+	readonly model: string;
+	readonly reasoning: ReasoningLevel;
+	readonly isRunning: boolean;
+	readonly queuedMessages: QueuedMessages;
+	readonly contextUsage: ContextUsageEstimate;
+	readonly resourceDiagnostics: readonly ResourceDiagnostic[];
+	readonly commands: readonly SlashCommand[];
+	readonly skills: readonly { readonly name: string }[];
+	readonly promptTemplates: readonly { readonly name: string }[];
+	readonly unavailableReason?: string;
+	prompt(input: string): AgentRunStream;
+	handleCommand(
+		input: string,
+		services?: CodingSessionHostServices,
+	): Promise<CommandResult>;
+	abort(): void;
+	followUp(input: string): QueuedMessages;
+	clearQueues(): QueuedMessages;
+	setReasoning(reasoning: ReasoningLevel): Promise<void>;
+	waitForIdle(): Promise<void>;
+}
+
+export interface TuiSessionManager {
+	readonly cwd: string;
+	create(): Promise<SessionHandle>;
+	find(id: string): Promise<CodingSessionRecord | undefined>;
+	open(id: string): Promise<SessionHandle>;
+	list(): Promise<CodingSessionRecord[]>;
+}
+
+export interface TuiSessionLoadRequest {
+	readonly handle: SessionHandle;
+	readonly selection: SessionModel;
+	readonly reasoning: ReasoningLevel;
+}
+
+export type TuiSessionLoader = (
+	request: TuiSessionLoadRequest,
+) => Promise<TuiControllerSession>;
+
+export interface TuiPreparedSession {
+	readonly session: TuiControllerSession;
+	commit(): Promise<void>;
+}
+
+export type TuiModelSessionLoader = (
+	request: TuiSessionLoadRequest,
+) => Promise<TuiPreparedSession>;
+
+export interface TuiProviderAuthController {
+	listMetadata(): readonly CommandProviderAuthItem[];
+	listProviders(savedOnly?: boolean): Promise<readonly ProviderAuthView[]>;
+	login(
+		provider: string,
+		authType: AuthType,
+		interaction: AuthInteraction,
+	): Promise<void>;
+	logout(provider: string, signal?: AbortSignal): Promise<boolean>;
+	listModels(): Promise<readonly CommandModelListItem[]>;
+}
+
+export interface TuiControllerOptions {
+	readonly session: TuiControllerSession;
+	readonly manager: TuiSessionManager;
+	readonly loadSession: TuiSessionLoader;
+	readonly models?: readonly CommandModelListItem[];
+	readonly prepareModelSession?: TuiModelSessionLoader;
+	readonly saveDefaultSelection?: (selection: SessionModel) => Promise<void>;
+	readonly providerAuth?: TuiProviderAuthController;
+}
+
+interface ActiveBundle {
+	readonly session: TuiControllerSession;
+	readonly state: TuiState;
+	readonly adapter: TuiEventAdapter;
+}
+
+/** Owns the one active session and commits replacements as complete bundles. */
+export class TuiController {
+	private active: ActiveBundle;
+	private transitionActive = false;
+	private newSessionPending = false;
+	private readonly sessionControllerService: CodingSessionControllerService;
+	private readonly modelControllerService:
+		| CodingSessionModelService
+		| undefined;
+	private readonly providerAuthService:
+		| CodingSessionProviderAuthService
+		| undefined;
+	private modelCatalog: readonly CommandModelListItem[];
+
+	constructor(private readonly options: TuiControllerOptions) {
+		this.active = buildBundle(options.session);
+		this.sessionControllerService = {
+			listSessions: () => this.listSessions(),
+		};
+		this.modelCatalog = Object.freeze(
+			(options.models ?? []).map((entry) =>
+				Object.freeze({ provider: entry.provider, model: entry.model }),
+			),
+		);
+		this.modelControllerService =
+			options.prepareModelSession === undefined
+				? undefined
+				: { listModels: () => this.models };
+		this.providerAuthService =
+			options.providerAuth === undefined
+				? undefined
+				: { listProviders: () => options.providerAuth?.listMetadata() ?? [] };
+	}
+
+	get session(): TuiControllerSession {
+		return this.active.session;
+	}
+
+	get state(): TuiState {
+		return this.active.state;
+	}
+
+	get adapter(): TuiEventAdapter {
+		return this.active.adapter;
+	}
+
+	get messages(): readonly AgentMessage[] {
+		return this.active.session.messages;
+	}
+
+	get metadata(): TuiControllerSession["metadata"] {
+		return this.active.session.metadata;
+	}
+
+	get provider(): string {
+		return this.active.session.provider;
+	}
+
+	get model(): string {
+		return this.active.session.model;
+	}
+
+	get reasoning(): ReasoningLevel {
+		return this.active.session.reasoning;
+	}
+
+	get isRunning(): boolean {
+		return this.active.session.isRunning;
+	}
+
+	get queuedMessages(): QueuedMessages {
+		return this.active.session.queuedMessages;
+	}
+
+	get contextUsage(): ContextUsageEstimate {
+		return this.active.session.contextUsage;
+	}
+
+	get resourceDiagnostics(): readonly ResourceDiagnostic[] {
+		return this.active.session.resourceDiagnostics;
+	}
+
+	get unavailableReason(): string | undefined {
+		return this.active.session.unavailableReason;
+	}
+
+	get models(): readonly CommandModelListItem[] {
+		return this.modelCatalog.map((entry) => ({ ...entry }));
+	}
+
+	get completionCatalog(): CompletionCatalog {
+		return {
+			commands: this.active.session.commands,
+			skillNames: this.active.session.skills.map((skill) => skill.name),
+			templateNames: this.active.session.promptTemplates.map(
+				(template) => template.name,
+			),
+			availableCapabilities: [
+				"session-controller",
+				...(this.modelControllerService === undefined
+					? []
+					: (["model-selection"] as const)),
+				...(this.providerAuthService === undefined
+					? []
+					: (["provider-auth"] as const)),
+				"tui",
+			],
+			cwd: this.active.session.metadata.cwd,
+			listSessions: () => this.listSessions(),
+			models: this.models,
+			providerIds:
+				this.options.providerAuth
+					?.listMetadata()
+					.map((provider) => provider.id) ?? [],
+		};
+	}
+
+	prompt(input: string): AgentRunStream {
+		if (this.transitionActive) {
+			throw new Error(
+				"Cannot start a prompt while a session change is in progress",
+			);
+		}
+		this.newSessionPending = false;
+		return this.active.session.prompt(input);
+	}
+
+	abort(): void {
+		this.active.session.abort();
+	}
+
+	followUp(input: string): QueuedMessages {
+		if (!this.active.session.isRunning) {
+			throw new Error("Cannot queue a follow-up while the agent is idle");
+		}
+		return this.active.session.followUp(input);
+	}
+
+	clearQueues(): QueuedMessages {
+		return this.active.session.clearQueues();
+	}
+
+	waitForIdle(): Promise<void> {
+		return this.active.session.waitForIdle();
+	}
+
+	async handleCommand(
+		input: string,
+		tuiService?: CodingSessionTuiService,
+	): Promise<TuiCommandResult> {
+		const services: CodingSessionHostServices = {
+			sessionController: this.sessionControllerService,
+			...(this.modelControllerService === undefined
+				? {}
+				: { modelController: this.modelControllerService }),
+			...(this.providerAuthService === undefined
+				? {}
+				: { providerAuth: this.providerAuthService }),
+			...(tuiService === undefined ? {} : { tui: tuiService }),
+		};
+		const result = await this.active.session.handleCommand(input, services);
+		if (!result.handled) {
+			this.newSessionPending = false;
+			return result;
+		}
+
+		switch (result.outcome.kind) {
+			case "new-session":
+				return { handled: true, outcome: await this.newSession() };
+			case "resume":
+				this.newSessionPending = false;
+				return {
+					handled: true,
+					outcome: await this.resumeSession(result.outcome.sessionId),
+				};
+			case "set-model":
+				this.newSessionPending = false;
+				return {
+					handled: true,
+					outcome: await this.setModel(
+						result.outcome.provider,
+						result.outcome.model,
+					),
+				};
+			case "set-effort":
+				this.newSessionPending = false;
+				return {
+					handled: true,
+					outcome: await this.setReasoning(result.outcome.effort),
+				};
+			case "resume-picker":
+				this.newSessionPending = false;
+				return {
+					handled: true,
+					outcome: this.transitionBlock("resume a session") ?? result.outcome,
+				};
+			case "model-picker":
+				this.newSessionPending = false;
+				return {
+					handled: true,
+					outcome: this.transitionBlock("switch models") ?? result.outcome,
+				};
+			case "effort-picker":
+				this.newSessionPending = false;
+				return {
+					handled: true,
+					outcome:
+						this.transitionBlock("change thinking effort") ?? result.outcome,
+				};
+			case "login-picker":
+			case "login":
+			case "logout-picker":
+			case "logout":
+				this.newSessionPending = false;
+				return { handled: true, outcome: result.outcome };
+			case "message":
+			case "theme-picker":
+			case "skill-picker":
+			case "set-theme":
+			case "copy-last-assistant":
+			case "quit":
+			case "none":
+			case "unavailable":
+				this.newSessionPending = false;
+				return { handled: true, outcome: result.outcome };
+		}
+	}
+
+	listAuthProviders(savedOnly = false): Promise<readonly ProviderAuthView[]> {
+		if (this.options.providerAuth === undefined) {
+			return Promise.reject(
+				new Error("Provider authentication is unavailable"),
+			);
+		}
+		return this.options.providerAuth.listProviders(savedOnly);
+	}
+
+	async login(
+		provider: string,
+		authType: AuthType,
+		interaction: AuthInteraction,
+	): Promise<void> {
+		const blocked = this.transitionBlock("log in to a provider");
+		if (blocked !== undefined) {
+			throw new Error(
+				blocked.kind === "message" ? blocked.text : "Login blocked",
+			);
+		}
+		if (this.options.providerAuth === undefined) {
+			throw new Error("Provider authentication is unavailable");
+		}
+		this.transitionActive = true;
+		try {
+			await this.options.providerAuth.login(provider, authType, interaction);
+			await this.refreshAuthentication(provider);
+		} finally {
+			this.transitionActive = false;
+		}
+	}
+
+	async logout(provider: string, signal?: AbortSignal): Promise<boolean> {
+		const blocked = this.transitionBlock("log out of a provider");
+		if (blocked !== undefined) {
+			throw new Error(
+				blocked.kind === "message" ? blocked.text : "Logout blocked",
+			);
+		}
+		if (this.options.providerAuth === undefined) {
+			throw new Error("Provider authentication is unavailable");
+		}
+		this.transitionActive = true;
+		try {
+			const deleted = await this.options.providerAuth.logout(provider, signal);
+			await this.refreshAuthentication(provider);
+			return deleted;
+		} finally {
+			this.transitionActive = false;
+		}
+	}
+
+	async newSession(): Promise<TuiTransitionOutcome> {
+		const blocked = this.transitionBlock("start a new session");
+		if (blocked !== undefined) {
+			this.newSessionPending = false;
+			return blocked;
+		}
+		if (!this.newSessionPending) {
+			this.newSessionPending = true;
+			return {
+				kind: "message",
+				level: "warning",
+				text: "Run /new again to confirm starting a new session",
+			};
+		}
+
+		this.newSessionPending = false;
+		const current = this.active.session;
+		return this.replaceSession(
+			async () => this.options.manager.create(),
+			{
+				provider: current.provider,
+				model: current.model,
+			},
+			current.reasoning,
+			"Failed to start a new session",
+		);
+	}
+
+	async resumeSession(id: string): Promise<TuiTransitionOutcome> {
+		const blocked = this.transitionBlock("resume a session");
+		if (blocked !== undefined) {
+			return blocked;
+		}
+		if (id === this.active.session.metadata.id) {
+			return {
+				kind: "message",
+				level: "info",
+				text: `Session ${id} is already active`,
+			};
+		}
+
+		this.transitionActive = true;
+		try {
+			const record = await this.options.manager.find(id);
+			if (record === undefined) {
+				return message("error", `Unknown session: ${id}`);
+			}
+			if (record.model === null) {
+				return message(
+					"error",
+					`Session ${id} has no stored provider/model selection`,
+				);
+			}
+
+			const handle = await this.options.manager.open(id);
+			const candidate = await this.options.loadSession({
+				handle,
+				selection: record.model,
+				reasoning: "high",
+			});
+			const bundle = buildBundle(candidate);
+			this.active = bundle;
+			return { kind: "none" };
+		} catch (error) {
+			return transitionFailure(`Failed to resume session ${id}`, error);
+		} finally {
+			this.transitionActive = false;
+		}
+	}
+
+	async setModel(
+		provider: string,
+		model: string,
+	): Promise<TuiTransitionOutcome> {
+		const blocked = this.transitionBlock("switch models");
+		if (blocked !== undefined) {
+			return blocked;
+		}
+		if (this.options.prepareModelSession === undefined) {
+			return message("error", "Model switching is unavailable");
+		}
+		if (
+			!this.modelCatalog.some(
+				(entry) => entry.provider === provider && entry.model === model,
+			)
+		) {
+			return message(
+				"error",
+				`Unknown or unavailable model: ${provider}/${model}`,
+			);
+		}
+		const selection = { provider, model };
+		this.transitionActive = true;
+		try {
+			if (
+				provider === this.active.session.provider &&
+				model === this.active.session.model
+			) {
+				return (
+					(await this.persistDefaultSelection(selection)) ??
+					message("info", `${provider}/${model} is already active`)
+				);
+			}
+			const handle = await this.options.manager.open(
+				this.active.session.metadata.id,
+			);
+			const prepared = await this.options.prepareModelSession({
+				handle,
+				selection,
+				reasoning: this.active.session.reasoning,
+			});
+			const bundle = buildBundle(prepared.session);
+			await prepared.commit();
+			this.active = bundle;
+			return (
+				(await this.persistDefaultSelection(selection)) ?? { kind: "none" }
+			);
+		} catch (error) {
+			return transitionFailure(
+				`Failed to switch to ${provider}/${model}`,
+				error,
+			);
+		} finally {
+			this.transitionActive = false;
+		}
+	}
+
+	async setReasoning(reasoning: ReasoningLevel): Promise<TuiTransitionOutcome> {
+		const blocked = this.transitionBlock("change thinking effort");
+		if (blocked !== undefined) {
+			return blocked;
+		}
+		this.transitionActive = true;
+		try {
+			await this.active.session.setReasoning(reasoning);
+			this.active.state.reasoning = this.active.session.reasoning;
+			return { kind: "none" };
+		} catch (error) {
+			return transitionFailure("Failed to change thinking effort", error);
+		} finally {
+			this.transitionActive = false;
+		}
+	}
+
+	async listSessions(): Promise<readonly CommandSessionListItem[]> {
+		return (await this.options.manager.list()).map((session) => ({
+			id: session.id,
+			title: session.title,
+			model: session.model === null ? null : { ...session.model },
+		}));
+	}
+
+	private transitionBlock(action: string): TuiTransitionOutcome | undefined {
+		if (this.active.session.isRunning) {
+			return message(
+				"warning",
+				`Cannot ${action} while the current session is running`,
+			);
+		}
+		if (this.transitionActive) {
+			return message(
+				"warning",
+				"Cannot switch sessions while another session change is in progress",
+			);
+		}
+		return undefined;
+	}
+
+	private async refreshAuthentication(provider: string): Promise<void> {
+		if (this.options.providerAuth === undefined) {
+			return;
+		}
+		this.modelCatalog = Object.freeze(
+			(await this.options.providerAuth.listModels()).map((entry) =>
+				Object.freeze({ ...entry }),
+			),
+		);
+		if (this.active.session.provider !== provider) {
+			return;
+		}
+		const handle = await this.options.manager.open(
+			this.active.session.metadata.id,
+		);
+		const candidate = await this.options.loadSession({
+			handle,
+			selection: {
+				provider: this.active.session.provider,
+				model: this.active.session.model,
+			},
+			reasoning: this.active.session.reasoning,
+		});
+		this.active = buildBundle(candidate);
+	}
+
+	private async persistDefaultSelection(
+		selection: SessionModel,
+	): Promise<TuiTransitionOutcome | undefined> {
+		try {
+			await this.options.saveDefaultSelection?.(selection);
+			return undefined;
+		} catch (error) {
+			return message(
+				"warning",
+				`${selection.provider}/${selection.model} is active, but Areeb could not save it as the global default: ${errorMessage(error)}`,
+			);
+		}
+	}
+
+	private async replaceSession(
+		openHandle: () => Promise<SessionHandle>,
+		selection: SessionModel,
+		reasoning: ReasoningLevel,
+		failurePrefix: string,
+	): Promise<TuiTransitionOutcome> {
+		this.transitionActive = true;
+		try {
+			const handle = await openHandle();
+			const candidate = await this.options.loadSession({
+				handle,
+				selection,
+				reasoning,
+			});
+			const bundle = buildBundle(candidate);
+			this.active = bundle;
+			return { kind: "none" };
+		} catch (error) {
+			return transitionFailure(failurePrefix, error);
+		} finally {
+			this.transitionActive = false;
+		}
+	}
+}
+
+function buildBundle(session: TuiControllerSession): ActiveBundle {
+	const state = createTuiState({
+		sessionId: session.metadata.id,
+		model: session.model,
+		cwd: session.metadata.cwd,
+		reasoning: session.reasoning,
+	});
+	state.queuedCount = session.queuedMessages.count;
+	const adapter = new TuiEventAdapter(state);
+	adapter.restore(session.messages);
+	state.contextUsage = session.contextUsage;
+	return { session, state, adapter };
+}
+
+function transitionFailure(
+	prefix: string,
+	error: unknown,
+): TuiTransitionOutcome {
+	return message("error", `${prefix}: ${errorMessage(error)}`);
+}
+
+function message(
+	level: "info" | "warning" | "error",
+	text: string,
+): TuiTransitionOutcome {
+	return { kind: "message", level, text };
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}

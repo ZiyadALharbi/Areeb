@@ -1,0 +1,542 @@
+import { describe, expect, test } from "bun:test";
+import {
+	stripTerminalSequences,
+	type Terminal,
+	VStack,
+} from "@earendil-works/pi-tui";
+import type { CommandSessionListItem } from "../../../src/coding/commands.ts";
+import {
+	type CreateTuiAppOptions,
+	createTuiApp,
+} from "../../../src/coding/tui/app.ts";
+import { createTuiState } from "../../../src/coding/tui/state.ts";
+import { AREEB_DARK_THEME } from "../../../src/coding/tui/theme.ts";
+
+const SESSION_ID = "00000000-0000-4000-8000-000000000001";
+
+class TestTerminal implements Terminal {
+	readonly columns = 120;
+	readonly rows = 32;
+	readonly kittyProtocolActive = false;
+
+	start(): void {}
+	stop(): void {}
+	async drainInput(): Promise<void> {}
+	write(): void {}
+	moveBy(): void {}
+	hideCursor(): void {}
+	showCursor(): void {}
+	clearLine(): void {}
+	clearFromCursor(): void {}
+	clearScreen(): void {}
+	setTitle(): void {}
+	setProgress(): void {}
+}
+
+function appOptions(
+	overrides: Partial<CreateTuiAppOptions> = {},
+): CreateTuiAppOptions {
+	const state = createTuiState({
+		sessionId: SESSION_ID,
+		model: "model-a",
+		cwd: "/project",
+		reasoning: "off",
+	});
+	return {
+		terminal: new TestTerminal(),
+		theme: AREEB_DARK_THEME,
+		transcript: [],
+		shortcuts: {
+			idle: "idle shortcuts",
+			menu: "menu shortcuts",
+			running: "running shortcuts",
+		},
+		getCompletionCatalog: () => ({
+			commands: [],
+			skillNames: [],
+			templateNames: [],
+			availableCapabilities: [],
+			cwd: "/project",
+			listSessions: async () => [],
+			models: [],
+		}),
+		listSessions: async () => [],
+		getModels: () => [{ provider: "fake", model: "model-a" }],
+		getCurrentModel: () => ({ provider: "fake", model: "model-a" }),
+		onResume: async () => true,
+		onSetModel: async () => true,
+		onSetEffort: async () => true,
+		state,
+		...overrides,
+	};
+}
+
+async function flush(): Promise<void> {
+	await Promise.resolve();
+	await Promise.resolve();
+}
+
+describe("createTuiApp pickers", () => {
+	test("filters commands and sessions by their visible text", async () => {
+		const app = createTuiApp(
+			appOptions({
+				getCompletionCatalog: () => ({
+					commands: [
+						{
+							name: "help",
+							description: "Show available commands",
+							usage: "/help",
+							searchTerms: ["manual"],
+						},
+					],
+					skillNames: [],
+					templateNames: [],
+					availableCapabilities: [],
+					cwd: "/project",
+					listSessions: async () => [],
+					models: [],
+				}),
+				listSessions: async () => [
+					{
+						id: SESSION_ID,
+						title: "Release planning",
+						model: { provider: "fake", model: "model-a" },
+					},
+				],
+			}),
+		);
+
+		expect(app.openCommandPalette()).toBe(true);
+		const commands = app.tui.getFocusedComponent();
+		for (const character of "help") {
+			commands?.handleInput?.(character);
+		}
+		const commandOutput = stripTerminalSequences(
+			commands?.render(100).join("\n") ?? "",
+		);
+		expect(commandOutput).toContain("/help");
+		expect(commandOutput).not.toContain("No matching commands");
+		expect(app.dismissCommandPalette()).toBe(true);
+		expect(app.openCommandPalette()).toBe(true);
+		const commandsBySearchTerm = app.tui.getFocusedComponent();
+		for (const character of "manual") {
+			commandsBySearchTerm?.handleInput?.(character);
+		}
+		expect(
+			stripTerminalSequences(
+				commandsBySearchTerm?.render(100).join("\n") ?? "",
+			),
+		).toContain("/help");
+		expect(app.dismissCommandPalette()).toBe(true);
+
+		expect(await app.openSessionPicker()).toBe(true);
+		const sessions = app.tui.getFocusedComponent();
+		for (const character of "planning") {
+			sessions?.handleInput?.(character);
+		}
+		const sessionOutput = stripTerminalSequences(
+			sessions?.render(100).join("\n") ?? "",
+		);
+		expect(sessionOutput).toContain("Release planning");
+		expect(sessionOutput).not.toContain("No matching commands");
+	});
+
+	test("renders the effort selector inline and restores the exact draft and focus", async () => {
+		const selected: string[] = [];
+		const state = createTuiState({
+			sessionId: SESSION_ID,
+			model: "model-a",
+			cwd: "/project",
+			reasoning: "high",
+		});
+		const app = createTuiApp(
+			appOptions({
+				state,
+				async onSetEffort(effort) {
+					selected.push(effort);
+					return true;
+				},
+			}),
+		);
+		app.editor.setText("  exact draft\nsecond line  ");
+
+		expect(app.openEffortPicker()).toBe(true);
+		expect(app.tui.hasOverlay()).toBe(false);
+		const surface = stripTerminalSequences(app.tui.render(80).join("\n"));
+		expect(surface).toMatch(/│.*high.*│/);
+		expect(surface.indexOf("╭")).toBeLessThan(surface.indexOf("high"));
+		expect(surface.indexOf("high")).toBeLessThan(surface.indexOf("╰"));
+		const picker = app.tui.getFocusedComponent();
+		expect(picker).not.toBe(app.editor);
+		const rendered = stripTerminalSequences(
+			picker?.render(80).join("\n") ?? "",
+		);
+		for (const label of ["off", "low", "medium", "high", "xhigh", "max"]) {
+			expect(
+				rendered.split("\n").some((line) => line.trim().endsWith(label)),
+			).toBe(true);
+		}
+		expect(rendered.split("\n")).toHaveLength(6);
+		expect(rendered).not.toContain("Filter:");
+		expect(rendered).not.toContain("Thinking effort");
+		expect(rendered).not.toMatch(/[┌┐└┘╭╮╰╯]/);
+
+		picker?.handleInput?.("\u001b");
+		expect(app.tui.getFocusedComponent()).toBe(app.editor);
+		expect(app.editor.getText()).toBe("  exact draft\nsecond line  ");
+
+		expect(app.openEffortPicker()).toBe(true);
+		app.tui.getFocusedComponent()?.handleInput?.("\r");
+		await flush();
+		expect(selected).toEqual(["high"]);
+		expect(app.tui.hasOverlay()).toBe(false);
+		expect(app.tui.getFocusedComponent()).toBe(app.editor);
+		expect(app.editor.getText()).toBe("  exact draft\nsecond line  ");
+	});
+
+	test("renders all skills below the transcript and preserves invocation arguments", () => {
+		const app = createTuiApp(
+			appOptions({
+				getCompletionCatalog: () => ({
+					commands: [],
+					skillNames: ["review", "implement", "review"],
+					templateNames: [],
+					availableCapabilities: [],
+					cwd: "/project",
+					listSessions: async () => [],
+					models: [],
+				}),
+			}),
+		);
+
+		expect(app.openSkillPicker("src/app.ts carefully")).toBe(true);
+		expect(app.tui.hasOverlay()).toBe(false);
+		const surface = stripTerminalSequences(app.tui.render(80).join("\n"));
+		expect(surface).toMatch(/│.*implement.*│/);
+		expect(surface.indexOf("╭")).toBeLessThan(surface.indexOf("implement"));
+		expect(surface.indexOf("implement")).toBeLessThan(surface.indexOf("╰"));
+		const picker = app.tui.getFocusedComponent();
+		const output = stripTerminalSequences(picker?.render(80).join("\n") ?? "");
+		expect(output).toContain("implement");
+		expect(output).toContain("review");
+		picker?.handleInput?.("\r");
+		expect(app.editor.getText()).toBe("/skill:implement src/app.ts carefully");
+		expect(app.tui.getFocusedComponent()).toBe(app.editor);
+	});
+
+	test("keeps a failed effort selector open and safely replaces it with other pickers", async () => {
+		const failing = createTuiApp(
+			appOptions({
+				async onSetEffort() {
+					throw new Error("effort storage failed");
+				},
+			}),
+		);
+		failing.editor.setText("preserved");
+		expect(failing.openEffortPicker()).toBe(true);
+		const picker = failing.tui.getFocusedComponent();
+		picker?.handleInput?.("\r");
+		await flush();
+		expect(failing.tui.hasOverlay()).toBe(false);
+		expect(failing.tui.getFocusedComponent()).toBe(picker);
+		expect(failing.editor.getText()).toBe("preserved");
+		expect(
+			stripTerminalSequences(failing.tui.render(100).join("\n")),
+		).toContain("effort storage failed");
+
+		expect(failing.openModelPicker()).toBe(true);
+		expect(failing.tui.hasOverlay()).toBe(true);
+		expect(failing.dismissPicker()).toBe(true);
+		expect(failing.tui.getFocusedComponent()).toBe(failing.editor);
+		expect(failing.editor.getText()).toBe("preserved");
+
+		expect(failing.openEffortPicker()).toBe(true);
+		failing.refresh(
+			createTuiState({
+				sessionId: "00000000-0000-4000-8000-000000000002",
+				model: "model-b",
+				cwd: "/project",
+				reasoning: "max",
+			}),
+		);
+		expect(failing.tui.getFocusedComponent()).toBe(failing.editor);
+		expect(failing.editor.getText()).toBe("preserved");
+	});
+
+	test("ignores stale async session results after a newer picker opens", async () => {
+		let resolveSessions!: (sessions: readonly CommandSessionListItem[]) => void;
+		const sessions = new Promise<readonly CommandSessionListItem[]>(
+			(resolve) => {
+				resolveSessions = resolve;
+			},
+		);
+		const app = createTuiApp(
+			appOptions({
+				listSessions: () => sessions,
+				getModels: () => [
+					{ provider: "fake", model: "model-a" },
+					{ provider: "other", model: "model-b" },
+				],
+			}),
+		);
+
+		const openingSessions = app.openSessionPicker();
+		expect(app.openModelPicker()).toBe(true);
+		resolveSessions([
+			{
+				id: SESSION_ID,
+				title: "Stored",
+				model: { provider: "fake", model: "model-a" },
+			},
+		]);
+		expect(await openingSessions).toBe(false);
+		expect(app.tui.hasOverlay()).toBe(true);
+		expect(app.dismissPicker()).toBe(true);
+		expect(app.tui.getFocusedComponent()).toBe(app.editor);
+	});
+
+	test("keeps one selection active, restores focus, and preserves the draft", async () => {
+		let resolveSelection!: (close: boolean) => void;
+		const selection = new Promise<boolean>((resolve) => {
+			resolveSelection = resolve;
+		});
+		const selected: string[] = [];
+		const app = createTuiApp(
+			appOptions({
+				listSessions: async () => [
+					{
+						id: SESSION_ID,
+						title: "Stored session",
+						model: { provider: "fake", model: "model-a" },
+					},
+				],
+				onResume: async (id) => {
+					selected.push(id);
+					return selection;
+				},
+			}),
+		);
+		app.editor.setText("preserved draft");
+		expect(await app.openSessionPicker()).toBe(true);
+		const picker = app.tui.getFocusedComponent();
+		expect(picker).not.toBe(app.editor);
+		picker?.handleInput?.("\r");
+		picker?.handleInput?.("\r");
+		expect(selected).toEqual([SESSION_ID]);
+
+		resolveSelection(true);
+		await flush();
+		expect(app.tui.hasOverlay()).toBe(false);
+		expect(app.tui.getFocusedComponent()).toBe(app.editor);
+		expect(app.editor.getText()).toBe("preserved draft");
+	});
+
+	test("renders framed filterable rows and contextual running status", () => {
+		const state = createTuiState({
+			sessionId: SESSION_ID,
+			model: "model-a",
+			cwd: "/project",
+			reasoning: "off",
+		});
+		state.contextUsage = {
+			revision: 1,
+			requestShapeRevision: 1,
+			usedTokens: 20_000,
+			windowTokens: 128_000,
+			percent: 16,
+			mode: "full-estimate",
+			usesProviderUsage: false,
+			breakdown: {
+				mode: "full-estimate",
+				systemTokens: 1_000,
+				messageTokens: 15_000,
+				toolTokens: 4_000,
+				imageTokens: 0,
+				messageCount: 4,
+				toolCount: 2,
+			},
+			contextWindowSource: "fallback",
+		};
+		const app = createTuiApp(
+			appOptions({
+				state,
+				getModels: () => [
+					{ provider: "fake", model: "model-a" },
+					{ provider: "other", model: "model-b" },
+				],
+			}),
+		);
+
+		expect(app.openModelPicker()).toBe(true);
+		const picker = app.tui.getFocusedComponent();
+		expect(picker).not.toBe(app.editor);
+		const pickerOutput = stripTerminalSequences(
+			picker?.render(100).join("\n") ?? "",
+		);
+		expect(pickerOutput).toContain("Models");
+		expect(pickerOutput).toContain("Search  Type to filter");
+		expect(pickerOutput).toContain("model-a");
+		expect(pickerOutput).toContain("fake");
+		expect(pickerOutput).toMatch(/[╭╮╰╯]/);
+		expect(stripTerminalSequences(app.tui.render(100).join("\n"))).toContain(
+			"menu shortcuts",
+		);
+
+		app.dismissPicker();
+		state.running = true;
+		state.inputMode = "running";
+		state.queuedCount = 2;
+		app.refresh(state);
+		const output = stripTerminalSequences(app.tui.render(100).join("\n"));
+		expect(output).toContain("running shortcuts");
+		expect(output).toContain("2 queued");
+		expect(output).not.toContain("~20k / 128k (16%)");
+		expect(app.editor.disableSubmit).toBe(false);
+	});
+
+	test("does not render a separate activity line above the composer", () => {
+		const state = createTuiState({
+			sessionId: SESSION_ID,
+			model: "model-a",
+			cwd: "/project",
+			reasoning: "high",
+		});
+		state.running = true;
+		state.inputMode = "running";
+		state.assistantBlocks = [{ role: "thinking", text: "Inspecting files" }];
+		const app = createTuiApp(appOptions({ state }));
+		const lines = stripTerminalSequences(app.tui.render(100).join("\n"))
+			.split("\n")
+			.map((line) => line.trim());
+
+		expect(lines).not.toContain("Thinking");
+		expect(lines.some((line) => line.includes("Thinking..."))).toBe(true);
+	});
+
+	test("keeps the dark theme as the only selectable theme", async () => {
+		const saved: string[] = [];
+		const app = createTuiApp(
+			appOptions({
+				themes: [AREEB_DARK_THEME],
+				async onSetTheme(theme) {
+					saved.push(theme);
+				},
+			}),
+		);
+		app.editor.setText("preserved draft");
+		const darkBorder = app.editor.borderColor("border");
+
+		expect(app.openThemePicker()).toBe(true);
+		app.tui.getFocusedComponent()?.handleInput?.("\r");
+		await flush();
+		expect(saved).toEqual(["areeb-dark"]);
+		expect(app.tui.hasOverlay()).toBe(false);
+		expect(app.editor.borderColor("border")).toBe(darkBorder);
+		expect(app.editor.getText()).toBe("preserved draft");
+	});
+
+	test("shows canonical next-request context usage in the idle footer", () => {
+		const state = createTuiState({
+			sessionId: SESSION_ID,
+			model: "model-a",
+			cwd: "/project",
+			reasoning: "off",
+		});
+		state.contextUsage = {
+			revision: 1,
+			requestShapeRevision: 1,
+			usedTokens: 20_000,
+			windowTokens: 128_000,
+			percent: 16,
+			mode: "full-estimate",
+			usesProviderUsage: false,
+			breakdown: {
+				mode: "full-estimate",
+				systemTokens: 1_000,
+				messageTokens: 15_000,
+				toolTokens: 4_000,
+				imageTokens: 0,
+				messageCount: 4,
+				toolCount: 2,
+			},
+			contextWindowSource: "fallback",
+		};
+		const app = createTuiApp(appOptions({ state }));
+		const output = stripTerminalSequences(app.tui.render(120).join("\n"));
+		const usageLine = output
+			.split("\n")
+			.find((line) => line.includes("~20k / 128k (16%)"));
+
+		expect(usageLine).toBeDefined();
+		expect(usageLine?.trimEnd()).toEndWith("~20k / 128k (16%)");
+		expect(output).not.toContain("Last ·");
+
+		app.presentCommand("Settings saved", "info");
+		const notice = stripTerminalSequences(app.tui.render(120).join("\n"));
+		expect(notice).toContain("Settings saved");
+		expect(notice).not.toContain("~20k / 128k (16%)");
+		app.clearCommandPresentation();
+
+		state.inputMode = "locked";
+		app.refresh(state);
+		expect(
+			stripTerminalSequences(app.tui.render(120).join("\n")),
+		).not.toContain("~20k / 128k (16%)");
+		app.dispose?.();
+	});
+
+	test("shows model and reasoning on the composer bottom border", () => {
+		const state = createTuiState({
+			sessionId: SESSION_ID,
+			model: "model-a",
+			cwd: "/project",
+			reasoning: "off",
+		});
+		const app = createTuiApp(appOptions({ state }));
+
+		const wide = stripTerminalSequences(app.tui.render(120).join("\n"));
+		const wideMetadataLine = wide
+			.split("\n")
+			.find((line) => line.includes("model-a · off"));
+		expect(wideMetadataLine).toStartWith("╰");
+		expect(wideMetadataLine).toEndWith("╯");
+		state.reasoning = "high";
+		app.refresh(state);
+		expect(stripTerminalSequences(app.tui.render(32).join("\n"))).toContain(
+			"model-a · high",
+		);
+		state.reasoning = "max";
+		app.refresh(state);
+		expect(stripTerminalSequences(app.tui.render(24).join("\n"))).toContain(
+			"model-a · max",
+		);
+	});
+
+	test("reconciles a same-session refresh without clearing the transcript", () => {
+		const state = createTuiState({
+			sessionId: SESSION_ID,
+			model: "model-a",
+			cwd: "/project",
+			reasoning: "off",
+		});
+		state.items.push({ role: "user", text: "stable" });
+		const app = createTuiApp(appOptions({ state }));
+		const originalClear = VStack.prototype.clear;
+		let clearCount = 0;
+		VStack.prototype.clear = function clear(): void {
+			clearCount += 1;
+			originalClear.call(this);
+		};
+
+		try {
+			state.assistantBuffer = "streaming";
+			app.refresh(state);
+			state.assistantBuffer = "streaming delta";
+			app.refresh(state);
+			// Status and shortcut stacks are redrawn once per refresh; the transcript is not.
+			expect(clearCount).toBe(4);
+		} finally {
+			VStack.prototype.clear = originalClear;
+		}
+	});
+});
