@@ -13,7 +13,7 @@ import {
 import type { AuthPrompt, AuthType } from "../../ai/auth.ts";
 import { createAuthAbortError } from "../../ai/auth.ts";
 import type { ProviderAuthView } from "../provider-runtime.ts";
-import type { TuiTheme } from "./theme.ts";
+import { boldText, type TuiTheme } from "./theme.ts";
 
 export type ProviderPickerMode = "login" | "logout";
 
@@ -95,7 +95,7 @@ export class ProviderPicker implements Component, Focusable {
 			);
 			const type = provider.authType === "oauth" ? "Subscription" : "API key";
 			lines.push(
-				`${selected ? this.theme.assistant(prefix) : prefix}${this.theme.markdown.bold(
+				`${selected ? this.theme.assistant(prefix) : prefix}${boldText(
 					this.theme.primary(left),
 				)}${padding}${right}`,
 			);

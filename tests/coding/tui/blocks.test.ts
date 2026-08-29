@@ -209,7 +209,7 @@ describe("TUI transcript blocks", () => {
 		expect(plain.join("\n")).not.toContain("◆ Edit");
 		expect(
 			rendered.find((line) => stripTerminalSequences(line).includes("-old")),
-		).toContain("38;2;252;66;75");
+		).toContain("38;2;239;91;91");
 		expect(
 			rendered.find((line) => stripTerminalSequences(line).includes("+new")),
 		).toContain("38;2;139;184;232");

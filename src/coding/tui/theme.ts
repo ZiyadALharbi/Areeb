@@ -51,7 +51,7 @@ function decoration(open: number, close: number): TextStyle {
 	return (text) => (text ? `\u001b[${open}m${text}\u001b[${close}m` : "");
 }
 
-const bold = decoration(1, 22);
+export const boldText = decoration(1, 22);
 const italic = decoration(3, 23);
 const strikethrough = decoration(9, 29);
 const underline = decoration(4, 24);
@@ -137,7 +137,7 @@ function createTheme(
 	const markdownHeading = (text: string) =>
 		styles.heading(withoutForeground(text));
 	const markdownBold = (text: string) =>
-		styles.code(bold(withoutForeground(text)));
+		styles.code(boldText(withoutForeground(text)));
 	const highlightTheme: HighlightTheme = {
 		default: styles.syntaxPlain,
 		keyword: styles.syntaxKeyword,

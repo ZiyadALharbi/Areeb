@@ -1,11 +1,12 @@
 {
 	"name": "areeb",
+	"version": "0.1.0",
 	"module": "index.ts",
 	"bin": {
 		"areeb": "./src/coding/cli.ts"
 	},
 	"type": "module",
-	"private": true,
+	"private": false,
 	"devDependencies": {
 		"typescript": "7",
 		"@biomejs/biome": "^2.5.4",
