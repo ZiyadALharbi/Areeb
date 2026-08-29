@@ -51,10 +51,18 @@ function decoration(open: number, close: number): TextStyle {
 	return (text) => (text ? `\u001b[${open}m${text}\u001b[${close}m` : "");
 }
 
-const bold = decoration(1, 22);
+export const boldText = decoration(1, 22);
 const italic = decoration(3, 23);
 const strikethrough = decoration(9, 29);
 const underline = decoration(4, 24);
+const PLAIN_TEXT_LANGUAGES = new Set(["text", "plaintext", "txt", "output"]);
+// ANSI foreground escapes must be removed before applying a semantic Markdown color.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: ESC starts every ANSI sequence.
+const FOREGROUND_SEQUENCE = /\x1b\[(?:38;2;\d{1,3};\d{1,3};\d{1,3}|39)m/g;
+
+function withoutForeground(text: string): string {
+	return text.replace(FOREGROUND_SEQUENCE, "");
+}
 
 interface ThemePalette {
 	readonly primary: `#${string}`;
@@ -77,6 +85,7 @@ interface ThemePalette {
 	readonly diffContext: `#${string}`;
 	readonly diffHunk: `#${string}`;
 	readonly diffMeta: `#${string}`;
+	readonly syntaxPlain: `#${string}`;
 	readonly syntaxKeyword: `#${string}`;
 	readonly syntaxType: `#${string}`;
 	readonly syntaxNumber: `#${string}`;
@@ -84,6 +93,8 @@ interface ThemePalette {
 	readonly syntaxComment: `#${string}`;
 	readonly syntaxFunction: `#${string}`;
 	readonly syntaxVariable: `#${string}`;
+	readonly syntaxAddition: `#${string}`;
+	readonly syntaxDeletion: `#${string}`;
 }
 
 function createTheme(
@@ -112,6 +123,7 @@ function createTheme(
 		diffContext: foreground(palette.diffContext),
 		diffHunk: foreground(palette.diffHunk),
 		diffMeta: foreground(palette.diffMeta),
+		syntaxPlain: foreground(palette.syntaxPlain),
 		syntaxKeyword: foreground(palette.syntaxKeyword),
 		syntaxType: foreground(palette.syntaxType),
 		syntaxNumber: foreground(palette.syntaxNumber),
@@ -119,9 +131,15 @@ function createTheme(
 		syntaxComment: foreground(palette.syntaxComment),
 		syntaxFunction: foreground(palette.syntaxFunction),
 		syntaxVariable: foreground(palette.syntaxVariable),
+		syntaxAddition: foreground(palette.syntaxAddition),
+		syntaxDeletion: foreground(palette.syntaxDeletion),
 	};
+	const markdownHeading = (text: string) =>
+		styles.heading(withoutForeground(text));
+	const markdownBold = (text: string) =>
+		styles.code(boldText(withoutForeground(text)));
 	const highlightTheme: HighlightTheme = {
-		default: styles.primary,
+		default: styles.syntaxPlain,
 		keyword: styles.syntaxKeyword,
 		built_in: styles.syntaxType,
 		type: styles.syntaxType,
@@ -130,20 +148,39 @@ function createTheme(
 		number: styles.syntaxNumber,
 		string: styles.syntaxString,
 		regexp: styles.syntaxString,
+		subst: styles.syntaxVariable,
+		symbol: styles.syntaxString,
 		comment: styles.syntaxComment,
 		doctag: styles.syntaxComment,
 		function: styles.syntaxFunction,
 		title: styles.syntaxFunction,
 		name: styles.syntaxFunction,
+		"builtin-name": styles.syntaxFunction,
 		attr: styles.syntaxVariable,
 		attribute: styles.syntaxVariable,
 		variable: styles.syntaxVariable,
 		params: styles.syntaxVariable,
 		meta: styles.syntaxKeyword,
+		"meta-keyword": styles.syntaxKeyword,
+		"meta-string": styles.syntaxString,
 		section: styles.heading,
 		tag: styles.syntaxKeyword,
-		addition: styles.diffAdded,
-		deletion: styles.diffRemoved,
+		bullet: styles.syntaxKeyword,
+		code: styles.syntaxPlain,
+		emphasis: styles.syntaxPlain,
+		strong: styles.syntaxPlain,
+		formula: styles.syntaxNumber,
+		link: styles.syntaxVariable,
+		quote: styles.syntaxPlain,
+		"selector-tag": styles.syntaxKeyword,
+		"selector-id": styles.syntaxFunction,
+		"selector-class": styles.syntaxVariable,
+		"selector-attr": styles.syntaxType,
+		"selector-pseudo": styles.syntaxKeyword,
+		"template-tag": styles.syntaxKeyword,
+		"template-variable": styles.syntaxVariable,
+		addition: styles.syntaxAddition,
+		deletion: styles.syntaxDeletion,
 	};
 
 	return Object.freeze({
@@ -166,7 +203,7 @@ function createTheme(
 		diffHunk: styles.diffHunk,
 		diffMeta: styles.diffMeta,
 		markdown: Object.freeze({
-			heading: styles.heading,
+			heading: markdownHeading,
 			link: styles.link,
 			linkUrl: styles.muted,
 			code: styles.code,
@@ -176,13 +213,16 @@ function createTheme(
 			quoteBorder: styles.muted,
 			hr: styles.muted,
 			listBullet: styles.assistant,
-			bold,
+			bold: markdownBold,
 			italic,
 			strikethrough,
 			underline,
 			highlightCode: (code: string, language?: string) => {
-				if (language === undefined || !supportsLanguage(language)) {
+				if (!language || PLAIN_TEXT_LANGUAGES.has(language.toLowerCase())) {
 					return code.split("\n").map(styles.primary);
+				}
+				if (!supportsLanguage(language)) {
+					return code.split("\n").map(styles.syntaxPlain);
 				}
 				try {
 					return highlight(code, {
@@ -191,7 +231,7 @@ function createTheme(
 						theme: highlightTheme,
 					}).split("\n");
 				} catch {
-					return code.split("\n").map(styles.primary);
+					return code.split("\n").map(styles.syntaxPlain);
 				}
 			},
 			codeBlockIndent: "  ",
@@ -230,13 +270,16 @@ export const AREEB_DARK_THEME = createTheme("areeb-dark", "#0a0a0a", {
 	diffContext: "#c0c0c0",
 	diffHunk: "#8abeb7",
 	diffMeta: "#707070",
-	syntaxKeyword: "#4fc1ff",
-	syntaxType: "#8abeb7",
-	syntaxNumber: "#f1c674",
-	syntaxString: "#b6bd68",
+	syntaxPlain: "#e6d5b8",
+	syntaxKeyword: "#4d9eff",
+	syntaxType: "#e6a15a",
+	syntaxNumber: "#ffd166",
+	syntaxString: "#e07a5f",
 	syntaxComment: "#707070",
-	syntaxFunction: "#c397d8",
-	syntaxVariable: "#f5f5f5",
+	syntaxFunction: "#ef5b5b",
+	syntaxVariable: "#8bb8e8",
+	syntaxAddition: "#8bb8e8",
+	syntaxDeletion: "#ef5b5b",
 });
 
 const THEMES: Readonly<Record<TuiThemeName, TuiTheme>> = Object.freeze({
@@ -297,7 +340,7 @@ export function createTuiThemeBinding(initial: TuiTheme): TuiThemeBinding {
 			quoteBorder: bind((theme) => theme.markdown.quoteBorder),
 			hr: bind((theme) => theme.markdown.hr),
 			listBullet: bind((theme) => theme.markdown.listBullet),
-			bold,
+			bold: bind((theme) => theme.markdown.bold),
 			italic,
 			strikethrough,
 			underline,

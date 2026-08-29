@@ -132,6 +132,24 @@ describe("TUI transcript blocks", () => {
 		expect(assistant.join("\n")).not.toContain("```");
 		expect(assistant.join("\n")).toContain("- bold and code");
 		expect(assistant.join("\n")).toContain("const answer: number = 42;");
+		const emphasized = new MessageBlock(
+			"assistant",
+			"### Gold heading\n\nA **Transformer** uses **attention**.",
+			theme,
+		).render(80);
+		const headingLine = emphasized.find((line) =>
+			line.includes("Gold heading"),
+		);
+		const proseLine = emphasized.find((line) => line.includes("Transformer"));
+		expect(headingLine).toContain("38;2;241;198;116");
+		expect(headingLine).not.toContain("38;2;182;189;104");
+		expect(proseLine).toContain("\u001b[38;2;182;189;104m\u001b[1mTransformer");
+		expect(proseLine).toContain("\u001b[38;2;182;189;104m\u001b[1mattention");
+		expect(
+			new MessageBlock("assistant", "`technical term`", theme)
+				.render(40)
+				.join("\n"),
+		).toContain("38;2;182;189;104");
 		expect(
 			new MessageBlock(
 				"assistant",
@@ -140,10 +158,23 @@ describe("TUI transcript blocks", () => {
 			)
 				.render(40)
 				.join("\n"),
-		).toContain("38;2;79;193;255");
+		).toContain("38;2;77;158;255");
 		expect(user).toHaveLength(3);
 		expect(user[1]).toContain("› **bold** and `code`");
 		expect(assistant.every((line) => visibleWidth(line) <= 30)).toBe(true);
+	});
+
+	test("renders unlabelled and plain-text output blocks as normal text", () => {
+		const rendered = new MessageBlock(
+			"assistant",
+			"```text\nHead 1: attends nearby words\nHead 2: tracks subjects\n```",
+			theme,
+		).render(60);
+
+		expect(rendered).toHaveLength(3);
+		expect(
+			rendered.slice(1).every((line) => line.includes("38;2;245;245;245")),
+		).toBe(true);
 	});
 
 	test("renders Markdown diff blocks with standard syntax highlighting", () => {
@@ -178,10 +209,10 @@ describe("TUI transcript blocks", () => {
 		expect(plain.join("\n")).not.toContain("◆ Edit");
 		expect(
 			rendered.find((line) => stripTerminalSequences(line).includes("-old")),
-		).toContain("38;2;252;66;75");
+		).toContain("38;2;239;91;91");
 		expect(
 			rendered.find((line) => stripTerminalSequences(line).includes("+new")),
-		).toContain("38;2;0;189;125");
+		).toContain("38;2;139;184;232");
 	});
 
 	test("renders incomplete fenced code without throwing", () => {

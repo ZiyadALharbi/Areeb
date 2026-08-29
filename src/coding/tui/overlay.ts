@@ -12,7 +12,7 @@ import {
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import type { CommandNoticeLevel } from "./app.ts";
-import type { TuiTheme } from "./theme.ts";
+import { boldText, type TuiTheme } from "./theme.ts";
 
 export const STANDARD_OVERLAY_OPTIONS: OverlayOptions = Object.freeze({
 	width: 84,
@@ -178,7 +178,7 @@ export class OverlayFrame extends Container implements Focusable {
 			"",
 		);
 		const fill = "─".repeat(width - 5 - visibleWidth(title));
-		return `${this.theme.composerBorder("╭─ ")}${this.theme.markdown.bold(
+		return `${this.theme.composerBorder("╭─ ")}${boldText(
 			this.theme.assistant(title),
 		)}${this.theme.composerBorder(` ${fill}╮`)}`;
 	}
@@ -245,9 +245,7 @@ export class CommandOverlayContent implements Component {
 			const field = fieldLine(line);
 			if (field !== undefined && field.value.length === 0) {
 				warningSection = field.label.toLocaleLowerCase() === "warnings";
-				output.push(
-					this.theme.markdown.bold(this.theme.assistant(`${field.label}:`)),
-				);
+				output.push(boldText(this.theme.assistant(`${field.label}:`)));
 				continue;
 			}
 			if (field !== undefined && labelWidth > 0) {
@@ -328,13 +326,13 @@ export class CommandOverlayContent implements Component {
 	): string[] {
 		if (width <= 32 || rowWidth + 4 >= width) {
 			return wrapTextWithAnsi(
-				`${this.theme.markdown.bold(this.theme.assistant(leading))}${this.theme.muted(" — ")}${this.theme.primary(description)}`,
+				`${boldText(this.theme.assistant(leading))}${this.theme.muted(" — ")}${this.theme.primary(description)}`,
 				width,
 			);
 		}
 		const descriptionWidth = width - rowWidth - 2;
 		const fragments = wrapTextWithAnsi(description, descriptionWidth);
-		const prefix = `${this.theme.markdown.bold(
+		const prefix = `${boldText(
 			this.theme.assistant(leading.padEnd(rowWidth)),
 		)}  `;
 		const indent = " ".repeat(rowWidth + 2);
