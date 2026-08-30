@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { AgentMessage } from "../../src/agent/types.ts";
 import { FakeProvider } from "../../src/ai/fake_provider.ts";
 import type { OpenAICompatibleConfig } from "../../src/ai/openai_compatible_provider.ts";
+import type { OpenAIResponsesConfig } from "../../src/ai/openai_responses_provider.ts";
 import { FileCredentialStore } from "../../src/coding/auth-store.ts";
 import { parseCli, runCli } from "../../src/coding/cli.ts";
 import type { PrintModeSession } from "../../src/coding/modes/types.ts";
@@ -181,7 +182,7 @@ describe("CLI session persistence", () => {
 				env: { OPENAI_API_KEY: "test-key" },
 				stdout: new BufferOutput(),
 				stderr: new BufferOutput(),
-				createProvider() {
+				createOpenAIResponsesProvider() {
 					const provider = providers.shift();
 					if (provider === undefined) {
 						throw new Error("Provider sequence exhausted");
@@ -320,7 +321,7 @@ describe("CLI session persistence", () => {
 				},
 				stdout,
 				stderr,
-				createProvider() {
+				createOpenAIResponsesProvider() {
 					const provider = providers.shift();
 					if (provider === undefined) {
 						throw new Error("Provider sequence exhausted");
@@ -454,7 +455,8 @@ describe("CLI interactive mode", () => {
 					stdin: { isTTY: true },
 					stdout: new BufferOutput(true),
 					stderr: new BufferOutput(),
-					createProvider: () => new FakeProvider([], { providerId: "openai" }),
+					createOpenAIResponsesProvider: () =>
+						new FakeProvider([], { providerId: "openai" }),
 					async runInteractive(controller) {
 						expect(controller.state.reasoning).toBe("max");
 						return 0;
@@ -487,7 +489,7 @@ describe("CLI interactive mode", () => {
 				stdin: { isTTY: false },
 				stdout: new BufferOutput(true),
 				stderr,
-				createProvider() {
+				createOpenAIResponsesProvider() {
 					providerCreated = true;
 					return new FakeProvider([]);
 				},
@@ -512,7 +514,7 @@ describe("CLI interactive mode", () => {
 					stdin: { isTTY: true },
 					stdout: new BufferOutput(true),
 					stderr: new BufferOutput(),
-					createProvider() {
+					createOpenAIResponsesProvider() {
 						providerCreated = true;
 						return new FakeProvider([]);
 					},
@@ -561,7 +563,7 @@ describe("CLI interactive mode", () => {
 					stdin: { isTTY: true },
 					stdout: new BufferOutput(true),
 					stderr: new BufferOutput(),
-					createProvider() {
+					createOpenAIResponsesProvider() {
 						openAiCreated = true;
 						return new FakeProvider([]);
 					},
@@ -619,7 +621,7 @@ describe("CLI interactive mode", () => {
 				stdin: { isTTY: true },
 				stdout: new BufferOutput(true),
 				stderr: new BufferOutput(),
-				createProvider: () => {
+				createOpenAIResponsesProvider: () => {
 					providerCreations += 1;
 					return new FakeProvider([], { providerId: "openai" });
 				},
@@ -711,7 +713,10 @@ describe("CLI interactive mode", () => {
 				defaultModel: "org/model-b",
 				timeoutSeconds: 45,
 			});
-			const providerConfigs: OpenAICompatibleConfig[] = [];
+			const providerConfigs: (
+				| OpenAICompatibleConfig
+				| OpenAIResponsesConfig
+			)[] = [];
 
 			expect(
 				await runCli([], {
@@ -722,6 +727,10 @@ describe("CLI interactive mode", () => {
 					stdin: { isTTY: true },
 					stdout: new BufferOutput(true),
 					stderr: new BufferOutput(),
+					createOpenAIResponsesProvider(config) {
+						providerConfigs.push(config);
+						return new FakeProvider([], { providerId: config.providerId });
+					},
 					createProvider(config) {
 						providerConfigs.push(config);
 						return new FakeProvider([], { providerId: config.providerId });

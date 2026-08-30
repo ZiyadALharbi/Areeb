@@ -6,6 +6,7 @@ import { assertUuid } from "../agent/session/session.ts";
 import type { SessionModel } from "../agent/session/types.ts";
 import type { CodexProviderConfig } from "../ai/codex_provider.ts";
 import type { OpenAICompatibleConfig } from "../ai/openai_compatible_provider.ts";
+import type { OpenAIResponsesConfig } from "../ai/openai_responses_provider.ts";
 import type { ModelProvider } from "../ai/provider_protocol.ts";
 import {
 	isReasoningLevel,
@@ -256,6 +257,9 @@ interface CliRuntime {
 	readonly stdout?: CliOutput;
 	readonly stderr?: CliOutput;
 	readonly createProvider?: (config: OpenAICompatibleConfig) => ModelProvider;
+	readonly createOpenAIResponsesProvider?: (
+		config: OpenAIResponsesConfig,
+	) => ModelProvider;
 	readonly createCodexProvider?: (config: CodexProviderConfig) => ModelProvider;
 	readonly runPrint?: typeof runPrintMode;
 	readonly runInteractive?: typeof runInteractiveMode;
@@ -395,6 +399,11 @@ async function runSessionCommand(
 		...(runtime.createProvider === undefined
 			? {}
 			: { createProvider: runtime.createProvider }),
+		...(runtime.createOpenAIResponsesProvider === undefined
+			? {}
+			: {
+					createOpenAIResponsesProvider: runtime.createOpenAIResponsesProvider,
+				}),
 		...(runtime.createCodexProvider === undefined
 			? {}
 			: { createCodexProvider: runtime.createCodexProvider }),
