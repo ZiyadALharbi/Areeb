@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { CodexProviderConfig } from "../../src/ai/codex_provider.ts";
 import { FakeProvider } from "../../src/ai/fake_provider.ts";
 import type { OpenAICompatibleConfig } from "../../src/ai/openai_compatible_provider.ts";
+import type { OpenAIResponsesConfig } from "../../src/ai/openai_responses_provider.ts";
 import { MemoryCredentialStore } from "../../src/coding/auth-store.ts";
 import {
 	createDefaultProviderAuthRegistry,
@@ -226,12 +227,14 @@ describe("ProviderRuntimeService", () => {
 			openai: { type: "api_key", key: "stored-key" },
 		});
 		let configuredKey: string | undefined;
+		let responsesConfig: OpenAIResponsesConfig | undefined;
 		const service = new ProviderRuntimeService({
 			settings,
 			store,
 			registry: createDefaultProviderAuthRegistry(),
 			env: { OPENAI_API_KEY: "environment-key" },
-			createProvider(config) {
+			createOpenAIResponsesProvider(config) {
+				responsesConfig = config;
 				configuredKey = config.apiKey;
 				return new FakeProvider([], { providerId: config.providerId });
 			},
@@ -239,6 +242,11 @@ describe("ProviderRuntimeService", () => {
 
 		await service.createRuntime({ provider: "openai", model: "gpt-5.6-sol" });
 		expect(configuredKey).toBe("environment-key");
+		expect(responsesConfig).toMatchObject({
+			providerId: "openai",
+			baseUrl: "https://api.openai.com/v1",
+			retry: { maxRetries: 2, maxRetryDelayMs: 60_000 },
+		});
 		expect(await service.usableModels()).toContainEqual(
 			expect.objectContaining({
 				provider: "openai",

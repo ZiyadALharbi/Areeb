@@ -84,6 +84,8 @@ export type {
 	ThinkingLevelMap,
 } from "./src/ai/openai_compatible_provider.ts";
 export { OpenAICompatibleProvider } from "./src/ai/openai_compatible_provider.ts";
+export type { OpenAIResponsesConfig } from "./src/ai/openai_responses_provider.ts";
+export { OpenAIResponsesProvider } from "./src/ai/openai_responses_provider.ts";
 export type {
 	ModelProvider,
 	ProviderRetryConfig,

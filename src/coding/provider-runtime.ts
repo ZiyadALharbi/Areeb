@@ -5,8 +5,10 @@ import {
 	type CodexProviderConfig,
 } from "../ai/codex_provider.ts";
 import { createAssistantMessageEventStream } from "../ai/event-stream.ts";
-import type { OpenAICompatibleConfig } from "../ai/openai_compatible_provider.ts";
-import { OpenAICompatibleProvider } from "../ai/openai_compatible_provider.ts";
+import {
+	type OpenAIResponsesConfig,
+	OpenAIResponsesProvider,
+} from "../ai/openai_responses_provider.ts";
 import type {
 	DiscoveredModelLimit,
 	ModelProvider,
@@ -59,6 +61,9 @@ export interface ProviderRuntimeServiceOptions {
 	readonly env?: ProviderEnvironment;
 	readonly createProvider?: ProviderFactory;
 	readonly createCodexProvider?: (config: CodexProviderConfig) => ModelProvider;
+	readonly createOpenAIResponsesProvider?: (
+		config: OpenAIResponsesConfig,
+	) => ModelProvider;
 	readonly now?: () => number;
 }
 
@@ -391,7 +396,7 @@ export class ProviderRuntimeService {
 					options,
 				);
 			}
-			const adapterConfig: OpenAICompatibleConfig = {
+			const adapterConfig: OpenAIResponsesConfig = {
 				providerId: "openai",
 				baseUrl: configured.baseUrl,
 				apiKey,
@@ -399,11 +404,10 @@ export class ProviderRuntimeService {
 					maxRetries: configured.maxRetries,
 					maxRetryDelayMs: configured.maxRetryDelaySeconds * 1_000,
 				},
-				compat: configured.compat,
 			};
 			const provider =
-				this.options.createProvider?.(adapterConfig) ??
-				new OpenAICompatibleProvider(adapterConfig);
+				this.options.createOpenAIResponsesProvider?.(adapterConfig) ??
+				new OpenAIResponsesProvider(adapterConfig);
 			return this.resolveRuntimeWindow(
 				Object.freeze({
 					provider,
