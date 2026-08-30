@@ -59,7 +59,23 @@ if (-not $toolBinLine) {
 }
 
 $toolBin = $toolBinLine.Trim()
-$env:Path = "$toolBin;$env:Path"
+$CurrentPathEntries = $env:Path -split ";"
+if ($toolBin -notin $CurrentPathEntries) {
+    $env:Path = "$toolBin;$env:Path"
+}
+
+if ($toolBin -notin $OriginalPathEntries) {
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $userPathEntries = $userPath -split ";"
+    if ($toolBin -notin $userPathEntries) {
+        if ([string]::IsNullOrWhiteSpace($userPath)) {
+            $userPath = $toolBin
+        } else {
+            $userPath = "$toolBin;$userPath"
+        }
+        [Environment]::SetEnvironmentVariable("Path", $userPath, "User")
+    }
+}
 
 $areeb = Get-Command areeb -ErrorAction SilentlyContinue
 if (-not $areeb) {
@@ -75,6 +91,6 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "Areeb is installed. Run: areeb"
 
 if ($toolBin -notin $OriginalPathEntries) {
-    Write-Host "Restart PowerShell if 'areeb' is not found."
-    Write-Host "The directory $toolBin must be on PATH."
+    Write-Host "Areeb was added to your user PATH."
+    Write-Host "Restart other open terminals before running: areeb"
 }
