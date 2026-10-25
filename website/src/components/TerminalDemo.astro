@@ -1,0 +1,132 @@
+---
+const _prompt =
+	"the session list crashes when a session file has a blank line. fix it and run the tests";
+---
+
+<figure class="terminal card" data-terminal aria-label="Replay of an Areeb session fixing a bug">
+  <div class="terminal-bar">
+    <span>~/my-project — areeb</span>
+    <span class="terminal-status"><span class="badge-dot" aria-hidden="true"></span>openai · effort high</span>
+    <button class="replay-button" type="button" data-replay>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path>
+        <path d="M3 3v5h5"></path>
+      </svg>
+      Replay
+    </button>
+  </div>
+
+  <div class="terminal-body">
+    <div class="t-line t-user" data-step="0">
+      <span class="t-tag">›</span>
+      <span class="t-text"><span data-typed data-text={_prompt}>{_prompt}</span><span class="t-caret" aria-hidden="true"></span></span>
+    </div>
+
+    <div class="t-line t-think t-gap" data-step="1">
+      <span class="t-tag">think</span>
+      <span class="t-text">Session files are JSON Lines. A blank line makes JSON.parse throw, so the loader should skip empty lines.</span>
+    </div>
+
+    <div class="t-line t-tool t-gap" data-step="2">
+      <span class="t-tag">read</span>
+      <span class="t-text">src/coding/session-manager.ts<span class="t-meta">365 lines</span></span>
+    </div>
+
+    <div class="t-line t-tool" data-step="3">
+      <span class="t-tag">edit</span>
+      <span class="t-text">src/coding/session-manager.ts<span class="t-meta"><span class="t-add">+2</span> <span class="t-del">−1</span></span></span>
+    </div>
+
+    <div class="t-line t-diff" data-step="3">
+      <span class="t-text">
+        <span class="t-diff-line t-del">{'- const entries = text.split("\\n").map(parseEntry);'}</span>
+        <span class="t-diff-line t-add">{'+ const entries = text.split("\\n")'}</span>
+        <span class="t-diff-line t-add">{'+   .filter((line) => line.trim() !== "").map(parseEntry);'}</span>
+      </span>
+    </div>
+
+    <div class="t-line t-tool t-gap" data-step="4">
+      <span class="t-tag">bash</span>
+      <span class="t-text">bun test tests/coding</span>
+    </div>
+
+    <div class="t-line" data-step="5">
+      <span class="t-tag"></span>
+      <span class="t-text t-pass">✓ 38 pass · 0 fail</span>
+    </div>
+
+    <div class="t-line t-answer t-gap" data-step="6">
+      <span class="t-tag">done</span>
+      <span class="t-text">Blank lines in session files are now skipped before parsing, so the session list loads again. All 38 tests in tests/coding pass.</span>
+    </div>
+  </div>
+</figure>
+
+<script>
+  const terminal = document.querySelector<HTMLElement>("[data-terminal]");
+
+  if (terminal) {
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const lines = [...terminal.querySelectorAll<HTMLElement>("[data-step]")];
+    const typed = terminal.querySelector<HTMLElement>("[data-typed]");
+    const caret = terminal.querySelector<HTMLElement>(".t-caret");
+    const fullPrompt = typed?.dataset.text ?? "";
+    const pauses = [0, 900, 1400, 700, 1300, 1600, 900];
+    let timers: number[] = [];
+
+    const later = (delay: number, action: () => void) => {
+      timers.push(window.setTimeout(action, delay));
+    };
+
+    const showStep = (step: number) => {
+      lines.forEach((line) => {
+        if (Number(line.dataset.step) === step) line.classList.add("is-shown");
+      });
+    };
+
+    const play = () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+      timers = [];
+
+      if (reduceMotion) {
+        lines.forEach((line) => line.classList.add("is-shown"));
+        if (caret) caret.hidden = true;
+        return;
+      }
+
+      lines.forEach((line) => line.classList.remove("is-shown"));
+      if (typed) typed.textContent = "";
+      if (caret) caret.hidden = false;
+      showStep(0);
+
+      let clock = 300;
+      for (let index = 1; index <= fullPrompt.length; index += 1) {
+        later(clock, () => {
+          if (typed) typed.textContent = fullPrompt.slice(0, index);
+        });
+        clock += 22 + Math.random() * 30;
+      }
+
+      later(clock + 300, () => {
+        if (caret) caret.hidden = true;
+      });
+
+      for (let step = 1; step < pauses.length; step += 1) {
+        clock += pauses[step] ?? 800;
+        later(clock, () => showStep(step));
+      }
+    };
+
+    terminal.querySelector("[data-replay]")?.addEventListener("click", play);
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting) return;
+        play();
+        observer.disconnect();
+      },
+      { threshold: 0.35 },
+    );
+    observer.observe(terminal);
+  }
+</script>

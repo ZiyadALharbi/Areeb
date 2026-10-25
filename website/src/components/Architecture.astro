@@ -1,0 +1,119 @@
+---
+const _layers = [
+	{
+		id: "coding",
+		name: "areeb_coding",
+		role: "The application",
+		title: "A coding app on top of the agent",
+		body: "The CLI and terminal UI, file and shell tools, provider configuration, project instructions, skills, and saved sessions.",
+		parts: [
+			"CLI",
+			"Terminal UI",
+			"read · write · edit · bash",
+			"Skills",
+			"Saved sessions",
+		],
+	},
+	{
+		id: "agent",
+		name: "areeb_agent",
+		role: "The reusable brain",
+		title: "The loop that thinks and acts",
+		body: "Messages, tools, events, the agent loop, and session primitives. It knows how to work, not what kind of app it lives in.",
+		parts: ["Agent loop", "Tools", "Events", "Session primitives"],
+	},
+	{
+		id: "ai",
+		name: "areeb_ai",
+		role: "The provider layer",
+		title: "One stream for every provider",
+		body: "Turns each model provider into a single provider-neutral stream, so nothing above it depends on one vendor's API.",
+		parts: [
+			"OpenAI",
+			"ChatGPT Plus/Pro",
+			"OpenAI-compatible",
+			"Streaming events",
+		],
+	},
+];
+---
+
+<section class="section shell" id="architecture" aria-labelledby="architecture-title">
+  <div class="section-head reveal">
+    <span class="kicker">Architecture</span>
+    <h2 id="architecture-title">Three layers, built to be read.</h2>
+    <p>Areeb is a learning project, so its parts are kept apart. Each layer depends only on the one below it, and you can study or reuse any of them on its own.</p>
+  </div>
+
+  <div class="layers reveal" data-layers>
+    <div class="layer-stack card" role="tablist" aria-label="Areeb layers" aria-orientation="vertical">
+      {_layers.map((layer, index) => (
+        <>
+          {index > 0 && (
+            <div class="layer-arrow" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M12 4v16m0 0-6-6m6 6 6-6"></path></svg>
+              uses
+            </div>
+          )}
+          <button
+            class="layer"
+            type="button"
+            role="tab"
+            id={`layer-tab-${layer.id}`}
+            aria-selected={index === 1 ? "true" : "false"}
+            aria-controls={`layer-panel-${layer.id}`}
+            tabindex={index === 1 ? 0 : -1}
+          >
+            <code>{layer.name}</code>
+            <small>{layer.role}</small>
+          </button>
+        </>
+      ))}
+    </div>
+
+    <div class="layer-detail card">
+      {_layers.map((layer, index) => (
+        <div role="tabpanel" id={`layer-panel-${layer.id}`} aria-labelledby={`layer-tab-${layer.id}`} hidden={index !== 1}>
+          <span class="kicker">{layer.name}</span>
+          <h3>{layer.title}</h3>
+          <p>{layer.body}</p>
+          <ul>
+            {layer.parts.map((part) => <li>{part}</li>)}
+          </ul>
+        </div>
+      ))}
+      <p class="layer-note">areeb_coding → areeb_agent → areeb_ai</p>
+    </div>
+  </div>
+</section>
+
+<script>
+  document.querySelectorAll<HTMLElement>("[data-layers]").forEach((root) => {
+    const tabs = [...root.querySelectorAll<HTMLButtonElement>("[role='tab']")];
+    const panels = [...root.querySelectorAll<HTMLElement>("[role='tabpanel']")];
+
+    const select = (tab: HTMLButtonElement) => {
+      tabs.forEach((item) => {
+        const selected = item === tab;
+        item.setAttribute("aria-selected", String(selected));
+        item.tabIndex = selected ? 0 : -1;
+      });
+      panels.forEach((panel) => {
+        panel.hidden = panel.id !== tab.getAttribute("aria-controls");
+      });
+    };
+
+    tabs.forEach((tab, index) => {
+      tab.addEventListener("click", () => select(tab));
+      tab.addEventListener("keydown", (event) => {
+        const step = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
+        if (!step) return;
+        event.preventDefault();
+        const next = tabs[(index + step + tabs.length) % tabs.length];
+        if (!next) return;
+        next.focus();
+        select(next);
+      });
+    });
+  });
+</script>

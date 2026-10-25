@@ -1,0 +1,236 @@
+---
+// Dot-matrix wordmark that alternates between the Arabic and Latin names.
+// The pointer pushes the dots aside, and they settle back into the letters.
+---
+
+<div class="wordmark" data-wordmark aria-hidden="true">
+  <div class="wordmark-fallback" lang="ar" dir="rtl">أريب</div>
+  <canvas></canvas>
+</div>
+
+<script>
+  type Point = [number, number];
+
+  interface Particle {
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+    targets: Point[];
+    target: number;
+    flipAt: number;
+  }
+
+  interface Word {
+    text: string;
+    font: (size: number) => string;
+    direction: CanvasDirection;
+    scale: number;
+  }
+
+  const words: Word[] = [
+    { text: "أريب", font: (size) => `400 ${size}px "Thmanyah Sans"`, direction: "rtl", scale: 1 },
+    { text: "Areeb", font: (size) => `500 ${size}px Geist`, direction: "ltr", scale: 0.86 },
+  ];
+
+  const HOLD_MS = 4200;
+  const BONE = "#eceae4";
+  const SAFFRON = "#f0b44c";
+
+  const root = document.querySelector<HTMLElement>("[data-wordmark]");
+  const canvas = root?.querySelector("canvas");
+  const context = canvas?.getContext("2d");
+
+  if (root && canvas && context) {
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const pointer = { x: 0, y: 0, active: false };
+    let particles: Particle[] = [];
+    let width = 0;
+    let height = 0;
+    let gap = 5;
+    let current = 0;
+    let nextFlip = 0;
+    let running = false;
+    let frame = 0;
+
+    const sample = (word: Word): Point[] => {
+      const scratch = document.createElement("canvas");
+      scratch.width = width;
+      scratch.height = height;
+      const draw = scratch.getContext("2d", { willReadFrequently: true });
+      if (!draw) return [];
+
+      let size = height * word.scale;
+      draw.font = word.font(size);
+      const first = draw.measureText(word.text);
+      const inkHeight = first.actualBoundingBoxAscent + first.actualBoundingBoxDescent;
+      size *= Math.min(1, (width * 0.94) / first.width, (height * 0.92) / inkHeight);
+
+      draw.font = word.font(size);
+      draw.direction = word.direction;
+      draw.textAlign = "center";
+      draw.textBaseline = "alphabetic";
+      draw.fillStyle = "#fff";
+      const box = draw.measureText(word.text);
+      const baseline = height / 2 + (box.actualBoundingBoxAscent - box.actualBoundingBoxDescent) / 2;
+      draw.fillText(word.text, width / 2, baseline);
+
+      const pixels = draw.getImageData(0, 0, width, height).data;
+      const points: Point[] = [];
+      for (let y = gap / 2; y < height; y += gap) {
+        for (let x = gap / 2; x < width; x += gap) {
+          if ((pixels[(Math.floor(y) * width + Math.floor(x)) * 4 + 3] ?? 0) > 140) points.push([x, y]);
+        }
+      }
+      return points.sort((a, b) => a[0] - b[0]);
+    };
+
+    const build = () => {
+      const rect = root.getBoundingClientRect();
+      width = Math.max(1, Math.round(rect.width));
+      height = Math.max(1, Math.round(rect.height));
+      gap = width > 560 ? 5 : 4;
+
+      const ratio = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = width * ratio;
+      canvas.height = height * ratio;
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+
+      const sets = words.map(sample);
+      const count = Math.max(...sets.map((set) => set.length));
+      const previous = particles;
+
+      particles = Array.from({ length: count }, (_, index) => {
+        const targets = sets.map((set) => set[Math.floor((index * set.length) / count)] ?? [width / 2, height / 2]);
+        const old = previous[index];
+        const home = targets[current] ?? [0, 0];
+        return {
+          x: old?.x ?? (reduceMotion ? home[0] : Math.random() * width),
+          y: old?.y ?? (reduceMotion ? home[1] : height / 2 + (Math.random() - 0.5) * height * 1.6),
+          vx: 0,
+          vy: 0,
+          targets,
+          target: current,
+          flipAt: 0,
+        };
+      });
+    };
+
+    const render = () => {
+      context.clearRect(0, 0, width, height);
+      const radius = gap * 0.34;
+      const near = gap * 22;
+      const paths = { [BONE]: new Path2D(), [SAFFRON]: new Path2D() };
+
+      for (const particle of particles) {
+        const lit =
+          pointer.active && Math.hypot(particle.x - pointer.x, particle.y - pointer.y) < near;
+        const path = paths[lit ? SAFFRON : BONE];
+        path?.moveTo(particle.x + radius, particle.y);
+        path?.arc(particle.x, particle.y, radius, 0, Math.PI * 2);
+      }
+
+      for (const [color, path] of Object.entries(paths)) {
+        context.fillStyle = color;
+        context.fill(path);
+      }
+    };
+
+    const step = (now: number) => {
+      if (now >= nextFlip) {
+        current = (current + 1) % words.length;
+        nextFlip = now + HOLD_MS;
+        for (const particle of particles) {
+          particle.flipAt = now + (particle.x / width) * 520 + Math.random() * 180;
+        }
+      }
+
+      const reach = gap * 18;
+      for (const particle of particles) {
+        if (particle.target !== current && now >= particle.flipAt) {
+          particle.target = current;
+          particle.vy -= Math.random() * 2.4;
+        }
+
+        const [tx, ty] = particle.targets[particle.target] ?? [particle.x, particle.y];
+        particle.vx += (tx - particle.x) * 0.055;
+        particle.vy += (ty - particle.y) * 0.055;
+
+        if (pointer.active) {
+          const dx = particle.x - pointer.x;
+          const dy = particle.y - pointer.y;
+          const distance = Math.hypot(dx, dy) || 1;
+          if (distance < reach) {
+            const force = (1 - distance / reach) ** 2 * 7;
+            particle.vx += (dx / distance) * force;
+            particle.vy += (dy / distance) * force;
+          }
+        }
+
+        particle.vx *= 0.8;
+        particle.vy *= 0.8;
+        particle.x += particle.vx;
+        particle.y += particle.vy;
+      }
+
+      render();
+      frame = window.requestAnimationFrame(step);
+    };
+
+    const start = () => {
+      if (running || reduceMotion) return;
+      running = true;
+      frame = window.requestAnimationFrame(step);
+    };
+
+    const stop = () => {
+      running = false;
+      window.cancelAnimationFrame(frame);
+    };
+
+    const setPointer = (event: PointerEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      pointer.x = event.clientX - rect.left;
+      pointer.y = event.clientY - rect.top;
+      pointer.active = true;
+    };
+
+    canvas.addEventListener("pointermove", setPointer);
+    canvas.addEventListener("pointerdown", setPointer);
+    canvas.addEventListener("pointerleave", () => {
+      pointer.active = false;
+    });
+
+    const fonts = [
+      document.fonts.load(words[0]?.font(100) ?? "", words[0]?.text),
+      document.fonts.load(words[1]?.font(100) ?? "", words[1]?.text),
+    ];
+
+    Promise.allSettled(fonts).then(() => {
+      build();
+      root.classList.add("is-ready");
+      nextFlip = performance.now() + HOLD_MS;
+      if (reduceMotion) render();
+
+      let resizeTimer = 0;
+      new ResizeObserver(() => {
+        window.clearTimeout(resizeTimer);
+        resizeTimer = window.setTimeout(() => {
+          build();
+          if (reduceMotion) render();
+        }, 120);
+      }).observe(root);
+
+      let inView = false;
+      new IntersectionObserver(([entry]) => {
+        inView = entry?.isIntersecting ?? false;
+        if (inView) start();
+        else stop();
+      }).observe(root);
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden) stop();
+        else if (inView) start();
+      });
+    });
+  }
+</script>

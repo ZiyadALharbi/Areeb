@@ -1,0 +1,518 @@
+---
+const _filters = ["All", "Read", "Write", "Run", "Sessions", "Models"];
+
+const _files = [
+	{ path: "src/coding/cli.ts", lines: 788 },
+	{ path: "src/coding/session-manager.ts", lines: 365 },
+	{ path: "src/coding/tools/edit.ts", lines: 227 },
+	{ path: "src/coding/prompt-builder.ts", lines: 129 },
+	{ path: "src/agent/agent_loop.ts", lines: 579 },
+	{ path: "src/ai/openai_responses_provider.ts", lines: 998 },
+];
+
+const effortLevels = ["off", "low", "medium", "high", "xhigh", "max"];
+const ticksPerLevel = 6;
+const _tickCount = (effortLevels.length - 1) * ticksPerLevel + 1;
+
+const _sessions = [
+	{
+		id: "7f3a2c",
+		title: "Fix blank lines in session files",
+		messages: 18,
+		when: "2h ago",
+	},
+	{
+		id: "b91e04",
+		title: "Add the OpenAI Responses provider",
+		messages: 64,
+		when: "yesterday",
+	},
+	{
+		id: "3c5d77",
+		title: "Explain the agent loop",
+		messages: 9,
+		when: "Monday",
+	},
+	{
+		id: "e20a9f",
+		title: "Rename the CLI flags",
+		messages: 27,
+		when: "last week",
+	},
+];
+
+const _outputs = {
+	text: "The CLI entry point is src/coding/cli.ts. It parses the flags, then starts the terminal UI or print mode.",
+	json: [
+		'{"type":"agent_start"}',
+		'{"type":"turn_start"}',
+		'{"type":"tool_execution_start","toolCall":{"name":"read",…}}',
+		'{"type":"tool_execution_end",…}',
+		'{"type":"message_update",…}',
+		'{"type":"agent_end",…}',
+	].join("\n"),
+	transcript: [
+		"› find the CLI entry point",
+		"  read  src/coding/cli.ts",
+		"",
+		"The CLI entry point is src/coding/cli.ts. It parses",
+		"the flags, then starts the terminal UI or print mode.",
+	].join("\n"),
+};
+
+const _rules = [
+	{ name: "AGENTS.md", note: "project" },
+	{ name: "CLAUDE.md", note: "project" },
+	{ name: ".areeb/skills", note: "2 skills" },
+	{ name: "~/.areeb/prompts", note: "3 templates" },
+];
+---
+
+<section class="section shell" id="features" aria-labelledby="features-title">
+  <div class="section-head reveal">
+    <span class="kicker">What it does</span>
+    <h2 id="features-title">Everything happens in your terminal.</h2>
+    <p>Areeb reads your files, makes focused edits, runs your commands, and checks its own work. Try each one below.</p>
+  </div>
+
+  <div class="chips reveal" role="toolbar" aria-label="Filter features" data-filters>
+    {_filters.map((filter, index) => (
+      <button class="chip" type="button" aria-pressed={index === 0 ? "true" : "false"} data-filter={filter.toLowerCase()}>
+        {filter}
+      </button>
+    ))}
+  </div>
+
+  <div class="bento" data-bento>
+    <article class="feature card reveal" data-tag="read">
+      <div class="feature-stage">
+        <div class="mini" data-files>
+          <div class="file-list">
+            <span class="file-highlight" aria-hidden="true" data-highlight></span>
+            <ul>
+              {_files.map((file) => (
+                <li class="file-row" data-path={file.path}>
+                  <span>{file.path.split("/").pop()}</span>
+                  <span>{file.lines} lines</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div class="mini-foot" data-file-foot>read {_files[0]?.path}</div>
+        </div>
+      </div>
+      <div class="feature-caption">
+        <h3>Reads before it writes</h3>
+        <p>It opens the files that matter and learns how your project fits together.</p>
+      </div>
+    </article>
+
+    <article class="feature card reveal" data-tag="write">
+      <div class="feature-stage">
+        <div class="mini" data-edit>
+          <div class="diff">
+            <div class="diff-line"><span>18</span><span>{"function run(args: string[]) {"}</span></div>
+            <div class="diff-old"><div><div class="diff-line"><span>19</span><span>{"  if (args.length = 0) return help();"}</span></div></div></div>
+            <div class="diff-new"><div><div class="diff-line"><span>19</span><span>{"  if (args.length === 0) return help();"}</span></div></div></div>
+            <div class="diff-line"><span>20</span><span>{"  return execute(args);"}</span></div>
+            <div class="diff-line"><span>21</span><span>{"}"}</span></div>
+          </div>
+          <button class="hold-button" type="button" data-hold>
+            <span class="hold-fill" aria-hidden="true"></span>
+            <span class="hold-label" data-hold-label>Hold to apply edit</span>
+          </button>
+        </div>
+      </div>
+      <div class="feature-caption">
+        <h3>Edits only the lines that matter</h3>
+        <p>Targeted replacements instead of rewritten files, so every diff stays easy to review.</p>
+      </div>
+    </article>
+
+    <article class="feature card reveal" data-tag="run">
+      <div class="feature-stage">
+        <div class="mini" data-run>
+          <div class="test-grid" aria-hidden="true">
+            {Array.from({ length: 48 }, () => <span class="test-dot"></span>)}
+          </div>
+          <div class="run-row">
+            <span class="run-summary" data-run-summary aria-live="polite">48 tests, not run yet</span>
+            <button class="pill-button run-button" type="button" data-run-button>bun test</button>
+          </div>
+        </div>
+      </div>
+      <div class="feature-caption">
+        <h3>Runs the commands you would run</h3>
+        <p>Tests, builds, and scripts run in your shell, and Areeb reads the output before it answers.</p>
+      </div>
+    </article>
+
+    <article class="feature card reveal" data-tag="models">
+      <div class="feature-stage">
+        <div class="effort" data-effort data-ticks-per-level={ticksPerLevel}>
+          <div class="effort-value" data-effort-value>High</div>
+          <div class="effort-command">/effort <span data-effort-command>high</span></div>
+          <div class="effort-track">
+            {Array.from({ length: _tickCount }, (_, index) => (
+              <span class:list={["effort-tick", { "is-stop": index % ticksPerLevel === 0 }]}></span>
+            ))}
+            <input
+              type="range"
+              min="0"
+              max={_tickCount - 1}
+              step="1"
+              value={3 * ticksPerLevel}
+              aria-label="Thinking effort"
+              aria-valuetext="high"
+              data-levels={effortLevels.join(",")}
+            />
+          </div>
+          <div class="effort-scale"><span>off</span><span>max</span></div>
+        </div>
+      </div>
+      <div class="feature-caption">
+        <h3>Thinks as hard as you ask</h3>
+        <p>Drag to choose how much reasoning a task gets, from off to max.</p>
+      </div>
+    </article>
+
+    <article class="feature card reveal" data-tag="sessions">
+      <div class="feature-stage">
+        <div class="stack-wrap">
+          <button class="stack" type="button" aria-label="Show the next saved session" data-stack>
+            {_sessions.map((session, index) => (
+              <span class="stack-card" data-depth={index} data-id={session.id} style={`--depth: ${index}; z-index: ${_sessions.length - index}`}>
+                <span class="stack-title">{session.title}</span>
+                <span class="stack-meta"><span>{session.messages} messages</span><span>{session.when}</span></span>
+              </span>
+            ))}
+          </button>
+          <p class="stack-command">areeb --resume <code data-stack-id>{_sessions[0]?.id}</code></p>
+        </div>
+      </div>
+      <div class="feature-caption">
+        <h3>Picks up where you left off</h3>
+        <p>Every session is saved under ~/.areeb/sessions. Click the stack to flip through them.</p>
+      </div>
+    </article>
+
+    <article class="feature card reveal" data-tag="models">
+      <div class="feature-stage">
+        <div class="mini" data-segmented>
+          <div class="segmented">
+            <span class="segmented-indicator" aria-hidden="true" data-indicator></span>
+            <button type="button" aria-pressed="true" data-option="key">API key</button>
+            <button type="button" aria-pressed="false" data-option="chatgpt">ChatGPT</button>
+            <button type="button" aria-pressed="false" data-option="compatible">Compatible</button>
+          </div>
+          <div class="panel">
+            <div data-panel="key">
+              <p>Use an OpenAI API key from your environment, or add one with /login.</p>
+              <div class="field"><span>OPENAI_API_KEY</span><span>sk-••••••••3f9a</span></div>
+            </div>
+            <div data-panel="chatgpt" hidden>
+              <p>Sign in with your ChatGPT Plus or Pro subscription.</p>
+              <div class="field"><span>/login</span><span>Opens sign-in in your browser</span></div>
+            </div>
+            <div data-panel="compatible" hidden>
+              <p>Point Areeb at any OpenAI-compatible endpoint, local or hosted.</p>
+              <div class="field"><span>Base URL</span><span>http://localhost:11434/v1</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="feature-caption">
+        <h3>Works with the model you already use</h3>
+        <p>Connect a provider, then switch models any time with /model.</p>
+      </div>
+    </article>
+
+    <article class="feature card reveal" data-tag="run">
+      <div class="feature-stage">
+        <div class="mini" data-segmented>
+          <div class="segmented">
+            <span class="segmented-indicator" aria-hidden="true" data-indicator></span>
+            <button type="button" aria-pressed="true" data-option="text">text</button>
+            <button type="button" aria-pressed="false" data-option="json">json</button>
+            <button type="button" aria-pressed="false" data-option="transcript">transcript</button>
+          </div>
+          <div class="output-command">areeb -p "find the CLI entry point" <span class="nowrap">--output <span data-option-label>text</span></span></div>
+          <div class="panel" style="padding: 0; min-height: 0">
+            {Object.entries(_outputs).map(([mode, body], index) => (
+              <pre class="output-body" data-panel={mode} hidden={index !== 0}>{body}</pre>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div class="feature-caption">
+        <h3>Fits into scripts</h3>
+        <p>Run a single prompt and get plain text, JSON Lines events, or a full transcript.</p>
+      </div>
+    </article>
+
+    <article class="feature card reveal" data-tag="read">
+      <div class="feature-stage">
+        <div class="rules" data-rules>
+          {_rules.map((rule) => (
+            <div class="rule">
+              <span class="rule-check" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"></path></svg>
+              </span>
+              <span>{rule.name}</span>
+              <small>{rule.note}</small>
+            </div>
+          ))}
+          <button class="pill-button pill-button-quiet run-button" type="button" style="justify-self: center; margin-top: 8px" data-reload>/reload</button>
+        </div>
+      </div>
+      <div class="feature-caption">
+        <h3>Follows your project's rules</h3>
+        <p>Guidance from AGENTS.md and CLAUDE.md, plus your skills and prompt templates, loads with every session.</p>
+      </div>
+    </article>
+  </div>
+</section>
+
+<script>
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  const onFirstView = (element: Element, action: () => void) => {
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting) return;
+        action();
+        observer.disconnect();
+      },
+      { threshold: 0.5 },
+    );
+    observer.observe(element);
+  };
+
+  // Filters
+  const bento = document.querySelector<HTMLElement>("[data-bento]");
+  const chips = [...document.querySelectorAll<HTMLButtonElement>("[data-filter]")];
+  chips.forEach((chip) => {
+    chip.addEventListener("click", () => {
+      chips.forEach((item) => item.setAttribute("aria-pressed", String(item === chip)));
+      const filter = chip.dataset.filter;
+      bento?.querySelectorAll<HTMLElement>("[data-tag]").forEach((feature) => {
+        const show = filter === "all" || feature.dataset.tag === filter;
+        if (show === !feature.hidden) return;
+        feature.hidden = !show;
+        if (!show) return;
+        feature.classList.add("is-entering");
+        requestAnimationFrame(() => requestAnimationFrame(() => feature.classList.remove("is-entering")));
+      });
+      window.dispatchEvent(new Event("resize"));
+    });
+  });
+
+  // Reads before it writes
+  document.querySelectorAll<HTMLElement>("[data-files]").forEach((card) => {
+    const rows = [...card.querySelectorAll<HTMLElement>(".file-row")];
+    const highlight = card.querySelector<HTMLElement>("[data-highlight]");
+    const foot = card.querySelector<HTMLElement>("[data-file-foot]");
+    let index = 0;
+    let paused = false;
+
+    const select = (next: number) => {
+      index = next;
+      const row = rows[index];
+      if (!row || !highlight || !foot) return;
+      rows.forEach((item) => item.classList.toggle("is-active", item === row));
+      highlight.style.height = `${row.offsetHeight}px`;
+      highlight.style.transform = `translateY(${row.offsetTop}px)`;
+      foot.textContent = `read ${row.dataset.path}`;
+    };
+
+    rows.forEach((row, rowIndex) => row.addEventListener("pointerenter", () => select(rowIndex)));
+    card.addEventListener("pointerenter", () => {
+      paused = true;
+    });
+    card.addEventListener("pointerleave", () => {
+      paused = false;
+    });
+
+    select(0);
+    window.addEventListener("resize", () => select(index));
+    if (!reduceMotion) {
+      window.setInterval(() => {
+        if (!paused && !document.hidden) select((index + 1) % rows.length);
+      }, 1400);
+    }
+  });
+
+  // Edits only the lines that matter
+  document.querySelectorAll<HTMLElement>("[data-edit]").forEach((card) => {
+    const button = card.querySelector<HTMLButtonElement>("[data-hold]");
+    const label = card.querySelector<HTMLElement>("[data-hold-label]");
+    if (!button || !label) return;
+    let timer = 0;
+
+    const begin = () => {
+      button.classList.add("is-holding");
+      timer = window.setTimeout(
+        () => {
+          const applied = card.classList.toggle("is-applied");
+          button.classList.remove("is-holding");
+          label.textContent = applied ? "Applied, hold to undo" : "Hold to apply edit";
+        },
+        reduceMotion ? 0 : 900,
+      );
+    };
+
+    const cancel = () => {
+      window.clearTimeout(timer);
+      button.classList.remove("is-holding");
+    };
+
+    button.addEventListener("pointerdown", (event) => {
+      button.setPointerCapture(event.pointerId);
+      begin();
+    });
+    button.addEventListener("pointerup", cancel);
+    button.addEventListener("pointercancel", cancel);
+    button.addEventListener("keydown", (event) => {
+      if ((event.key === " " || event.key === "Enter") && !event.repeat) {
+        event.preventDefault();
+        begin();
+      }
+    });
+    button.addEventListener("keyup", (event) => {
+      if (event.key === " " || event.key === "Enter") cancel();
+    });
+    button.addEventListener("blur", cancel);
+  });
+
+  // Runs the commands you would run
+  document.querySelectorAll<HTMLElement>("[data-run]").forEach((card) => {
+    const dots = [...card.querySelectorAll<HTMLElement>(".test-dot")];
+    const summary = card.querySelector<HTMLElement>("[data-run-summary]");
+    const button = card.querySelector<HTMLButtonElement>("[data-run-button]");
+    if (!summary || !button) return;
+
+    const run = () => {
+      button.disabled = true;
+      summary.textContent = "Running…";
+      dots.forEach((dot) => dot.classList.remove("is-pass"));
+      const started = performance.now();
+      let delay = 0;
+      dots.forEach((dot) => {
+        delay += reduceMotion ? 0 : 18 + Math.random() * 40;
+        window.setTimeout(() => dot.classList.add("is-pass"), delay);
+      });
+      window.setTimeout(() => {
+        const seconds = ((performance.now() - started) / 1000).toFixed(1);
+        summary.innerHTML = `<strong>${dots.length} pass</strong> · 0 fail · ${seconds}s`;
+        button.disabled = false;
+      }, delay + 200);
+    };
+
+    button.addEventListener("click", run);
+    onFirstView(card, run);
+  });
+
+  // Thinks as hard as you ask
+  document.querySelectorAll<HTMLElement>("[data-effort]").forEach((card) => {
+    const input = card.querySelector<HTMLInputElement>("input");
+    const ticks = [...card.querySelectorAll<HTMLElement>(".effort-tick")];
+    const value = card.querySelector<HTMLElement>("[data-effort-value]");
+    const command = card.querySelector<HTMLElement>("[data-effort-command]");
+    const perLevel = Number(card.dataset.ticksPerLevel);
+    const levels = input?.dataset.levels?.split(",") ?? [];
+    if (!input || !value || !command) return;
+
+    const label = (level: string) => (level === "xhigh" ? "XHigh" : level.charAt(0).toUpperCase() + level.slice(1));
+
+    const update = () => {
+      const position = Number(input.value);
+      const level = levels[Math.round(position / perLevel)] ?? "";
+      ticks.forEach((tick, index) => {
+        tick.classList.toggle("is-on", index <= position);
+        tick.classList.toggle("is-current", index === position);
+      });
+      value.textContent = label(level);
+      command.textContent = level;
+      input.setAttribute("aria-valuetext", level);
+    };
+
+    const snap = () => {
+      input.value = String(Math.round(Number(input.value) / perLevel) * perLevel);
+      update();
+    };
+
+    input.addEventListener("input", update);
+    input.addEventListener("change", snap);
+    input.addEventListener("pointerup", snap);
+    input.addEventListener("keydown", (event) => {
+      const direction = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 }[event.key];
+      if (!direction) return;
+      event.preventDefault();
+      const level = Math.round(Number(input.value) / perLevel) + direction;
+      input.value = String(Math.max(0, Math.min(levels.length - 1, level)) * perLevel);
+      update();
+    });
+    update();
+  });
+
+  // Picks up where you left off
+  document.querySelectorAll<HTMLButtonElement>("[data-stack]").forEach((stack) => {
+    const cards = [...stack.querySelectorAll<HTMLElement>(".stack-card")];
+    const idLabel = stack.parentElement?.querySelector<HTMLElement>("[data-stack-id]");
+
+    stack.addEventListener("click", () => {
+      cards.forEach((card) => {
+        const depth = (Number(card.dataset.depth) - 1 + cards.length) % cards.length;
+        card.dataset.depth = String(depth);
+        card.style.setProperty("--depth", String(depth));
+        card.style.zIndex = String(cards.length - depth);
+        if (depth === 0 && idLabel) idLabel.textContent = card.dataset.id ?? "";
+      });
+    });
+  });
+
+  // Segmented controls
+  document.querySelectorAll<HTMLElement>("[data-segmented]").forEach((card) => {
+    const options = [...card.querySelectorAll<HTMLButtonElement>("[data-option]")];
+    const indicator = card.querySelector<HTMLElement>("[data-indicator]");
+    const panels = [...card.querySelectorAll<HTMLElement>("[data-panel]")];
+    const optionLabel = card.querySelector<HTMLElement>("[data-option-label]");
+
+    const move = () => {
+      const active = options.find((option) => option.getAttribute("aria-pressed") === "true");
+      if (!active || !indicator) return;
+      indicator.style.width = `${active.offsetWidth}px`;
+      indicator.style.transform = `translateX(${active.offsetLeft}px)`;
+    };
+
+    options.forEach((option) => {
+      option.addEventListener("click", () => {
+        options.forEach((item) => item.setAttribute("aria-pressed", String(item === option)));
+        panels.forEach((panel) => {
+          panel.hidden = panel.dataset.panel !== option.dataset.option;
+        });
+        if (optionLabel) optionLabel.textContent = option.dataset.option ?? "";
+        move();
+      });
+    });
+
+    move();
+    document.fonts.ready.then(move);
+    new ResizeObserver(move).observe(card);
+  });
+
+  // Follows your project's rules
+  document.querySelectorAll<HTMLElement>("[data-rules]").forEach((card) => {
+    const rules = [...card.querySelectorAll<HTMLElement>(".rule")];
+
+    const load = () => {
+      rules.forEach((rule) => rule.classList.remove("is-loaded"));
+      rules.forEach((rule, index) => {
+        window.setTimeout(() => rule.classList.add("is-loaded"), reduceMotion ? 0 : 250 + index * 320);
+      });
+    };
+
+    card.querySelector("[data-reload]")?.addEventListener("click", load);
+    onFirstView(card, load);
+  });
+</script>
