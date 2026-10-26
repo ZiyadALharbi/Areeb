@@ -232,6 +232,34 @@ describe("TuiEventAdapter", () => {
 		expect(state.lastUsage).toBeUndefined();
 	});
 
+	test("records the path or first command line each tool acts on", () => {
+		const state = createWorkspaceState();
+		const adapter = new TuiEventAdapter(state);
+		const readCall: ToolCall = {
+			...toolCall,
+			id: "read-call",
+			arguments: { path: "/workspace/src/app.ts" },
+		};
+		const bashCall: ToolCall = {
+			type: "tool_call",
+			id: "bash-call",
+			name: "bash",
+			arguments: { command: "bun test\necho done" },
+		};
+
+		adapter.apply({ type: "tool_execution_start", toolCall: readCall });
+		adapter.apply({ type: "tool_execution_start", toolCall: bashCall });
+		adapter.apply({
+			type: "tool_execution_end",
+			toolCall: readCall,
+			result: { ...toolResult, toolCallId: readCall.id },
+		});
+
+		expect(
+			state.items.map((item) => (item.role === "tool" ? item.target : "")),
+		).toEqual(["src/app.ts", "bun test"]);
+	});
+
 	test("restores tool calls without results and enriches matching results", () => {
 		const state = createTuiState();
 		const response = assistant([toolCall]);

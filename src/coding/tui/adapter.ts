@@ -95,7 +95,12 @@ export class TuiEventAdapter {
 			case "tool_execution_start": {
 				const flushed = this.flushAssistantBuffer();
 				return (
-					this.upsertTool(event.toolCall.id, event.toolCall.name) || flushed
+					this.upsertTool(
+						event.toolCall.id,
+						event.toolCall.name,
+						undefined,
+						event.toolCall.arguments,
+					) || flushed
 				);
 			}
 			case "tool_execution_end":
@@ -103,6 +108,7 @@ export class TuiEventAdapter {
 					event.toolCall.id,
 					event.toolCall.name,
 					event.result,
+					event.toolCall.arguments,
 				);
 			case "agent_end":
 				return this.applyTerminalEvent(event.reason, event.messages);
@@ -167,7 +173,13 @@ export class TuiEventAdapter {
 		for (const content of message.content) {
 			if (content.type === "tool_call") {
 				flushPending();
-				changed = this.upsertTool(content.id, content.name) || changed;
+				changed =
+					this.upsertTool(
+						content.id,
+						content.name,
+						undefined,
+						content.arguments,
+					) || changed;
 				continue;
 			}
 			const role = content.type === "thinking" ? "thinking" : "assistant";
@@ -211,6 +223,7 @@ export class TuiEventAdapter {
 		toolCallId: string,
 		toolName: string,
 		result?: ToolResultMessage,
+		args?: Record<string, unknown>,
 	): boolean {
 		const index = this.state.items.findIndex(
 			(item) => item.role === "tool" && item.toolCallId === toolCallId,
@@ -220,12 +233,15 @@ export class TuiEventAdapter {
 			result === undefined ? undefined : toolResultPreview(result);
 		const edit =
 			result === undefined ? undefined : editDetails(result, this.state.cwd);
+		const target =
+			args === undefined ? undefined : toolTarget(args, this.state.cwd);
 		const item: ChatItem = {
 			...(existing?.role === "tool" ? existing : {}),
 			role: "tool",
 			text: toolName,
 			toolName,
 			toolCallId,
+			...(target === undefined ? {} : { target }),
 			...(result === undefined
 				? {}
 				: {
@@ -286,6 +302,22 @@ function toolResultPreview(message: ToolResultMessage): string | undefined {
 		return undefined;
 	}
 	return boundToolText(stripTerminalSequences(text));
+}
+
+function toolTarget(
+	args: Record<string, unknown>,
+	cwd: string,
+): string | undefined {
+	if (typeof args.path === "string" && args.path.trim().length > 0) {
+		return normalizeEditPath(args.path, cwd);
+	}
+	if (typeof args.command === "string") {
+		const command = stripTerminalSequences(args.command).trim().split("\n")[0];
+		return command
+			? takeUtf8Prefix(command, TOOL_PREVIEW_MAX_BYTES)
+			: undefined;
+	}
+	return undefined;
 }
 
 function editDetails(
@@ -423,6 +455,7 @@ function toolItemsEqual(
 		left.text === right.text &&
 		left.toolName === right.toolName &&
 		left.toolCallId === right.toolCallId &&
+		left.target === right.target &&
 		left.preview === right.preview &&
 		editDetailsEqual(left.edit, right.edit) &&
 		left.isError === right.isError

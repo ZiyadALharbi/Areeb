@@ -12,6 +12,7 @@ import {
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import type { CommandNoticeLevel } from "./app.ts";
+import { fitLine } from "./blocks.ts";
 import { boldText, type TuiTheme } from "./theme.ts";
 
 export const STANDARD_OVERLAY_OPTIONS: OverlayOptions = Object.freeze({
@@ -67,11 +68,8 @@ export class OverlayFrame extends Container implements Focusable {
 				.slice(0, Math.max(1, maxHeight));
 		}
 
-		const horizontalPadding = availableWidth >= 10 ? 2 : 1;
-		const contentWidth = Math.max(
-			1,
-			availableWidth - 2 - horizontalPadding * 2,
-		);
+		const horizontalPadding = availableWidth >= 10 ? 3 : 1;
+		const contentWidth = Math.max(1, availableWidth - horizontalPadding * 2);
 		const body = this.content.render(contentWidth);
 		this.bodyLineCount = body.length;
 		const insideBudget = Math.max(1, maxHeight - 2);
@@ -113,12 +111,15 @@ export class OverlayFrame extends Container implements Focusable {
 			0,
 			insideBudget,
 		);
+		const padding = " ".repeat(horizontalPadding);
 		return [
-			this.renderTopBorder(availableWidth),
+			this.theme.surfaceEdge("▄".repeat(availableWidth)),
 			...framed.map((line) =>
-				this.renderContentLine(line, horizontalPadding, contentWidth),
+				this.theme.surface(
+					`${padding}${fitLine(line, contentWidth)}${padding}`,
+				),
 			),
-			this.theme.composerBorder(`╰${"─".repeat(availableWidth - 2)}╯`),
+			this.theme.surfaceEdge("▀".repeat(availableWidth)),
 		];
 	}
 
@@ -154,6 +155,22 @@ export class OverlayFrame extends Container implements Focusable {
 	}
 
 	private renderPrefix(contentWidth: number, insideBudget: number): string[] {
+		const title = boldText(
+			this.theme.primary(
+				truncateToWidth(
+					stripTerminalSequences(this.options.title).replace(/[\t\r\n]+/g, " "),
+					contentWidth,
+					"…",
+				),
+			),
+		);
+		if (insideBudget < 3) {
+			return [title];
+		}
+		return [title, ...this.renderSubtitle(contentWidth, insideBudget - 1)];
+	}
+
+	private renderSubtitle(contentWidth: number, insideBudget: number): string[] {
 		if (this.options.subtitle === undefined || insideBudget < 3) {
 			return insideBudget >= 2 ? [""] : [];
 		}
@@ -166,33 +183,6 @@ export class OverlayFrame extends Container implements Focusable {
 			contentWidth,
 		).slice(0, Math.max(1, Math.min(2, insideBudget - 2)));
 		return insideBudget >= 6 ? [...wrapped, ""] : wrapped;
-	}
-
-	private renderTopBorder(width: number): string {
-		if (width < 7) {
-			return this.theme.composerBorder(`╭${"─".repeat(width - 2)}╮`);
-		}
-		const title = truncateToWidth(
-			stripTerminalSequences(this.options.title).replace(/[\t\r\n]+/g, " "),
-			width - 6,
-			"",
-		);
-		const fill = "─".repeat(width - 5 - visibleWidth(title));
-		return `${this.theme.composerBorder("╭─ ")}${boldText(
-			this.theme.assistant(title),
-		)}${this.theme.composerBorder(` ${fill}╮`)}`;
-	}
-
-	private renderContentLine(
-		line: string,
-		horizontalPadding: number,
-		contentWidth: number,
-	): string {
-		const fitted = truncateToWidth(line, contentWidth, "");
-		const trailing = " ".repeat(
-			Math.max(0, contentWidth - visibleWidth(fitted)),
-		);
-		return `${this.theme.composerBorder("│")}${" ".repeat(horizontalPadding)}${fitted}${trailing}${" ".repeat(horizontalPadding)}${this.theme.composerBorder("│")}`;
 	}
 }
 
