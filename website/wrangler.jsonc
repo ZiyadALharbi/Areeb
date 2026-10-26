@@ -1,0 +1,10 @@
+// Cloudflare Workers Builds deploys the static Astro output from this folder.
+// Build settings: root directory `website`, build command `npm run build`,
+// deploy command `npx wrangler deploy`.
+{
+	"name": "areeb",
+	"compatibility_date": "2026-10-01",
+	"assets": {
+		"directory": "./dist"
+	}
+}
