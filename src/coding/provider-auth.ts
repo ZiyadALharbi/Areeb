@@ -1,3 +1,7 @@
+import {
+	type AnthropicMessagesConfig,
+	AnthropicMessagesProvider,
+} from "../ai/anthropic_messages_provider.ts";
 import type {
 	ApiKeyCredential,
 	AuthInteraction,
@@ -22,9 +26,10 @@ import type {
 	ProviderRetryConfig,
 } from "../ai/provider_protocol.ts";
 import {
+	DEFAULT_ANTHROPIC_MODEL,
 	DEFAULT_OPENAI_MODEL,
 	DEFAULT_OPENROUTER_MODEL,
-	type OpenAICompatibleProviderConfig,
+	type ProviderEndpointConfig,
 	type ProviderFactory,
 } from "./provider-config.ts";
 
@@ -63,6 +68,18 @@ export const OPENAI_API_MODELS = Object.freeze([
 	"gpt-6.1-sol-pro",
 ]);
 
+/** Offline fallback; the live Anthropic catalog is discovered after login. */
+export const ANTHROPIC_MODELS = Object.freeze([
+	"claude-fable-5",
+	"claude-fable-5-1",
+	"claude-haiku-5-5",
+	"claude-opus-4-8",
+	"claude-opus-5",
+	"claude-opus-5-5",
+	"claude-sonnet-5",
+	"claude-sonnet-5-5",
+]);
+
 /** Offline fallback; the live OpenRouter catalog is discovered after login. */
 export const OPENROUTER_MODELS = Object.freeze([
 	"anthropic/claude-haiku-5.5",
@@ -79,7 +96,7 @@ export const OPENROUTER_MODELS = Object.freeze([
 
 /** Inputs for building an API-key adapter from its built-in endpoint settings. */
 export interface ApiKeyProviderContext {
-	readonly config: OpenAICompatibleProviderConfig;
+	readonly config: ProviderEndpointConfig;
 	readonly apiKey: string;
 }
 
@@ -178,6 +195,9 @@ export interface DefaultProviderAuthRegistryOptions {
 		config: OpenAIResponsesConfig,
 	) => ModelProvider;
 	readonly createOpenAICompatibleProvider?: ProviderFactory;
+	readonly createAnthropicProvider?: (
+		config: AnthropicMessagesConfig,
+	) => ModelProvider;
 }
 
 export function createDefaultProviderAuthRegistry(
@@ -231,6 +251,28 @@ export function createDefaultProviderAuthRegistry(
 			},
 		},
 		{
+			id: "anthropic",
+			displayName: "Anthropic",
+			authType: "api_key",
+			authLabel: "api key",
+			models: ANTHROPIC_MODELS,
+			defaultModel: DEFAULT_ANTHROPIC_MODEL,
+			login: (interaction) =>
+				promptApiKey(interaction, "Anthropic API key", "sk-ant-..."),
+			createProvider({ config, apiKey }) {
+				const adapterConfig: AnthropicMessagesConfig = {
+					providerId: config.id,
+					baseUrl: config.baseUrl,
+					apiKey,
+					retry: retryConfig(config),
+				};
+				return (
+					options.createAnthropicProvider?.(adapterConfig) ??
+					new AnthropicMessagesProvider(adapterConfig)
+				);
+			},
+		},
+		{
 			id: "openrouter",
 			displayName: "OpenRouter",
 			authType: "api_key",
@@ -276,9 +318,7 @@ async function promptApiKey(
 	return Object.freeze({ type: "api_key", key });
 }
 
-function retryConfig(
-	config: OpenAICompatibleProviderConfig,
-): ProviderRetryConfig {
+function retryConfig(config: ProviderEndpointConfig): ProviderRetryConfig {
 	return {
 		maxRetries: config.maxRetries,
 		maxRetryDelayMs: config.maxRetryDelaySeconds * 1_000,

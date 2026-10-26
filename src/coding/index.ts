@@ -82,6 +82,7 @@ export type {
 	ProviderAuthRegistration,
 } from "./provider-auth.ts";
 export {
+	ANTHROPIC_MODELS,
 	createDefaultProviderAuthRegistry,
 	DEFAULT_OPENAI_CODEX_MODEL,
 	OPENAI_API_MODELS,
@@ -91,8 +92,8 @@ export {
 } from "./provider-auth.ts";
 export type {
 	LoadProviderSettingsOptions,
-	OpenAICompatibleProviderConfig,
 	ProviderAuthStatus,
+	ProviderEndpointConfig,
 	ProviderEnvironment,
 	ProviderFactory,
 	ProviderModelCatalogEntry,
@@ -107,6 +108,8 @@ export type {
 export {
 	configuredProviderModels,
 	createProviderRuntime,
+	DEFAULT_ANTHROPIC_BASE_URL,
+	DEFAULT_ANTHROPIC_MODEL,
 	DEFAULT_OPENAI_MODEL,
 	DEFAULT_OPENROUTER_BASE_URL,
 	DEFAULT_OPENROUTER_MODEL,

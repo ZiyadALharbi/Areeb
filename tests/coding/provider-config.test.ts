@@ -51,7 +51,6 @@ describe("provider settings parsing and resolution", () => {
 		});
 		expect(settings.providers.openai).toMatchObject({
 			id: "openai",
-			type: "openai-compatible",
 			builtIn: true,
 			baseUrl: "https://gateway.example/v1",
 			apiKeyEnv: "OPENAI_API_KEY",
@@ -348,6 +347,7 @@ describe("provider settings persistence", () => {
 		const settings = await loadProviderSettings({ userRoot, env: {} });
 		expect(Object.keys(settings.providers).sort()).toEqual([
 			"alpha",
+			"anthropic",
 			"beta",
 			"openai",
 			"openrouter",

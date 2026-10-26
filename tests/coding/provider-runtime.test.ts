@@ -329,6 +329,7 @@ describe("ProviderRuntimeService", () => {
 		expect(await service.listProviders()).toMatchObject([
 			{ id: "openai-codex", status: "not connected" },
 			{ id: "openai", status: "connected", source: "environment" },
+			{ id: "anthropic", status: "not connected" },
 			{ id: "openrouter", status: "not connected" },
 		]);
 	});

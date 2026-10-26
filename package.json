@@ -17,6 +17,7 @@
 	},
 	"peerDependencies": {},
 	"dependencies": {
+		"@anthropic-ai/sdk": "0.133.0",
 		"@earendil-works/pi-tui": "^0.84.2",
 		"cli-highlight": "^2.1.11",
 		"diff": "8.0.4",
