@@ -5,10 +5,15 @@ import type { OpenAIResponsesConfig } from "../../src/ai/openai_responses_provid
 import { MemoryCredentialStore } from "../../src/coding/auth-store.ts";
 import {
 	createDefaultProviderAuthRegistry,
+	DEFAULT_OPENAI_CODEX_MODEL,
 	type OAuthProviderContext,
+	OPENAI_API_MODELS,
 	ProviderAuthRegistry,
 } from "../../src/coding/provider-auth.ts";
-import { parseProviderSettings } from "../../src/coding/provider-config.ts";
+import {
+	DEFAULT_OPENAI_MODEL,
+	parseProviderSettings,
+} from "../../src/coding/provider-config.ts";
 import { ProviderRuntimeService } from "../../src/coding/provider-runtime.ts";
 
 function jwt(accountId: string): string {
@@ -320,10 +325,11 @@ describe("ProviderRuntimeService", () => {
 			(await service.usableModels()).filter(
 				(entry) => entry.provider === "openai",
 			),
-		).toHaveLength(38);
+		).toHaveLength(OPENAI_API_MODELS.length);
 		expect(await service.listProviders()).toMatchObject([
 			{ id: "openai-codex", status: "not connected" },
 			{ id: "openai", status: "connected", source: "environment" },
+			{ id: "openrouter", status: "not connected" },
 		]);
 	});
 
@@ -412,11 +418,11 @@ describe("ProviderRuntimeService", () => {
 
 		expect(await service.resolveInitialSelection()).toEqual({
 			provider: "openai-codex",
-			model: "gpt-5.6-sol",
+			model: DEFAULT_OPENAI_CODEX_MODEL,
 		});
 		expect(
 			await service.resolveInitialSelection({ provider: "openai" }),
-		).toEqual({ provider: "openai", model: "gpt-5.6-sol" });
+		).toEqual({ provider: "openai", model: DEFAULT_OPENAI_MODEL });
 	});
 
 	test("prefers the saved global selection and repairs a stale saved model", async () => {
@@ -468,7 +474,7 @@ describe("ProviderRuntimeService", () => {
 		});
 		expect(await stale.resolveInitialSelection()).toEqual({
 			provider: "openai-codex",
-			model: "gpt-5.6-sol",
+			model: DEFAULT_OPENAI_CODEX_MODEL,
 		});
 	});
 });

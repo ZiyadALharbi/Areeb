@@ -350,6 +350,7 @@ describe("provider settings persistence", () => {
 			"alpha",
 			"beta",
 			"openai",
+			"openrouter",
 		]);
 		const filePath = join(userRoot, "providers.json");
 		expect((await stat(userRoot)).mode & 0o777).toBe(0o700);

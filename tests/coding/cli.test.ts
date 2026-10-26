@@ -9,6 +9,7 @@ import type { OpenAIResponsesConfig } from "../../src/ai/openai_responses_provid
 import { FileCredentialStore } from "../../src/coding/auth-store.ts";
 import { parseCli, runCli } from "../../src/coding/cli.ts";
 import type { PrintModeSession } from "../../src/coding/modes/types.ts";
+import { DEFAULT_OPENAI_CODEX_MODEL } from "../../src/coding/provider-auth.ts";
 import { setupOpenAICompatibleProvider } from "../../src/coding/provider-config.ts";
 import { CodingSessionManager } from "../../src/coding/session-manager.ts";
 import { textScript } from "./modes/helpers.ts";
@@ -573,7 +574,7 @@ describe("CLI interactive mode", () => {
 					async runInteractive(controller) {
 						expect(controller).toMatchObject({
 							provider: "openai-codex",
-							model: "gpt-5.6-sol",
+							model: DEFAULT_OPENAI_CODEX_MODEL,
 						});
 						expect(controller.unavailableReason).toBeUndefined();
 						return 0;
@@ -755,8 +756,11 @@ describe("CLI interactive mode", () => {
 					},
 				}),
 			).toBe(0);
+			// The model list discovers the local catalog before the switch builds
+			// the local runtime.
 			expect(providerConfigs).toMatchObject([
 				{ providerId: "openai" },
+				{ providerId: "local" },
 				{
 					providerId: "local",
 					baseUrl: "http://localhost:11434/v1",
