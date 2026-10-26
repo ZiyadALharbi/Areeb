@@ -1256,9 +1256,11 @@ p {
 		width 0.45s var(--ease-spring);
 }
 
+/* Let long single-line values ellipsize instead of widening the card. */
 .panel {
 	display: grid;
 	gap: 10px;
+	min-width: 0;
 	min-height: 132px;
 	padding: 16px 12px 8px;
 }
@@ -1266,6 +1268,7 @@ p {
 .panel [data-panel] {
 	display: grid;
 	gap: 10px;
+	min-width: 0;
 	animation: rise 0.35s var(--ease-out);
 }
 
@@ -1283,6 +1286,7 @@ p {
 	display: flex;
 	justify-content: space-between;
 	gap: 12px;
+	min-width: 0;
 	padding: 10px 12px;
 	border-radius: 12px;
 	background: #0d0d0f;
