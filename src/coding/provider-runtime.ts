@@ -170,7 +170,15 @@ export class ProviderRuntimeService {
 			const models = fallbackModels.filter(
 				(entry) => entry.usable && entry.provider === provider.id,
 			);
-			const model = models.find((entry) => entry.isDefaultModel) ?? models[0];
+			// A stale saved default flags no entry, so fall back to the provider's
+			// own default before the first listed model.
+			const providerDefault =
+				this.options.settings.providers[provider.id]?.defaultModel ??
+				this.options.registry.get(provider.id)?.defaultModel;
+			const model =
+				models.find((entry) => entry.isDefaultModel) ??
+				models.find((entry) => entry.model === providerDefault) ??
+				models[0];
 			if (model !== undefined) {
 				return Object.freeze({
 					provider: model.provider,
@@ -431,9 +439,8 @@ export class ProviderRuntimeService {
 	private async resolveRuntimeWindow<T extends ProviderRuntime>(
 		runtime: T,
 	): Promise<T> {
-		if (runtime.provider.discoverModels === undefined) {
-			return runtime;
-		}
+		// Cache even an empty catalog so the model list does not build a second
+		// adapter for a provider whose adapter cannot discover models.
 		const outcome = await this.discoverProviderCatalog(
 			runtime.selection.provider,
 			runtime.provider,
