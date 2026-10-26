@@ -1,0 +1,118 @@
+---
+interface Props {
+	id: string;
+}
+
+const _installOptions = [
+	{
+		id: "curl",
+		label: "curl",
+		command: "curl -fsSL https://tryareeb.dev/install.sh | sh",
+	},
+	{
+		id: "powershell",
+		label: "PowerShell",
+		command: "irm https://tryareeb.dev/install.ps1 | iex",
+	},
+	{ id: "bun", label: "bun", command: "bun add -g @ziyad_1440/areeb" },
+	{ id: "npm", label: "npm", command: "npm install -g @ziyad_1440/areeb" },
+	{ id: "pnpm", label: "pnpm", command: "pnpm add -g @ziyad_1440/areeb" },
+];
+---
+
+<div class="install" data-install>
+  <div class="install-tabs" role="tablist" aria-label="Installation method">
+    <span class="install-tabs-indicator" aria-hidden="true" data-indicator></span>
+    {_installOptions.map((option, index) => (
+      <button
+        class="install-tab"
+        type="button"
+        role="tab"
+        id={`${Astro.props.id}-tab-${option.id}`}
+        aria-selected={index === 0 ? "true" : "false"}
+        aria-controls={`${Astro.props.id}-command`}
+        tabindex={index === 0 ? 0 : -1}
+        data-command={option.command}
+      >
+        {option.label}
+      </button>
+    ))}
+  </div>
+  <div class="command" id={`${Astro.props.id}-command`} role="tabpanel">
+    <span class="command-prompt" aria-hidden="true">$</span>
+    <code data-output>{_installOptions[0]?.command}</code>
+    <button class="copy-button" type="button" data-copy aria-label="Copy install command">
+      <svg class="icon-copy" viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="8" y="8" width="12" height="12" rx="3"></rect>
+        <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path>
+      </svg>
+      <svg class="icon-check" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m5 12.5 4.5 4.5L19 7.5"></path>
+      </svg>
+      <span data-copy-label>Copy</span>
+    </button>
+  </div>
+</div>
+
+<script>
+  document.querySelectorAll<HTMLElement>("[data-install]").forEach((control) => {
+    const tabs = [...control.querySelectorAll<HTMLButtonElement>("[role='tab']")];
+    const indicator = control.querySelector<HTMLElement>("[data-indicator]");
+    const output = control.querySelector<HTMLElement>("[data-output]");
+    const copyButton = control.querySelector<HTMLButtonElement>("[data-copy]");
+    const copyLabel = control.querySelector<HTMLElement>("[data-copy-label]");
+    let resetTimer = 0;
+
+    const moveIndicator = () => {
+      const active = tabs.find((tab) => tab.getAttribute("aria-selected") === "true");
+      if (!active || !indicator) return;
+      indicator.style.width = `${active.offsetWidth}px`;
+      indicator.style.transform = `translateX(${active.offsetLeft}px)`;
+    };
+
+    const select = (tab: HTMLButtonElement) => {
+      tabs.forEach((item) => {
+        const selected = item === tab;
+        item.setAttribute("aria-selected", String(selected));
+        item.tabIndex = selected ? 0 : -1;
+      });
+      if (output) output.textContent = tab.dataset.command ?? "";
+      copyButton?.classList.remove("is-copied");
+      if (copyLabel) copyLabel.textContent = "Copy";
+      moveIndicator();
+    };
+
+    tabs.forEach((tab, index) => {
+      tab.addEventListener("click", () => select(tab));
+      tab.addEventListener("keydown", (event) => {
+        const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+        if (!step) return;
+        event.preventDefault();
+        const next = tabs[(index + step + tabs.length) % tabs.length];
+        if (!next) return;
+        next.focus();
+        select(next);
+      });
+    });
+
+    copyButton?.addEventListener("click", async () => {
+      if (!output || !copyLabel) return;
+      try {
+        await navigator.clipboard.writeText(output.textContent ?? "");
+        copyLabel.textContent = "Copied";
+        copyButton.classList.add("is-copied");
+        window.clearTimeout(resetTimer);
+        resetTimer = window.setTimeout(() => {
+          copyLabel.textContent = "Copy";
+          copyButton.classList.remove("is-copied");
+        }, 1800);
+      } catch {
+        copyLabel.textContent = "Select and copy";
+      }
+    });
+
+    moveIndicator();
+    document.fonts.ready.then(moveIndicator);
+    new ResizeObserver(moveIndicator).observe(control);
+  });
+</script>
