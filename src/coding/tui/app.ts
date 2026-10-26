@@ -1021,6 +1021,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 						active: state.running && tool.isError === undefined,
 						preview: tool.preview,
 						edit: tool.edit,
+						tests: tool.tests,
 						isError: tool.isError,
 					})),
 				);
@@ -1658,6 +1659,7 @@ function createChatItemBlock(item: ChatItem, theme: TuiTheme): Component {
 				target: item.target,
 				preview: item.preview,
 				edit: item.edit,
+				tests: item.tests,
 				isError: item.isError,
 			});
 	}

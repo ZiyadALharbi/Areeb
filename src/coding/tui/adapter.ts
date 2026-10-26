@@ -17,6 +17,7 @@ import type {
 	TuiEditDetails,
 	TuiState,
 } from "./state.ts";
+import { parseTestSummary } from "./test-summary.ts";
 
 const TOOL_PREVIEW_MAX_BYTES = 4 * 1024;
 const TOOL_PREVIEW_MAX_LINES = 16;
@@ -233,6 +234,10 @@ export class TuiEventAdapter {
 			result === undefined ? undefined : toolResultPreview(result);
 		const edit =
 			result === undefined ? undefined : editDetails(result, this.state.cwd);
+		const tests =
+			result?.toolName === "bash"
+				? parseTestSummary(stripTerminalSequences(resultText(result)))
+				: undefined;
 		const target =
 			args === undefined ? undefined : toolTarget(args, this.state.cwd);
 		const item: ChatItem = {
@@ -247,6 +252,7 @@ export class TuiEventAdapter {
 				: {
 						...(preview === undefined ? {} : { preview }),
 						...(edit === undefined ? {} : { edit }),
+						...(tests === undefined ? {} : { tests }),
 						isError: result.isError,
 					}),
 		};
@@ -295,13 +301,17 @@ export class TuiEventAdapter {
 }
 
 function toolResultPreview(message: ToolResultMessage): string | undefined {
-	const text = message.content
-		.flatMap((content) => (content.type === "text" ? [content.text] : []))
-		.join("\n");
+	const text = resultText(message);
 	if (text.length === 0) {
 		return undefined;
 	}
 	return boundToolText(stripTerminalSequences(text));
+}
+
+function resultText(message: ToolResultMessage): string {
+	return message.content
+		.flatMap((content) => (content.type === "text" ? [content.text] : []))
+		.join("\n");
 }
 
 function toolTarget(
@@ -458,6 +468,8 @@ function toolItemsEqual(
 		left.target === right.target &&
 		left.preview === right.preview &&
 		editDetailsEqual(left.edit, right.edit) &&
+		left.tests?.passed === right.tests?.passed &&
+		left.tests?.failed === right.tests?.failed &&
 		left.isError === right.isError
 	);
 }
