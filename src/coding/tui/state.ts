@@ -23,6 +23,8 @@ export type ChatItem =
 			readonly text: string;
 			readonly toolName: string;
 			readonly toolCallId: string;
+			/** The file path or command the tool acted on, when it has one. */
+			readonly target?: string;
 			readonly preview?: string;
 			readonly edit?: TuiEditDetails;
 			readonly isError?: boolean;

@@ -35,11 +35,16 @@ import {
 	type CompletionItem,
 } from "./autocomplete.ts";
 import {
+	displayPath,
+	effortLabel,
+	fitLine,
 	MessageBlock,
+	renderCard,
 	SPINNER_INTERVAL,
 	ThinkingBlock,
 	ToolBlock,
 	ToolGroupBlock,
+	WelcomeBlock,
 } from "./blocks.ts";
 import {
 	CommandOverlayContent,
@@ -55,6 +60,7 @@ import {
 } from "./provider-auth.ts";
 import type { ChatItem, TuiState } from "./state.ts";
 import {
+	boldText,
 	createTuiThemeBinding,
 	type TuiTheme,
 	type TuiThemeName,
@@ -222,6 +228,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 	let thinkingExpanded = false;
 	let blocksByItem = new WeakMap<object, Component>();
 	const toolGroupsById = new Map<string, ToolGroupBlock>();
+	const welcome = new WelcomeBlock(theme, () => currentState);
 
 	const syncToolSpinner = (state: TuiState): void => {
 		const lastStreaming = state.assistantBlocks?.at(-1);
@@ -263,7 +270,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 							? options.shortcuts.running
 							: options.shortcuts.idle;
 		shortcutLine.clear();
-		shortcutLine.addChild(new TruncatedText(theme.shortcut(text)));
+		shortcutLine.addChild(new TruncatedText(renderShortcutChips(text, theme)));
 	};
 
 	const renderStatus = (): void => {
@@ -981,6 +988,14 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 			dismissInlineCompletion();
 		}
 		const desired = [...initialTranscript];
+		if (
+			initialTranscript.length === 0 &&
+			state.items.length === 0 &&
+			state.assistantBlocks === undefined &&
+			state.assistantBuffer === undefined
+		) {
+			desired.push(welcome);
+		}
 		for (let index = 0; index < state.items.length; index += 1) {
 			const item = state.items[index];
 			if (item === undefined) {
@@ -1002,6 +1017,7 @@ export function createTuiApp(options: CreateTuiAppOptions): TuiApp {
 				group.update(
 					tools.map((tool) => ({
 						toolName: tool.toolName,
+						target: tool.target,
 						active: state.running && tool.isError === undefined,
 						preview: tool.preview,
 						edit: tool.edit,
@@ -1193,17 +1209,16 @@ class ComposerSurface extends Container {
 
 	override render(width: number): string[] {
 		const availableWidth = normalizeWidth(width);
-		if (availableWidth < 4) {
+		if (availableWidth < 8) {
 			return [
 				...this.editor.render(availableWidth),
 				...(this.selector?.render(availableWidth) ?? []),
 			];
 		}
 
-		const innerWidth = availableWidth - 2;
-		const editorLines = this.editor.render(innerWidth);
+		const editorLines = this.editor.render(availableWidth);
 		const bottomBorderIndex = editorLines.findIndex(
-			(line, index) => index > 0 && isEditorBorderLine(line, innerWidth),
+			(line, index) => index > 0 && isEditorBorderLine(line, availableWidth),
 		);
 		const body =
 			bottomBorderIndex === -1
@@ -1212,46 +1227,29 @@ class ComposerSurface extends Container {
 						editorLines.slice(1, bottomBorderIndex),
 						editorLines.slice(bottomBorderIndex + 1),
 					].flat();
-		const selectorPadding = innerWidth >= 3 ? 1 : 0;
-		const selectorWidth = Math.max(1, innerWidth - selectorPadding * 2);
+		// Selectors line up with the editor text, three columns in.
+		const selectorWidth = Math.max(1, availableWidth - 6);
 		const selectorLines =
 			this.selector
 				?.render(selectorWidth)
-				.map(
-					(line) =>
-						`${" ".repeat(selectorPadding)}${fitLine(line, selectorWidth)}${" ".repeat(selectorPadding)}`,
-				) ?? [];
+				.map((line) => `   ${fitLine(line, selectorWidth)}`) ?? [];
 		const content =
 			body.length === 0 && selectorLines.length === 0
 				? [""]
 				: [...body, ...selectorLines];
 
 		return [
-			this.theme.composerBorder(`╭${"─".repeat(innerWidth)}╮`),
-			...content.map((line, index) => {
-				const prompted =
+			...renderCard(
+				content.map((line, index) =>
 					index === 0
-						? `${this.theme.assistant("❯ ")}${sliceByColumn(line, 2, innerWidth - 2, true)}`
-						: line;
-				return `${this.theme.composerBorder("│")}${fitLine(prompted, innerWidth)}${this.theme.composerBorder("│")}`;
-			}),
-			this.renderBottomBorder(innerWidth),
+						? `${boldText(this.theme.accent(" ›"))}${sliceByColumn(line, 2, availableWidth - 2, true)}`
+						: line,
+				),
+				availableWidth,
+				this.theme,
+			),
+			renderComposerMetadata(this.state, availableWidth, this.theme),
 		];
-	}
-
-	private renderBottomBorder(innerWidth: number): string {
-		const metadata = renderComposerMetadata(
-			this.state,
-			Math.max(0, innerWidth - 2),
-			this.theme,
-		);
-		if (metadata === "") {
-			return this.theme.composerBorder(`╰${"─".repeat(innerWidth)}╯`);
-		}
-		const fill = "─".repeat(
-			Math.max(0, innerWidth - visibleWidth(metadata) - 2),
-		);
-		return `${this.theme.composerBorder(`╰${fill} `)}${metadata}${this.theme.composerBorder(" ╯")}`;
 	}
 }
 
@@ -1272,25 +1270,9 @@ class ComposerStatusLine implements Component {
 			return [];
 		}
 		const left = this.renderLeft();
-		if (left !== undefined) {
-			return [truncateToWidth(left, availableWidth, "…")];
-		}
-		const usage = this.state?.contextUsage;
-		if (
-			usage === undefined ||
-			this.state?.running === true ||
-			this.state?.inputMode === "locked"
-		) {
-			return [];
-		}
-		const meter = truncateToWidth(
-			this.theme.muted(formatContextUsageCompact(usage)),
-			availableWidth,
-			"…",
-		);
-		return [
-			`${" ".repeat(Math.max(0, availableWidth - visibleWidth(meter)))}${meter}`,
-		];
+		return left === undefined
+			? []
+			: [truncateToWidth(`  ${left}`, availableWidth, "…")];
 	}
 
 	private renderLeft(): string | undefined {
@@ -1438,30 +1420,50 @@ function isEditorBorderLine(line: string, width: number): boolean {
 	);
 }
 
-function fitLine(line: string, width: number): string {
-	const fitted = truncateToWidth(line, width, "");
-	return `${fitted}${" ".repeat(Math.max(0, width - visibleWidth(fitted)))}`;
-}
-
+/** The row under the composer: working directory left, model state right. */
 function renderComposerMetadata(
 	state: TuiState | undefined,
 	width: number,
 	theme: TuiTheme,
 ): string {
-	if (state === undefined || width === 0) {
+	if (state === undefined || width < 8) {
 		return "";
 	}
-	const effort = `${state.reasoning}`;
-	if (visibleWidth(effort) >= width) {
-		return theme.assistant(truncateToWidth(effort, width, "…"));
+	const separator = theme.subtle(" · ");
+	const usage =
+		state.contextUsage === undefined ||
+		state.running ||
+		state.inputMode === "locked"
+			? []
+			: [theme.subtle(formatContextUsageCompact(state.contextUsage))];
+	const right = [
+		theme.muted(state.model),
+		effortLabel(state.reasoning, theme),
+		...usage,
+	].join(separator);
+	const rightWidth = visibleWidth(right);
+	const leftWidth = width - rightWidth - 6;
+	if (leftWidth < 8) {
+		return truncateToWidth(`  ${right}`, width, "…");
 	}
-	const separator = " · ";
-	const modelWidth = width - visibleWidth(separator) - visibleWidth(effort);
-	if (modelWidth < 4) {
-		return theme.assistant(effort);
-	}
-	const model = truncateToWidth(state.model, modelWidth, "…");
-	return `${theme.primary(model)}${theme.muted(separator)}${theme.assistant(effort)}`;
+	const left = truncateToWidth(displayPath(state.cwd), leftWidth, "…");
+	const gap = " ".repeat(width - visibleWidth(left) - rightWidth - 4);
+	return `  ${theme.subtle(left)}${gap}${right}  `;
+}
+
+/** Render "Key:label  │  Key:label" as key chips followed by quiet labels. */
+function renderShortcutChips(text: string, theme: TuiTheme): string {
+	const chips = text
+		.split("│")
+		.map((part) => part.trim())
+		.filter((part) => part.length > 0)
+		.map((part) => {
+			const colon = part.indexOf(":");
+			return colon <= 0
+				? theme.subtle(part)
+				: `${theme.chip(theme.muted(` ${part.slice(0, colon).replaceAll("Ctrl+", "^")} `))} ${theme.subtle(part.slice(colon + 1))}`;
+		});
+	return `  ${chips.join("  ")}`;
 }
 
 function createAutocompleteProvider(
@@ -1653,6 +1655,7 @@ function createChatItemBlock(item: ChatItem, theme: TuiTheme): Component {
 			return new ThinkingBlock(item.text, theme);
 		case "tool":
 			return new ToolBlock(item.toolName, theme, {
+				target: item.target,
 				preview: item.preview,
 				edit: item.edit,
 				isError: item.isError,

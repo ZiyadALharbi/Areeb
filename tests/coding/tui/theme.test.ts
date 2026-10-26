@@ -30,7 +30,7 @@ describe("TUI themes", () => {
 		expect(stripTerminalSequences(primary("text"))).toBe("text");
 		expect(stripTerminalSequences(userBorder("border"))).toBe("border");
 		expect(stripTerminalSequences(markdownHeading("heading"))).toBe("heading");
-		expect(markdownBold("bold")).toContain("38;2;182;189;104");
+		expect(markdownBold("bold")).toContain("38;2;236;234;228");
 	});
 
 	test("uses a varied code-only palette with grey reserved for comments", () => {
@@ -50,18 +50,18 @@ describe("TUI themes", () => {
 					?.join("\n"),
 		);
 
-		expect(highlighted).toContain("38;2;77;158;255");
-		expect(highlighted).toContain("38;2;230;161;90");
-		expect(highlighted).toContain("38;2;224;122;95");
-		expect(highlighted).toContain("38;2;255;209;102");
-		expect(highlighted).toContain("38;2;239;91;91");
-		expect(highlighted).toContain("38;2;112;112;112");
-		expect(highlighted).not.toContain("38;2;245;245;245");
-		expect(highlighted).not.toContain("38;2;182;189;104");
-		expect(highlighted).not.toContain("38;2;138;190;183");
-		expect(fallback).toContain("38;2;230;213;184");
+		expect(highlighted).toContain("38;2;232;166;107");
+		expect(highlighted).toContain("38;2;156;196;228");
+		expect(highlighted).toContain("38;2;169;214;160");
+		expect(highlighted).toContain("38;2;230;192;123");
+		expect(highlighted).toContain("38;2;243;217;164");
+		expect(highlighted).toContain("38;2;85;85;79");
+		expect(highlighted).not.toContain("38;2;236;234;228");
+		expect(highlighted).not.toContain("38;2;217;201;168");
+		expect(highlighted).not.toContain("38;2;240;180;76");
+		expect(fallback).toContain("38;2;217;214;207");
 		expect(
-			plainOutput.every((output) => output?.includes("38;2;245;245;245")),
+			plainOutput.every((output) => output?.includes("38;2;236;234;228")),
 		).toBe(true);
 	});
 });

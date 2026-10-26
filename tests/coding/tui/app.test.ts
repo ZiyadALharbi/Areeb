@@ -163,9 +163,9 @@ describe("createTuiApp pickers", () => {
 		expect(app.openEffortPicker()).toBe(true);
 		expect(app.tui.hasOverlay()).toBe(false);
 		const surface = stripTerminalSequences(app.tui.render(80).join("\n"));
-		expect(surface).toMatch(/│.*high.*│/);
-		expect(surface.indexOf("╭")).toBeLessThan(surface.indexOf("high"));
-		expect(surface.indexOf("high")).toBeLessThan(surface.indexOf("╰"));
+		expect(surface).toContain("→ high");
+		expect(surface.indexOf("▄")).toBeLessThan(surface.indexOf("→ high"));
+		expect(surface.indexOf("→ high")).toBeLessThan(surface.indexOf("▀"));
 		const picker = app.tui.getFocusedComponent();
 		expect(picker).not.toBe(app.editor);
 		const rendered = stripTerminalSequences(
@@ -212,9 +212,9 @@ describe("createTuiApp pickers", () => {
 		expect(app.openSkillPicker("src/app.ts carefully")).toBe(true);
 		expect(app.tui.hasOverlay()).toBe(false);
 		const surface = stripTerminalSequences(app.tui.render(80).join("\n"));
-		expect(surface).toMatch(/│.*implement.*│/);
-		expect(surface.indexOf("╭")).toBeLessThan(surface.indexOf("implement"));
-		expect(surface.indexOf("implement")).toBeLessThan(surface.indexOf("╰"));
+		expect(surface).toContain("→ implement");
+		expect(surface.indexOf("▄")).toBeLessThan(surface.indexOf("→ implement"));
+		expect(surface.indexOf("→ implement")).toBeLessThan(surface.indexOf("▀"));
 		const picker = app.tui.getFocusedComponent();
 		const output = stripTerminalSequences(picker?.render(80).join("\n") ?? "");
 		expect(output).toContain("implement");
@@ -377,7 +377,8 @@ describe("createTuiApp pickers", () => {
 		expect(pickerOutput).toContain("Search  Type to filter");
 		expect(pickerOutput).toContain("model-a");
 		expect(pickerOutput).toContain("fake");
-		expect(pickerOutput).toMatch(/[╭╮╰╯]/);
+		expect(pickerOutput).toStartWith("▄");
+		expect(pickerOutput.trimEnd()).toEndWith("▀");
 		expect(stripTerminalSequences(app.tui.render(100).join("\n"))).toContain(
 			"menu shortcuts",
 		);
@@ -410,7 +411,9 @@ describe("createTuiApp pickers", () => {
 			.map((line) => line.trim());
 
 		expect(lines).not.toContain("Thinking");
-		expect(lines.some((line) => line.includes("Thinking..."))).toBe(true);
+		expect(
+			lines.some((line) => /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] think Inspecting files$/.test(line)),
+		).toBe(true);
 	});
 
 	test("keeps the dark theme as the only selectable theme", async () => {
@@ -474,7 +477,7 @@ describe("createTuiApp pickers", () => {
 		app.presentCommand("Settings saved", "info");
 		const notice = stripTerminalSequences(app.tui.render(120).join("\n"));
 		expect(notice).toContain("Settings saved");
-		expect(notice).not.toContain("~20k / 128k (16%)");
+		expect(notice).toContain("~20k / 128k (16%)");
 		app.clearCommandPresentation();
 
 		state.inputMode = "locked";
@@ -485,7 +488,7 @@ describe("createTuiApp pickers", () => {
 		app.dispose?.();
 	});
 
-	test("shows model and reasoning on the composer bottom border", () => {
+	test("shows the directory, model, and reasoning below the composer", () => {
 		const state = createTuiState({
 			sessionId: SESSION_ID,
 			model: "model-a",
@@ -498,8 +501,8 @@ describe("createTuiApp pickers", () => {
 		const wideMetadataLine = wide
 			.split("\n")
 			.find((line) => line.includes("model-a · off"));
-		expect(wideMetadataLine).toStartWith("╰");
-		expect(wideMetadataLine).toEndWith("╯");
+		expect(wideMetadataLine?.trimStart()).toStartWith("/project");
+		expect(wideMetadataLine?.trimEnd()).toEndWith("model-a · off ▁▂▃▅▆█");
 		state.reasoning = "high";
 		app.refresh(state);
 		expect(stripTerminalSequences(app.tui.render(32).join("\n"))).toContain(

@@ -15,6 +15,14 @@ export interface TuiTheme {
 	readonly background: string;
 	readonly primary: TextStyle;
 	readonly muted: TextStyle;
+	readonly subtle: TextStyle;
+	readonly accent: TextStyle;
+	/** Fills a line with the card color, surviving style resets inside it. */
+	readonly surface: TextStyle;
+	/** Card color as a foreground, for the half-block edges around a card. */
+	readonly surfaceEdge: TextStyle;
+	/** Raised fill for small key labels on top of the terminal background. */
+	readonly chip: TextStyle;
 	readonly user: TextStyle;
 	readonly userBorder: TextStyle;
 	readonly assistant: TextStyle;
@@ -29,6 +37,8 @@ export interface TuiTheme {
 	readonly diffContext: TextStyle;
 	readonly diffHunk: TextStyle;
 	readonly diffMeta: TextStyle;
+	readonly diffAddedLine: TextStyle;
+	readonly diffRemovedLine: TextStyle;
 	readonly markdown: MarkdownTheme;
 	readonly editor: EditorTheme;
 }
@@ -38,17 +48,30 @@ export interface TuiThemeBinding extends TuiTheme {
 }
 
 function foreground(hex: `#${string}`): TextStyle {
-	const value = Number.parseInt(hex.slice(1), 16);
-	const red = (value >> 16) & 0xff;
-	const green = (value >> 8) & 0xff;
-	const blue = value & 0xff;
-	const open = `\u001b[38;2;${red};${green};${blue}m`;
+	const open = `\u001b[38;2;${rgb(hex)}m`;
 
 	return (text) => (text ? `${open}${text}\u001b[39m` : "");
 }
 
 function decoration(open: number, close: number): TextStyle {
 	return (text) => (text ? `\u001b[${open}m${text}\u001b[${close}m` : "");
+}
+
+function rgb(hex: `#${string}`): string {
+	const value = Number.parseInt(hex.slice(1), 16);
+	return `${(value >> 16) & 0xff};${(value >> 8) & 0xff};${value & 0xff}`;
+}
+
+// Matches the resets that would otherwise end a background fill early.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: ESC starts every ANSI sequence.
+const BACKGROUND_RESET = /\x1b\[(?:0|49)?m/g;
+
+function backgroundFill(hex: `#${string}`): TextStyle {
+	const open = `\u001b[48;2;${rgb(hex)}m`;
+	return (text) =>
+		text
+			? `${open}${text.replace(BACKGROUND_RESET, (reset) => `${reset}${open}`)}\u001b[49m`
+			: "";
 }
 
 export const boldText = decoration(1, 22);
@@ -67,6 +90,10 @@ function withoutForeground(text: string): string {
 interface ThemePalette {
 	readonly primary: `#${string}`;
 	readonly muted: `#${string}`;
+	readonly subtle: `#${string}`;
+	readonly accent: `#${string}`;
+	readonly surface: `#${string}`;
+	readonly chip: `#${string}`;
 	readonly user: `#${string}`;
 	readonly userBorder: `#${string}`;
 	readonly assistant: `#${string}`;
@@ -85,6 +112,8 @@ interface ThemePalette {
 	readonly diffContext: `#${string}`;
 	readonly diffHunk: `#${string}`;
 	readonly diffMeta: `#${string}`;
+	readonly diffAddedLine: `#${string}`;
+	readonly diffRemovedLine: `#${string}`;
 	readonly syntaxPlain: `#${string}`;
 	readonly syntaxKeyword: `#${string}`;
 	readonly syntaxType: `#${string}`;
@@ -105,6 +134,8 @@ function createTheme(
 	const styles = {
 		primary: foreground(palette.primary),
 		muted: foreground(palette.muted),
+		subtle: foreground(palette.subtle),
+		accent: foreground(palette.accent),
 		user: foreground(palette.user),
 		userBorder: foreground(palette.userBorder),
 		assistant: foreground(palette.assistant),
@@ -137,7 +168,7 @@ function createTheme(
 	const markdownHeading = (text: string) =>
 		styles.heading(withoutForeground(text));
 	const markdownBold = (text: string) =>
-		styles.code(boldText(withoutForeground(text)));
+		styles.primary(boldText(withoutForeground(text)));
 	const highlightTheme: HighlightTheme = {
 		default: styles.syntaxPlain,
 		keyword: styles.syntaxKeyword,
@@ -188,6 +219,11 @@ function createTheme(
 		background,
 		primary: styles.primary,
 		muted: styles.muted,
+		subtle: styles.subtle,
+		accent: styles.accent,
+		surface: backgroundFill(palette.surface),
+		surfaceEdge: foreground(palette.surface),
+		chip: backgroundFill(palette.chip),
 		user: styles.user,
 		userBorder: styles.userBorder,
 		assistant: styles.assistant,
@@ -202,17 +238,19 @@ function createTheme(
 		diffContext: styles.diffContext,
 		diffHunk: styles.diffHunk,
 		diffMeta: styles.diffMeta,
+		diffAddedLine: backgroundFill(palette.diffAddedLine),
+		diffRemovedLine: backgroundFill(palette.diffRemovedLine),
 		markdown: Object.freeze({
 			heading: markdownHeading,
 			link: styles.link,
 			linkUrl: styles.muted,
 			code: styles.code,
 			codeBlock: styles.primary,
-			codeBlockBorder: styles.muted,
+			codeBlockBorder: styles.subtle,
 			quote: styles.quote,
-			quoteBorder: styles.muted,
-			hr: styles.muted,
-			listBullet: styles.assistant,
+			quoteBorder: styles.subtle,
+			hr: styles.subtle,
+			listBullet: styles.accent,
 			bold: markdownBold,
 			italic,
 			strikethrough,
@@ -239,7 +277,7 @@ function createTheme(
 		editor: Object.freeze({
 			borderColor: styles.composerBorder,
 			selectList: Object.freeze({
-				selectedPrefix: styles.assistant,
+				selectedPrefix: styles.accent,
 				selectedText: styles.primary,
 				description: styles.muted,
 				scrollInfo: styles.muted,
@@ -249,37 +287,45 @@ function createTheme(
 	});
 }
 
-export const AREEB_DARK_THEME = createTheme("areeb-dark", "#0a0a0a", {
-	primary: "#f5f5f5",
-	muted: "#707070",
-	user: "#f1c674",
-	userBorder: "#39765e",
-	assistant: "#8abeb7",
-	tool: "#707070",
-	error: "#fc424b",
-	warning: "#f1c674",
-	success: "#00bd7d",
-	composerBorder: "#4b4b4b",
-	shortcut: "#707070",
-	heading: "#f1c674",
-	link: "#8abeb7",
-	code: "#b6bd68",
-	quote: "#8abeb7",
-	diffAdded: "#00bd7d",
-	diffRemoved: "#fc424b",
-	diffContext: "#c0c0c0",
-	diffHunk: "#8abeb7",
-	diffMeta: "#707070",
-	syntaxPlain: "#e6d5b8",
-	syntaxKeyword: "#4d9eff",
-	syntaxType: "#e6a15a",
-	syntaxNumber: "#ffd166",
-	syntaxString: "#e07a5f",
-	syntaxComment: "#707070",
-	syntaxFunction: "#ef5b5b",
-	syntaxVariable: "#8bb8e8",
-	syntaxAddition: "#8bb8e8",
-	syntaxDeletion: "#ef5b5b",
+// Matches the website: near-black night, warm bone text, and saffron as the
+// single accent for whatever needs attention.
+export const AREEB_DARK_THEME = createTheme("areeb-dark", "#09090b", {
+	primary: "#eceae4",
+	muted: "#8c8b86",
+	subtle: "#55554f",
+	accent: "#f0b44c",
+	surface: "#18181b",
+	chip: "#202024",
+	user: "#f0b44c",
+	userBorder: "#18181b",
+	assistant: "#f0b44c",
+	tool: "#55554f",
+	error: "#ef8b80",
+	warning: "#f0b44c",
+	success: "#86d6a0",
+	composerBorder: "#2a2a2e",
+	shortcut: "#55554f",
+	heading: "#eceae4",
+	link: "#9bb8d3",
+	code: "#d9c9a8",
+	quote: "#8c8b86",
+	diffAdded: "#86d6a0",
+	diffRemoved: "#ef8b80",
+	diffContext: "#8c8b86",
+	diffHunk: "#9bb8d3",
+	diffMeta: "#55554f",
+	diffAddedLine: "#14231a",
+	diffRemovedLine: "#2a1715",
+	syntaxPlain: "#d9d6cf",
+	syntaxKeyword: "#e8a66b",
+	syntaxType: "#9cc4e4",
+	syntaxNumber: "#e6c07b",
+	syntaxString: "#a9d6a0",
+	syntaxComment: "#55554f",
+	syntaxFunction: "#f3d9a4",
+	syntaxVariable: "#c9b8e8",
+	syntaxAddition: "#86d6a0",
+	syntaxDeletion: "#ef8b80",
 });
 
 const THEMES: Readonly<Record<TuiThemeName, TuiTheme>> = Object.freeze({
@@ -315,6 +361,11 @@ export function createTuiThemeBinding(initial: TuiTheme): TuiThemeBinding {
 		},
 		primary: bind((theme) => theme.primary),
 		muted: bind((theme) => theme.muted),
+		subtle: bind((theme) => theme.subtle),
+		accent: bind((theme) => theme.accent),
+		surface: bind((theme) => theme.surface),
+		surfaceEdge: bind((theme) => theme.surfaceEdge),
+		chip: bind((theme) => theme.chip),
 		user: bind((theme) => theme.user),
 		userBorder: bind((theme) => theme.userBorder),
 		assistant: bind((theme) => theme.assistant),
@@ -329,6 +380,8 @@ export function createTuiThemeBinding(initial: TuiTheme): TuiThemeBinding {
 		diffContext: bind((theme) => theme.diffContext),
 		diffHunk: bind((theme) => theme.diffHunk),
 		diffMeta: bind((theme) => theme.diffMeta),
+		diffAddedLine: bind((theme) => theme.diffAddedLine),
+		diffRemovedLine: bind((theme) => theme.diffRemovedLine),
 		markdown: {
 			heading: bind((theme) => theme.markdown.heading),
 			link: bind((theme) => theme.markdown.link),
