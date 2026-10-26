@@ -18,7 +18,7 @@ import {
 	createAssistantMessageEventStream,
 } from "./event-stream.ts";
 import type {
-	DiscoveredModelLimit,
+	DiscoveredModel,
 	ModelProvider,
 	ProviderContextProjection,
 	ProviderRetryConfig,
@@ -135,9 +135,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
 		};
 	}
 
-	async discoverModelLimits(
+	async discoverModels(
 		signal?: AbortSignal,
-	): Promise<readonly DiscoveredModelLimit[]> {
+	): Promise<readonly DiscoveredModel[]> {
 		const response = await this.fetch(openAIModelsUrl(this.baseUrl), {
 			method: "GET",
 			headers: {
@@ -152,7 +152,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
 		if (!response.ok) {
 			throw new Error(`Model catalog request failed: HTTP ${response.status}`);
 		}
-		return readDiscoveredModelLimits(await response.json());
+		return readDiscoveredModels(await response.json());
 	}
 
 	streamResponse(
@@ -733,7 +733,7 @@ function openAIModelsUrl(baseUrl: string): string {
 	return url.toString();
 }
 
-function readDiscoveredModelLimits(value: unknown): DiscoveredModelLimit[] {
+function readDiscoveredModels(value: unknown): DiscoveredModel[] {
 	const items =
 		typeof value === "object" &&
 		value !== null &&
@@ -746,6 +746,14 @@ function readDiscoveredModelLimits(value: unknown): DiscoveredModelLimit[] {
 		if (typeof item !== "object" || item === null) {
 			return [];
 		}
+		// OpenRouter lists capabilities; skip models that cannot call tools.
+		const supportedParameters = Reflect.get(item, "supported_parameters");
+		if (
+			Array.isArray(supportedParameters) &&
+			!supportedParameters.includes("tools")
+		) {
+			return [];
+		}
 		const model = Reflect.get(item, "id");
 		const contextWindowTokens = [
 			"context_length",
@@ -755,8 +763,15 @@ function readDiscoveredModelLimits(value: unknown): DiscoveredModelLimit[] {
 			const candidate = Reflect.get(item, field);
 			return isPositiveFinite(candidate) ? [candidate] : [];
 		})[0];
-		return typeof model === "string" && contextWindowTokens !== undefined
-			? [{ model, contextWindowTokens }]
+		return typeof model === "string" && model.length > 0
+			? [
+					{
+						model,
+						...(contextWindowTokens === undefined
+							? {}
+							: { contextWindowTokens }),
+					},
+				]
 			: [];
 	});
 }

@@ -383,19 +383,18 @@ export function createDefaultCommandRegistry(): CommandRegistry {
 			if (selection === undefined) {
 				return usageError("/model [provider/model]");
 			}
-			if (
-				!context
+			const knownProvider =
+				context
 					.listModels()
-					.some(
-						(entry) =>
-							entry.provider === selection.provider &&
-							entry.model === selection.model,
-					)
-			) {
+					.some((entry) => entry.provider === selection.provider) ||
+				context
+					.listAuthProviders?.()
+					.some((entry) => entry.id === selection.provider) === true;
+			if (!knownProvider) {
 				return {
 					kind: "message",
 					level: "error",
-					text: `Unknown or unavailable model: ${argumentsText}`,
+					text: `Unknown or unavailable provider: ${selection.provider}`,
 				};
 			}
 			return { kind: "set-model", ...selection };

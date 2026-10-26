@@ -12,7 +12,7 @@ function sse(events: readonly object[]): Response {
 }
 
 describe("CodexProvider", () => {
-	test("discovers model limits with Codex authentication and metadata", async () => {
+	test("discovers every Codex model with optional limit metadata", async () => {
 		let request: Request | undefined;
 		const provider = new CodexProvider({
 			getAuth: async () => ({ access: "access-token", accountId: "account" }),
@@ -30,19 +30,25 @@ describe("CodexProvider", () => {
 							effective_context_window_percent: 90,
 						},
 						{ id: "gpt-5.6-terra", max_context_window: 128_000 },
-						{ model: "invalid", context_window: -1 },
+						{ model: "id-only", context_window: -1 },
+						{
+							slug: "internal-model",
+							visibility: "hide",
+							context_window: 128_000,
+						},
 					],
 				});
 			}) as unknown as typeof fetch,
 		});
 
-		expect(await provider.discoverModelLimits()).toEqual([
+		expect(await provider.discoverModels()).toEqual([
 			{
 				model: "gpt-5.6-sol",
 				contextWindowTokens: 200_000,
 				effectiveContextWindowPercent: 90,
 			},
 			{ model: "gpt-5.6-terra", contextWindowTokens: 128_000 },
+			{ model: "id-only" },
 		]);
 		expect(request?.method).toBe("GET");
 		expect(new URL(request?.url ?? "https://invalid").pathname).toBe(
@@ -52,7 +58,7 @@ describe("CodexProvider", () => {
 			new URL(request?.url ?? "https://invalid").searchParams.get(
 				"client_version",
 			),
-		).toBe("0.150.1");
+		).toBe("0.163.0");
 		expect(request?.headers.get("authorization")).toBe("Bearer access-token");
 		expect(request?.headers.get("chatgpt-account-id")).toBe("account");
 	});

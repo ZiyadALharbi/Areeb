@@ -107,18 +107,19 @@ areeb
 ```
 
 Areeb needs access to a model provider. In the interactive interface, use
-`/login` to connect an OpenAI API key or a ChatGPT Plus/Pro subscription, then
-use `/model` to choose a model:
+`/login` to connect an OpenAI API key, an OpenRouter API key, or a ChatGPT
+Plus/Pro subscription, then use `/model` to choose a model:
 
 ```text
 /login
 /model
 ```
 
-You can also provide an OpenAI API key through the environment:
+You can also provide an API key through the environment:
 
 ```bash
 export OPENAI_API_KEY="your-api-key"
+export OPENROUTER_API_KEY="your-api-key"
 areeb
 ```
 
@@ -141,7 +142,8 @@ areeb -p "find the CLI entry point" --output json
 - Read files, write new files, make targeted edits, and run shell commands.
 - Stream model output, reasoning, tool calls, and tool results as they happen.
 - Save durable JSONL sessions under `~/.areeb/sessions/` and resume them later.
-- Connect to OpenAI, ChatGPT Plus/Pro, and custom OpenAI-compatible endpoints.
+- Connect to OpenAI, ChatGPT Plus/Pro, OpenRouter, and custom OpenAI-compatible
+  endpoints.
 - Switch providers, models, and reasoning effort from the CLI or terminal UI.
 - Load project guidance from `AGENTS.md`, and `CLAUDE.md`.
 - Discover reusable skills and prompt templates from user and project folders.

@@ -36,9 +36,9 @@ export interface ProviderContextProjection {
 	readonly tools: readonly unknown[];
 }
 
-export interface DiscoveredModelLimit {
+export interface DiscoveredModel {
 	readonly model: string;
-	readonly contextWindowTokens: number;
+	readonly contextWindowTokens?: number;
 	readonly effectiveContextWindowPercent?: number;
 }
 
@@ -52,9 +52,7 @@ export interface ModelProvider {
 	): ProviderContextProjection;
 
 	/** Fetch the authenticated model catalog for this provider instance. */
-	discoverModelLimits?(
-		signal?: AbortSignal,
-	): Promise<readonly DiscoveredModelLimit[]>;
+	discoverModels?(signal?: AbortSignal): Promise<readonly DiscoveredModel[]>;
 
 	streamResponse(
 		model: string,

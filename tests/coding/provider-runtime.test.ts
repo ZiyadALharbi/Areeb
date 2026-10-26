@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import type { CodexProviderConfig } from "../../src/ai/codex_provider.ts";
 import { FakeProvider } from "../../src/ai/fake_provider.ts";
 import type { OpenAICompatibleConfig } from "../../src/ai/openai_compatible_provider.ts";
 import type { OpenAIResponsesConfig } from "../../src/ai/openai_responses_provider.ts";
 import { MemoryCredentialStore } from "../../src/coding/auth-store.ts";
 import {
 	createDefaultProviderAuthRegistry,
+	type OAuthProviderContext,
 	ProviderAuthRegistry,
 } from "../../src/coding/provider-auth.ts";
 import { parseProviderSettings } from "../../src/coding/provider-config.ts";
@@ -45,7 +45,7 @@ describe("ProviderRuntimeService", () => {
 		const provider = Object.assign(
 			new FakeProvider([], { providerId: "local" }),
 			{
-				async discoverModelLimits() {
+				async discoverModels() {
 					discoveryCalls += 1;
 					await discoveryStarted;
 					return [
@@ -100,6 +100,67 @@ describe("ProviderRuntimeService", () => {
 		expect(discoveryCalls).toBe(1);
 	});
 
+	test("merges live ID-only models and accepts explicit new model IDs", async () => {
+		const settings = parseProviderSettings(
+			{
+				version: 1,
+				default_provider: "local",
+				providers: {
+					local: {
+						type: "openai-compatible",
+						base_url: "https://api.example/v1",
+						models: ["fallback-model"],
+						default_model: "fallback-model",
+					},
+				},
+			},
+			{ path: "/tmp/providers.json", env: {} },
+		);
+		let discoveryCalls = 0;
+		const provider = Object.assign(
+			new FakeProvider([], { providerId: "local" }),
+			{
+				async discoverModels() {
+					discoveryCalls += 1;
+					return [{ model: "new-release" }];
+				},
+			},
+		);
+		const service = new ProviderRuntimeService({
+			settings,
+			store: new MemoryCredentialStore(),
+			registry: createDefaultProviderAuthRegistry(),
+			env: {},
+			createProvider: () => provider,
+		});
+
+		expect(
+			(await service.usableModels())
+				.filter((entry) => entry.provider === "local")
+				.map((entry) => entry.model),
+		).toEqual(["fallback-model", "new-release"]);
+		expect(
+			(await service.usableModels())
+				.filter((entry) => entry.provider === "local")
+				.map((entry) => entry.model),
+		).toEqual(["fallback-model", "new-release"]);
+		expect(discoveryCalls).toBe(1);
+
+		expect(
+			service.resolveSelection({ provider: "local", model: "future-model" }),
+		).toEqual({ provider: "local", model: "future-model" });
+		expect(
+			await service.createRuntime({
+				provider: "local",
+				model: "future-model",
+			}),
+		).toMatchObject({
+			selection: { provider: "local", model: "future-model" },
+			contextWindowTokens: 128_000,
+			contextWindowSource: "fallback",
+		});
+	});
+
 	test("keeps discovery failures nonfatal and isolated by provider instance", async () => {
 		const settings = parseProviderSettings(
 			{
@@ -127,7 +188,7 @@ describe("ProviderRuntimeService", () => {
 			["alpha", "beta"].map((providerId) => [
 				providerId,
 				Object.assign(new FakeProvider([], { providerId }), {
-					async discoverModelLimits() {
+					async discoverModels() {
 						calls.set(providerId, (calls.get(providerId) ?? 0) + 1);
 						if (providerId === "alpha") {
 							throw new Error("alpha catalog unavailable");
@@ -231,13 +292,14 @@ describe("ProviderRuntimeService", () => {
 		const service = new ProviderRuntimeService({
 			settings,
 			store,
-			registry: createDefaultProviderAuthRegistry(),
+			registry: createDefaultProviderAuthRegistry({
+				createOpenAIResponsesProvider(config) {
+					responsesConfig = config;
+					configuredKey = config.apiKey;
+					return new FakeProvider([], { providerId: config.providerId });
+				},
+			}),
 			env: { OPENAI_API_KEY: "environment-key" },
-			createOpenAIResponsesProvider(config) {
-				responsesConfig = config;
-				configuredKey = config.apiKey;
-				return new FakeProvider([], { providerId: config.providerId });
-			},
 		});
 
 		await service.createRuntime({ provider: "openai", model: "gpt-5.6-sol" });
@@ -267,6 +329,7 @@ describe("ProviderRuntimeService", () => {
 
 	test("refreshes an expired Codex token once under contention", async () => {
 		let refreshCalls = 0;
+		let getCredential: OAuthProviderContext["getCredential"] | undefined;
 		const registry = new ProviderAuthRegistry([
 			{
 				id: "openai-codex",
@@ -287,6 +350,10 @@ describe("ProviderRuntimeService", () => {
 						expires: 1_000_000,
 					};
 				},
+				createProvider(context) {
+					getCredential = context.getCredential;
+					return new FakeProvider([], { providerId: "openai-codex" });
+				},
 			},
 		]);
 		const store = new MemoryCredentialStore({
@@ -297,7 +364,6 @@ describe("ProviderRuntimeService", () => {
 				expires: 0,
 			},
 		});
-		let codexConfig: CodexProviderConfig | undefined;
 		const service = new ProviderRuntimeService({
 			settings: parseProviderSettings(
 				{ version: 1 },
@@ -310,24 +376,16 @@ describe("ProviderRuntimeService", () => {
 			registry,
 			env: {},
 			now: () => 10,
-			createCodexProvider(config) {
-				codexConfig = config;
-				return new FakeProvider([], { providerId: "openai-codex" });
-			},
 		});
 		await service.createRuntime({
 			provider: "openai-codex",
 			model: "gpt-5.6-sol",
 		});
-		if (codexConfig === undefined) {
-			throw new Error("Expected Codex provider config");
+		if (getCredential === undefined) {
+			throw new Error("Expected OAuth provider context");
 		}
 
-		await Promise.all([
-			codexConfig.getAuth(),
-			codexConfig.getAuth(),
-			codexConfig.getAuth(),
-		]);
+		await Promise.all([getCredential(), getCredential(), getCredential()]);
 		expect(refreshCalls).toBe(1);
 		expect(await store.read("openai-codex")).toMatchObject({
 			refresh: "rotated",
@@ -372,7 +430,12 @@ describe("ProviderRuntimeService", () => {
 		});
 		const options = {
 			store,
-			registry: createDefaultProviderAuthRegistry(),
+			registry: createDefaultProviderAuthRegistry({
+				createCodexProvider: () =>
+					Object.assign(new FakeProvider([], { providerId: "openai-codex" }), {
+						discoverModels: async () => [],
+					}),
+			}),
 			env: { OPENAI_API_KEY: "environment-key" },
 		};
 		const saved = new ProviderRuntimeService({

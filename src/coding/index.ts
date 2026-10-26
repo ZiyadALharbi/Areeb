@@ -73,14 +73,20 @@ export {
 	renderPromptTemplate,
 } from "./prompt-templates.ts";
 export type {
+	ApiKeyProviderContext,
+	ApiKeyProviderRegistration,
 	DefaultProviderAuthRegistryOptions,
+	OAuthProviderContext,
+	OAuthProviderRegistration,
 	ProviderAuthMetadata,
 	ProviderAuthRegistration,
 } from "./provider-auth.ts";
 export {
 	createDefaultProviderAuthRegistry,
+	DEFAULT_OPENAI_CODEX_MODEL,
 	OPENAI_API_MODELS,
 	OPENAI_CODEX_MODELS,
+	OPENROUTER_MODELS,
 	ProviderAuthRegistry,
 } from "./provider-auth.ts";
 export type {
@@ -102,6 +108,8 @@ export {
 	configuredProviderModels,
 	createProviderRuntime,
 	DEFAULT_OPENAI_MODEL,
+	DEFAULT_OPENROUTER_BASE_URL,
+	DEFAULT_OPENROUTER_MODEL,
 	DEFAULT_PROVIDER_MAX_RETRIES,
 	DEFAULT_PROVIDER_MAX_RETRY_DELAY_SECONDS,
 	getProviderAuthStatus,

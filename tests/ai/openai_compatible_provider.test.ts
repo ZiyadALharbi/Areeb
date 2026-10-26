@@ -58,7 +58,7 @@ async function collect(
 }
 
 describe("OpenAICompatibleProvider", () => {
-	test("discovers exact positive model limits from the authenticated catalog", async () => {
+	test("discovers every model and keeps available context limits", async () => {
 		let request:
 			| {
 					readonly method: string;
@@ -93,10 +93,12 @@ describe("OpenAICompatibleProvider", () => {
 			headers: { "X-Areeb-Test": "present" },
 		});
 
-		expect(await provider.discoverModelLimits()).toEqual([
+		expect(await provider.discoverModels()).toEqual([
 			{ model: "model-a", contextWindowTokens: 200_000 },
 			{ model: "model-b", contextWindowTokens: 64_000 },
 			{ model: "model-c", contextWindowTokens: 32_000 },
+			{ model: "invalid-zero" },
+			{ model: "invalid-string" },
 		]);
 		expect(request?.method).toBe("GET");
 		expect(new URL(request?.url ?? "https://invalid").pathname).toBe(

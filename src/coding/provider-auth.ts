@@ -1,44 +1,46 @@
 import type {
-	AuthCredential,
+	ApiKeyCredential,
 	AuthInteraction,
 	AuthType,
 	OAuthCredential,
 } from "../ai/auth.ts";
-import { CodexOAuth } from "../ai/codex_oauth.ts";
+import { CodexOAuth, extractCodexAccountId } from "../ai/codex_oauth.ts";
+import {
+	CodexProvider,
+	type CodexProviderConfig,
+} from "../ai/codex_provider.ts";
+import {
+	type OpenAICompatibleConfig,
+	OpenAICompatibleProvider,
+} from "../ai/openai_compatible_provider.ts";
+import {
+	type OpenAIResponsesConfig,
+	OpenAIResponsesProvider,
+} from "../ai/openai_responses_provider.ts";
+import type {
+	ModelProvider,
+	ProviderRetryConfig,
+} from "../ai/provider_protocol.ts";
+import {
+	DEFAULT_OPENAI_MODEL,
+	DEFAULT_OPENROUTER_MODEL,
+	type OpenAICompatibleProviderConfig,
+	type ProviderFactory,
+} from "./provider-config.ts";
+
+export const DEFAULT_OPENAI_CODEX_MODEL = "gpt-6.1-sol";
 
 export const OPENAI_CODEX_MODELS = Object.freeze([
-	"gpt-5.3-codex-spark",
-	"gpt-5.4",
-	"gpt-5.4-mini",
-	"gpt-5.5",
 	"gpt-5.6-luna",
 	"gpt-5.6-sol",
 	"gpt-5.6-terra",
+	"gpt-6-astra",
+	"gpt-6-luna",
+	"gpt-6-sol",
+	"gpt-6.1-sol",
 ]);
 
 export const OPENAI_API_MODELS = Object.freeze([
-	"gpt-4",
-	"gpt-4-turbo",
-	"gpt-4.1",
-	"gpt-4.1-mini",
-	"gpt-4.1-nano",
-	"gpt-4o",
-	"gpt-4o-2024-05-13",
-	"gpt-4o-2024-08-06",
-	"gpt-4o-2024-11-20",
-	"gpt-4o-mini",
-	"gpt-5",
-	"gpt-5-chat-latest",
-	"gpt-5-mini",
-	"gpt-5-nano",
-	"gpt-5-pro",
-	"gpt-5.1",
-	"gpt-5.2",
-	"gpt-5.2-chat-latest",
-	"gpt-5.2-pro",
-	"gpt-5.3-chat-latest",
-	"gpt-5.3-codex",
-	"gpt-5.3-codex-spark",
 	"gpt-5.4",
 	"gpt-5.4-mini",
 	"gpt-5.4-nano",
@@ -46,30 +48,73 @@ export const OPENAI_API_MODELS = Object.freeze([
 	"gpt-5.5",
 	"gpt-5.5-pro",
 	"gpt-5.6-luna",
+	"gpt-5.6-luna-pro",
 	"gpt-5.6-sol",
+	"gpt-5.6-sol-pro",
 	"gpt-5.6-terra",
-	"gpt-realtime-2.1",
-	"o1",
-	"o1-pro",
-	"o3",
-	"o3-mini",
-	"o3-pro",
-	"o4-mini",
+	"gpt-5.6-terra-pro",
+	"gpt-6-astra",
+	"gpt-6-astra-pro",
+	"gpt-6-luna",
+	"gpt-6-luna-pro",
+	"gpt-6-sol",
+	"gpt-6-sol-pro",
+	"gpt-6.1-sol",
+	"gpt-6.1-sol-pro",
 ]);
 
-export interface ProviderAuthRegistration {
+/** Offline fallback; the live OpenRouter catalog is discovered after login. */
+export const OPENROUTER_MODELS = Object.freeze([
+	"anthropic/claude-haiku-5.5",
+	"anthropic/claude-opus-5.5",
+	"anthropic/claude-sonnet-5.5",
+	"google/gemini-4-argon",
+	"moonshotai/kimi-k3.1-pro",
+	"openai/gpt-6-astra",
+	"openai/gpt-6.1-sol",
+	"qwen/qwen3.8-max-prime",
+	"x-ai/grok-4.7",
+	"z-ai/glm-5.3-prime",
+]);
+
+/** Inputs for building an API-key adapter from its built-in endpoint settings. */
+export interface ApiKeyProviderContext {
+	readonly config: OpenAICompatibleProviderConfig;
+	readonly apiKey: string;
+}
+
+/** Inputs for building an OAuth adapter; credentials refresh on demand. */
+export interface OAuthProviderContext {
+	getCredential(signal?: AbortSignal): Promise<OAuthCredential>;
+}
+
+interface ProviderRegistrationBase {
 	readonly id: string;
 	readonly displayName: string;
-	readonly authType: AuthType;
 	readonly authLabel: "api key" | "subscription";
 	readonly models: readonly string[];
 	readonly defaultModel: string;
-	login(interaction: AuthInteraction): Promise<AuthCredential>;
-	refresh?(
+}
+
+export interface ApiKeyProviderRegistration extends ProviderRegistrationBase {
+	readonly authType: "api_key";
+	login(interaction: AuthInteraction): Promise<ApiKeyCredential>;
+	createProvider(context: ApiKeyProviderContext): ModelProvider;
+}
+
+export interface OAuthProviderRegistration extends ProviderRegistrationBase {
+	readonly authType: "oauth";
+	login(interaction: AuthInteraction): Promise<OAuthCredential>;
+	refresh(
 		credential: OAuthCredential,
 		signal?: AbortSignal,
 	): Promise<OAuthCredential>;
+	createProvider(context: OAuthProviderContext): ModelProvider;
 }
+
+export type ProviderAuthRegistration =
+	| ApiKeyProviderRegistration
+	| OAuthProviderRegistration;
 
 export interface ProviderAuthMetadata {
 	readonly id: string;
@@ -128,6 +173,11 @@ export class ProviderAuthRegistry {
 
 export interface DefaultProviderAuthRegistryOptions {
 	readonly codexOAuth?: CodexOAuth;
+	readonly createCodexProvider?: (config: CodexProviderConfig) => ModelProvider;
+	readonly createOpenAIResponsesProvider?: (
+		config: OpenAIResponsesConfig,
+	) => ModelProvider;
+	readonly createOpenAICompatibleProvider?: ProviderFactory;
 }
 
 export function createDefaultProviderAuthRegistry(
@@ -141,9 +191,22 @@ export function createDefaultProviderAuthRegistry(
 			authType: "oauth",
 			authLabel: "subscription",
 			models: OPENAI_CODEX_MODELS,
-			defaultModel: "gpt-5.6-sol",
+			defaultModel: DEFAULT_OPENAI_CODEX_MODEL,
 			login: (interaction) => codexOAuth.login(interaction),
 			refresh: (credential, signal) => codexOAuth.refresh(credential, signal),
+			createProvider({ getCredential }) {
+				const config: CodexProviderConfig = {
+					providerId: "openai-codex",
+					async getAuth(signal) {
+						const { access } = await getCredential(signal);
+						return { access, accountId: extractCodexAccountId(access) };
+					},
+					retry: { maxRetries: 2, maxRetryDelayMs: 60_000 },
+				};
+				return (
+					options.createCodexProvider?.(config) ?? new CodexProvider(config)
+				);
+			},
 		},
 		{
 			id: "openai",
@@ -151,24 +214,75 @@ export function createDefaultProviderAuthRegistry(
 			authType: "api_key",
 			authLabel: "api key",
 			models: OPENAI_API_MODELS,
-			defaultModel: "gpt-5.6-sol",
-			async login(interaction) {
-				const key = (
-					await interaction.prompt({
-						type: "text",
-						label: "OpenAI API key",
-						placeholder: "sk-...",
-						secret: true,
-						signal: interaction.signal,
-					})
-				).trim();
-				if (!key) {
-					throw new Error("API key cannot be empty");
-				}
-				return Object.freeze({ type: "api_key", key });
+			defaultModel: DEFAULT_OPENAI_MODEL,
+			login: (interaction) =>
+				promptApiKey(interaction, "OpenAI API key", "sk-..."),
+			createProvider({ config, apiKey }) {
+				const adapterConfig: OpenAIResponsesConfig = {
+					providerId: config.id,
+					baseUrl: config.baseUrl,
+					apiKey,
+					retry: retryConfig(config),
+				};
+				return (
+					options.createOpenAIResponsesProvider?.(adapterConfig) ??
+					new OpenAIResponsesProvider(adapterConfig)
+				);
+			},
+		},
+		{
+			id: "openrouter",
+			displayName: "OpenRouter",
+			authType: "api_key",
+			authLabel: "api key",
+			models: OPENROUTER_MODELS,
+			defaultModel: DEFAULT_OPENROUTER_MODEL,
+			login: (interaction) =>
+				promptApiKey(interaction, "OpenRouter API key", "sk-or-..."),
+			createProvider({ config, apiKey }) {
+				const adapterConfig: OpenAICompatibleConfig = {
+					providerId: config.id,
+					baseUrl: config.baseUrl,
+					apiKey,
+					retry: retryConfig(config),
+					compat: config.compat,
+				};
+				return (
+					options.createOpenAICompatibleProvider?.(adapterConfig) ??
+					new OpenAICompatibleProvider(adapterConfig)
+				);
 			},
 		},
 	]);
+}
+
+async function promptApiKey(
+	interaction: AuthInteraction,
+	label: string,
+	placeholder: string,
+): Promise<ApiKeyCredential> {
+	const key = (
+		await interaction.prompt({
+			type: "text",
+			label,
+			placeholder,
+			secret: true,
+			signal: interaction.signal,
+		})
+	).trim();
+	if (!key) {
+		throw new Error("API key cannot be empty");
+	}
+	return Object.freeze({ type: "api_key", key });
+}
+
+function retryConfig(
+	config: OpenAICompatibleProviderConfig,
+): ProviderRetryConfig {
+	return {
+		maxRetries: config.maxRetries,
+		maxRetryDelayMs: config.maxRetryDelaySeconds * 1_000,
+	};
 }
 
 function validateRegistration(registration: ProviderAuthRegistration): void {

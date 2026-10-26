@@ -20,6 +20,37 @@ function requestFrom(
 }
 
 describe("OpenAIResponsesProvider", () => {
+	test("discovers model IDs when OpenAI omits context limits", async () => {
+		let request: Request | undefined;
+		const provider = new OpenAIResponsesProvider({
+			providerId: "openai",
+			baseUrl: "https://api.openai.com/v1",
+			apiKey: "test-key",
+			fetch: (async (
+				input: Parameters<typeof fetch>[0],
+				init?: RequestInit,
+			) => {
+				request = requestFrom(input, init);
+				return Response.json({
+					data: [
+						{ id: "gpt-new" },
+						{ id: "gpt-known", context_window: 200_000 },
+						{ id: "" },
+					],
+				});
+			}) as unknown as typeof fetch,
+		});
+
+		expect(await provider.discoverModels()).toEqual([
+			{ model: "gpt-new" },
+			{ model: "gpt-known", contextWindowTokens: 200_000 },
+		]);
+		expect(new URL(request?.url ?? "https://invalid").pathname).toBe(
+			"/v1/models",
+		);
+		expect(request?.headers.get("authorization")).toBe("Bearer test-key");
+	});
+
 	test("projects reasoning, tool calls, and tool-result images for stateless replay", () => {
 		const provider = new OpenAIResponsesProvider({
 			providerId: "openai",
