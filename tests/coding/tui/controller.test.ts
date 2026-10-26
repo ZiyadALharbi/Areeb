@@ -573,6 +573,43 @@ describe("TuiController", () => {
 		});
 	});
 
+	test("allows an explicit model ID for a known provider", async () => {
+		const { manager, initial } = await createFixture();
+		const controller = new TuiController({
+			session: initial,
+			manager,
+			async loadSession() {
+				throw new Error("not used");
+			},
+			models: [{ provider: "other", model: "fallback-model" }],
+			async prepareModelSession({ handle, selection, reasoning }) {
+				return {
+					session: new StubSession(
+						await handle.getMetadata(),
+						[],
+						selection.provider,
+						selection.model,
+						reasoning,
+					),
+					commit: async () => undefined,
+				};
+			},
+		});
+
+		expect(await controller.setModel("other", "new-release")).toEqual({
+			kind: "none",
+		});
+		expect(controller).toMatchObject({
+			provider: "other",
+			model: "new-release",
+		});
+		expect(await controller.setModel("missing", "model")).toEqual({
+			kind: "message",
+			level: "error",
+			text: "Unknown or unavailable provider: missing",
+		});
+	});
+
 	test("blocks model changes while running and delegates queue operations", async () => {
 		const { manager, initial } = await createFixture();
 		const controller = new TuiController({

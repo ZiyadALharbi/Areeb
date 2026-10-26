@@ -15,6 +15,7 @@ import {
 	type OpenAICompatibleCompat,
 	type OpenAICompatibleConfig,
 	OpenAICompatibleProvider,
+	type OpenAIThinkingFormat,
 } from "../ai/openai_compatible_provider.ts";
 import type { ModelProvider } from "../ai/provider_protocol.ts";
 import { REASONING_LEVELS } from "../ai/types.ts";
@@ -25,7 +26,9 @@ import {
 import { areebPaths } from "./paths.ts";
 
 export const PROVIDER_SETTINGS_VERSION = 1;
-export const DEFAULT_OPENAI_MODEL = "gpt-5.6-sol";
+export const DEFAULT_OPENAI_MODEL = "gpt-6.1-sol";
+export const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+export const DEFAULT_OPENROUTER_MODEL = "anthropic/claude-sonnet-5.5";
 export const DEFAULT_PROVIDER_MAX_RETRIES = 2;
 export const DEFAULT_PROVIDER_MAX_RETRY_DELAY_SECONDS = 60;
 
@@ -35,6 +38,30 @@ const LOCK_RETRY_DELAY_MS = 25;
 const LOCK_TIMEOUT_MS = 5_000;
 const STALE_LOCK_MS = 30_000;
 const RESERVED_PROVIDER_IDS = new Set(["openai-codex"]);
+
+interface BuiltInProviderDefaults {
+	/** Prefix for `<PREFIX>_API_KEY`, `<PREFIX>_BASE_URL`, and related overrides. */
+	readonly envPrefix: string;
+	readonly baseUrl: string;
+	readonly defaultModel: string;
+	readonly thinkingFormat?: OpenAIThinkingFormat;
+}
+
+/** Endpoint defaults for API-key providers that ship with Areeb. */
+const BUILT_IN_PROVIDERS: Readonly<Record<string, BuiltInProviderDefaults>> =
+	Object.freeze({
+		openai: {
+			envPrefix: "OPENAI",
+			baseUrl: DEFAULT_OPENAI_BASE_URL,
+			defaultModel: DEFAULT_OPENAI_MODEL,
+		},
+		openrouter: {
+			envPrefix: "OPENROUTER",
+			baseUrl: DEFAULT_OPENROUTER_BASE_URL,
+			defaultModel: DEFAULT_OPENROUTER_MODEL,
+			thinkingFormat: "openrouter",
+		},
+	});
 
 export type ProviderEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -316,7 +343,11 @@ export function resolveProviderSelection(
 			? settings.defaultModel
 			: undefined) ??
 		provider.defaultModel;
-	if (!provider.models.includes(model)) {
+	if (
+		!provider.models.includes(model) &&
+		options.stored === undefined &&
+		options.model === undefined
+	) {
 		throw new Error(`Unknown model "${model}" for provider "${providerId}"`);
 	}
 
@@ -404,7 +435,8 @@ export async function setupOpenAICompatibleProvider(
 				? currentRaw.providers[options.provider]
 				: undefined;
 		const isNewCustom =
-			options.provider !== "openai" && existingRaw === undefined;
+			!Object.hasOwn(BUILT_IN_PROVIDERS, options.provider) &&
+			existingRaw === undefined;
 
 		if (isNewCustom) {
 			for (const [field, value] of [
@@ -566,14 +598,18 @@ function composeProviderSettings(
 		string,
 		OpenAICompatibleProviderConfig
 	>;
-	providers.openai = normalizeBuiltInOpenAI(
-		explicitProviders.openai,
-		path,
-		env,
-	);
+	for (const [providerId, defaults] of Object.entries(BUILT_IN_PROVIDERS)) {
+		providers[providerId] = normalizeBuiltInProvider(
+			providerId,
+			defaults,
+			explicitProviders[providerId],
+			path,
+			env,
+		);
+	}
 
 	for (const providerId of Object.keys(explicitProviders).sort()) {
-		if (providerId === "openai") {
+		if (Object.hasOwn(BUILT_IN_PROVIDERS, providerId)) {
 			continue;
 		}
 		if (RESERVED_PROVIDER_IDS.has(providerId)) {
@@ -634,46 +670,60 @@ function composeProviderSettings(
 	});
 }
 
-function normalizeBuiltInOpenAI(
+function normalizeBuiltInProvider(
+	providerId: string,
+	defaults: BuiltInProviderDefaults,
 	overlay: RawProvider | undefined,
 	path: string,
 	env: ProviderEnvironment,
 ): OpenAICompatibleProviderConfig {
+	const prefix = defaults.envPrefix;
 	const environmentModel =
-		environmentValue(env, "OPENAI_MODEL")?.trim() || undefined;
+		environmentValue(env, `${prefix}_MODEL`)?.trim() || undefined;
 	const defaultModel =
-		overlay?.default_model ?? environmentModel ?? DEFAULT_OPENAI_MODEL;
+		overlay?.default_model ?? environmentModel ?? defaults.defaultModel;
 	const models = overlay?.models ?? [defaultModel];
+	const thinkingFormat = overlay?.thinking_format ?? defaults.thinkingFormat;
 	return normalizeProvider(
-		"openai",
+		providerId,
 		{
 			type: "openai-compatible",
 			base_url:
 				overlay?.base_url ??
-				(environmentValue(env, "OPENAI_BASE_URL")?.trim() || undefined) ??
-				DEFAULT_OPENAI_BASE_URL,
-			api_key_env: overlay?.api_key_env ?? "OPENAI_API_KEY",
+				(environmentValue(env, `${prefix}_BASE_URL`)?.trim() || undefined) ??
+				defaults.baseUrl,
+			api_key_env: overlay?.api_key_env ?? `${prefix}_API_KEY`,
 			models,
 			default_model: defaultModel,
 			timeout_seconds:
 				overlay?.timeout_seconds ??
-				readEnvironmentNumber(env, "OPENAI_TIMEOUT_SECONDS", path, "positive"),
+				readEnvironmentNumber(
+					env,
+					`${prefix}_TIMEOUT_SECONDS`,
+					path,
+					"positive",
+				),
 			max_retries:
 				overlay?.max_retries ??
-				readEnvironmentNumber(env, "OPENAI_MAX_RETRIES", path, "safeInteger") ??
+				readEnvironmentNumber(
+					env,
+					`${prefix}_MAX_RETRIES`,
+					path,
+					"safeInteger",
+				) ??
 				DEFAULT_PROVIDER_MAX_RETRIES,
 			max_retry_delay_seconds:
 				overlay?.max_retry_delay_seconds ??
 				readEnvironmentNumber(
 					env,
-					"OPENAI_MAX_RETRY_DELAY_SECONDS",
+					`${prefix}_MAX_RETRY_DELAY_SECONDS`,
 					path,
 					"nonnegative",
 				) ??
 				DEFAULT_PROVIDER_MAX_RETRY_DELAY_SECONDS,
-			...(overlay?.thinking_format === undefined
+			...(thinkingFormat === undefined
 				? {}
-				: { thinking_format: overlay.thinking_format }),
+				: { thinking_format: thinkingFormat }),
 			...(overlay?.supports_reasoning_effort === undefined
 				? {}
 				: {

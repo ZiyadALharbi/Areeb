@@ -17,7 +17,7 @@ import {
 	createAssistantMessageEventStream,
 } from "./event-stream.ts";
 import type {
-	DiscoveredModelLimit,
+	DiscoveredModel,
 	ModelProvider,
 	ProviderContextProjection,
 	ProviderRetryConfig,
@@ -103,9 +103,9 @@ export class OpenAIResponsesProvider implements ModelProvider {
 		};
 	}
 
-	async discoverModelLimits(
+	async discoverModels(
 		signal?: AbortSignal,
-	): Promise<readonly DiscoveredModelLimit[]> {
+	): Promise<readonly DiscoveredModel[]> {
 		const response = await this.fetch(openAIModelsUrl(this.baseUrl), {
 			method: "GET",
 			headers: {
@@ -118,7 +118,7 @@ export class OpenAIResponsesProvider implements ModelProvider {
 		if (!response.ok) {
 			throw new Error(`Model catalog request failed: HTTP ${response.status}`);
 		}
-		return readDiscoveredModelLimits(await response.json());
+		return readDiscoveredModels(await response.json());
 	}
 
 	streamResponse(
@@ -780,7 +780,7 @@ function openAIModelsUrl(baseUrl: string): string {
 	return url.toString();
 }
 
-function readDiscoveredModelLimits(value: unknown): DiscoveredModelLimit[] {
+function readDiscoveredModels(value: unknown): DiscoveredModel[] {
 	const items =
 		typeof value === "object" &&
 		value !== null &&
@@ -802,8 +802,15 @@ function readDiscoveredModelLimits(value: unknown): DiscoveredModelLimit[] {
 			const candidate = Reflect.get(item, field);
 			return isPositiveFinite(candidate) ? [candidate] : [];
 		})[0];
-		return typeof model === "string" && contextWindowTokens !== undefined
-			? [{ model, contextWindowTokens }]
+		return typeof model === "string" && model.length > 0
+			? [
+					{
+						model,
+						...(contextWindowTokens === undefined
+							? {}
+							: { contextWindowTokens }),
+					},
+				]
 			: [];
 	});
 }

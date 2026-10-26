@@ -483,15 +483,13 @@ export class TuiController {
 		if (this.options.prepareModelSession === undefined) {
 			return message("error", "Model switching is unavailable");
 		}
-		if (
-			!this.modelCatalog.some(
-				(entry) => entry.provider === provider && entry.model === model,
-			)
-		) {
-			return message(
-				"error",
-				`Unknown or unavailable model: ${provider}/${model}`,
-			);
+		const knownProvider =
+			this.modelCatalog.some((entry) => entry.provider === provider) ||
+			this.options.providerAuth
+				?.listMetadata()
+				.some((entry) => entry.id === provider) === true;
+		if (!knownProvider) {
+			return message("error", `Unknown or unavailable provider: ${provider}`);
 		}
 		const selection = { provider, model };
 		this.transitionActive = true;

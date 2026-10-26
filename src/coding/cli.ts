@@ -390,15 +390,10 @@ async function runSessionCommand(
 	const credentialStore = new FileCredentialStore({
 		...(runtime.userRoot === undefined ? {} : { userRoot: runtime.userRoot }),
 	});
-	const providerRegistry = createDefaultProviderAuthRegistry();
-	const providerRuntime = new ProviderRuntimeService({
-		settings,
-		store: credentialStore,
-		registry: providerRegistry,
-		env,
+	const providerRegistry = createDefaultProviderAuthRegistry({
 		...(runtime.createProvider === undefined
 			? {}
-			: { createProvider: runtime.createProvider }),
+			: { createOpenAICompatibleProvider: runtime.createProvider }),
 		...(runtime.createOpenAIResponsesProvider === undefined
 			? {}
 			: {
@@ -407,6 +402,15 @@ async function runSessionCommand(
 		...(runtime.createCodexProvider === undefined
 			? {}
 			: { createCodexProvider: runtime.createCodexProvider }),
+	});
+	const providerRuntime = new ProviderRuntimeService({
+		settings,
+		store: credentialStore,
+		registry: providerRegistry,
+		env,
+		...(runtime.createProvider === undefined
+			? {}
+			: { createProvider: runtime.createProvider }),
 	});
 	const initialSelection = await providerRuntime.resolveInitialSelection({
 		...(command.provider === undefined ? {} : { provider: command.provider }),

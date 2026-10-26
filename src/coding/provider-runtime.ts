@@ -1,23 +1,17 @@
 import type { AuthInteraction, AuthType, OAuthCredential } from "../ai/auth.ts";
-import { extractCodexAccountId } from "../ai/codex_oauth.ts";
-import {
-	CodexProvider,
-	type CodexProviderConfig,
-} from "../ai/codex_provider.ts";
 import { createAssistantMessageEventStream } from "../ai/event-stream.ts";
-import {
-	type OpenAIResponsesConfig,
-	OpenAIResponsesProvider,
-} from "../ai/openai_responses_provider.ts";
 import type {
-	DiscoveredModelLimit,
+	DiscoveredModel,
 	ModelProvider,
 	StreamOptions,
 } from "../ai/provider_protocol.ts";
 import type { ModelContext } from "../ai/types.ts";
-import type { CredentialStore } from "./auth-store.ts";
+import type { CredentialStore, StoredCredentialSummary } from "./auth-store.ts";
+import { FALLBACK_CONTEXT_WINDOW_TOKENS } from "./context-window.ts";
 import type {
+	OAuthProviderRegistration,
 	ProviderAuthMetadata,
+	ProviderAuthRegistration,
 	ProviderAuthRegistry,
 } from "./provider-auth.ts";
 import {
@@ -59,11 +53,8 @@ export interface ProviderRuntimeServiceOptions {
 	readonly store: CredentialStore;
 	readonly registry: ProviderAuthRegistry;
 	readonly env?: ProviderEnvironment;
+	/** Adapter factory for custom providers; built-ins use their registration. */
 	readonly createProvider?: ProviderFactory;
-	readonly createCodexProvider?: (config: CodexProviderConfig) => ModelProvider;
-	readonly createOpenAIResponsesProvider?: (
-		config: OpenAIResponsesConfig,
-	) => ModelProvider;
 	readonly now?: () => number;
 }
 
@@ -74,9 +65,9 @@ export interface CreateCredentialRuntimeOptions {
 export class ProviderRuntimeService {
 	private readonly env: ProviderEnvironment;
 	private readonly now: () => number;
-	private readonly discoveryByProvider = new WeakMap<
-		ModelProvider,
-		Promise<ModelLimitDiscovery>
+	private readonly catalogByProvider = new Map<
+		string,
+		Promise<ModelCatalogDiscovery>
 	>();
 
 	constructor(private readonly options: ProviderRuntimeServiceOptions) {
@@ -106,28 +97,14 @@ export class ProviderRuntimeService {
 				options.model ??
 				savedDefaultModel ??
 				configured.defaultModel;
-			const models = new Set([
-				...configured.models,
-				...(registration?.models ?? []),
-			]);
-			if (!models.has(model)) {
-				throw new Error(
-					`Unknown model "${model}" for provider "${providerId}"`,
-				);
-			}
 			return Object.freeze({ provider: providerId, model });
 		}
-		if (registration?.models.length) {
+		if (registration !== undefined) {
 			const model =
 				options.stored?.model ??
 				options.model ??
 				savedDefaultModel ??
 				registration.defaultModel;
-			if (!registration.models.includes(model)) {
-				throw new Error(
-					`Unknown model "${model}" for provider "${providerId}"`,
-				);
-			}
 			return Object.freeze({ provider: providerId, model });
 		}
 		throw new Error(`Unknown provider: ${providerId}`);
@@ -155,10 +132,11 @@ export class ProviderRuntimeService {
 			return configured;
 		}
 
-		const usableModels = await this.usableModels();
+		const fallbackModels = await this.fallbackModels();
 		if (
-			usableModels.some(
+			fallbackModels.some(
 				(entry) =>
+					entry.usable &&
 					entry.provider === configured.provider &&
 					entry.model === configured.model,
 			)
@@ -166,14 +144,41 @@ export class ProviderRuntimeService {
 			return configured;
 		}
 
+		const configuredIsKnown = fallbackModels.some(
+			(entry) =>
+				entry.provider === configured.provider &&
+				entry.model === configured.model,
+		);
+		if (!configuredIsKnown) {
+			const liveModels = await this.configuredModels();
+			if (
+				liveModels.some(
+					(entry) =>
+						entry.usable &&
+						entry.provider === configured.provider &&
+						entry.model === configured.model,
+				)
+			) {
+				return configured;
+			}
+		}
+
 		for (const provider of await this.listProviders()) {
 			if (provider.status === "not connected") {
 				continue;
 			}
-			const models = usableModels.filter(
-				(entry) => entry.provider === provider.id,
+			const models = fallbackModels.filter(
+				(entry) => entry.usable && entry.provider === provider.id,
 			);
-			const model = models.find((entry) => entry.isDefaultModel) ?? models[0];
+			// A stale saved default flags no entry, so fall back to the provider's
+			// own default before the first listed model.
+			const providerDefault =
+				this.options.settings.providers[provider.id]?.defaultModel ??
+				this.options.registry.get(provider.id)?.defaultModel;
+			const model =
+				models.find((entry) => entry.isDefaultModel) ??
+				models.find((entry) => entry.model === providerDefault) ??
+				models[0];
 			if (model !== undefined) {
 				return Object.freeze({
 					provider: model.provider,
@@ -182,8 +187,10 @@ export class ProviderRuntimeService {
 			}
 		}
 
+		const usableFallbacks = fallbackModels.filter((entry) => entry.usable);
 		const fallback =
-			usableModels.find((entry) => entry.isDefaultModel) ?? usableModels[0];
+			usableFallbacks.find((entry) => entry.isDefaultModel) ??
+			usableFallbacks[0];
 		return fallback === undefined
 			? configured
 			: Object.freeze({
@@ -205,7 +212,7 @@ export class ProviderRuntimeService {
 			if (savedOnly && saved === undefined) {
 				continue;
 			}
-			if (metadata.id === "openai" && environmentApiKey(this.env)) {
+			if (this.environmentApiKey(metadata.id) !== undefined) {
 				views.push(
 					Object.freeze<ProviderAuthView>({
 						...metadata,
@@ -237,72 +244,49 @@ export class ProviderRuntimeService {
 	}
 
 	async configuredModels(): Promise<readonly RuntimeModelCatalogEntry[]> {
-		const credentials = new Map(
-			(await this.options.store.list()).map((credential) => [
-				credential.provider,
-				credential,
-			]),
+		const fallback = await this.fallbackModels();
+		const entries = [...fallback];
+		const known = new Set(
+			entries.map((entry) => `${entry.provider}\u0000${entry.model}`),
 		);
-		const entries: RuntimeModelCatalogEntry[] = [];
-		for (const providerId of Object.keys(
-			this.options.settings.providers,
-		).sort()) {
-			const provider = this.options.settings.providers[providerId];
-			if (provider === undefined) {
-				continue;
-			}
-			const usable =
-				providerId === "openai"
-					? environmentApiKey(this.env) !== undefined ||
-						credentials.get(providerId)?.type === "api_key"
-					: !getProviderAuthStatus(provider, this.env).startsWith("missing:");
-			const registration = this.options.registry.get(providerId);
-			const models = [
-				...new Set([...provider.models, ...(registration?.models ?? [])]),
-			].sort();
-			const defaultModel =
-				providerId === this.options.settings.defaultProvider
-					? (this.options.settings.defaultModel ?? provider.defaultModel)
-					: provider.defaultModel;
-			for (const model of models) {
+		const providerIds = [
+			...new Set(
+				fallback.filter((entry) => entry.usable).map((entry) => entry.provider),
+			),
+		];
+		const discoveries = await Promise.all(
+			providerIds.map(async (providerId) => ({
+				providerId,
+				outcome: await this.discoverProviderCatalog(providerId),
+			})),
+		);
+
+		for (const { providerId, outcome } of discoveries) {
+			const defaultModel = this.defaultModelFor(providerId);
+			for (const discovered of outcome.models) {
+				const key = `${providerId}\u0000${discovered.model}`;
+				if (known.has(key)) {
+					continue;
+				}
+				known.add(key);
 				entries.push(
 					Object.freeze({
 						provider: providerId,
-						model,
-						usable,
+						model: discovered.model,
+						usable: true,
 						isDefaultProvider:
 							providerId === this.options.settings.defaultProvider,
-						isDefaultModel: model === defaultModel,
+						isDefaultModel: discovered.model === defaultModel,
 					}),
 				);
 			}
 		}
-		for (const registration of this.options.registry.list()) {
-			if (
-				registration.models.length === 0 ||
-				this.options.settings.providers[registration.id] !== undefined
-			) {
-				continue;
-			}
-			const credential = credentials.get(registration.id);
-			const usable = credential?.type === registration.authType;
-			const defaultModel =
-				registration.id === this.options.settings.defaultProvider
-					? (this.options.settings.defaultModel ?? registration.defaultModel)
-					: registration.defaultModel;
-			for (const model of registration.models) {
-				entries.push(
-					Object.freeze({
-						provider: registration.id,
-						model,
-						usable,
-						isDefaultProvider:
-							registration.id === this.options.settings.defaultProvider,
-						isDefaultModel: model === defaultModel,
-					}),
-				);
-			}
-		}
+
+		entries.sort(
+			(left, right) =>
+				left.provider.localeCompare(right.provider) ||
+				left.model.localeCompare(right.model),
+		);
 		return Object.freeze(entries);
 	}
 
@@ -340,13 +324,16 @@ export class ProviderRuntimeService {
 			() => credential,
 			interaction.signal,
 		);
+		this.catalogByProvider.delete(provider);
 	}
 
-	logout(provider: string, signal?: AbortSignal): Promise<boolean> {
+	async logout(provider: string, signal?: AbortSignal): Promise<boolean> {
 		if (this.options.registry.get(provider) === undefined) {
-			return Promise.reject(new Error(`Unknown provider: ${provider}`));
+			throw new Error(`Unknown provider: ${provider}`);
 		}
-		return this.options.store.delete(provider, signal);
+		const deleted = await this.options.store.delete(provider, signal);
+		this.catalogByProvider.delete(provider);
+		return deleted;
 	}
 
 	async createRuntime(
@@ -354,83 +341,36 @@ export class ProviderRuntimeService {
 		options: CreateCredentialRuntimeOptions = {},
 	): Promise<ProviderRuntime & { readonly unavailableReason?: string }> {
 		const canonical = this.resolveSelection({ stored: selection });
-		if (canonical.provider === "openai-codex") {
-			const credential = await this.options.store.read(canonical.provider);
-			if (credential?.type !== "oauth") {
-				return this.unavailableRuntime(
-					canonical,
-					`No credentials for ${canonical.provider}. Run /login or /model`,
-					options,
-				);
-			}
-			const config: CodexProviderConfig = {
-				providerId: canonical.provider,
-				getAuth: (signal) => this.resolveCodexAuth(signal),
-				retry: { maxRetries: 2, maxRetryDelayMs: 60_000 },
-			};
-			const provider =
-				this.options.createCodexProvider?.(config) ?? new CodexProvider(config);
+		const registration = this.options.registry.get(canonical.provider);
+		if (registration === undefined) {
 			return this.resolveRuntimeWindow(
-				Object.freeze({
-					provider,
-					selection: canonical,
-					contextWindowTokens: 128_000,
-					contextWindowSource: "fallback" as const,
-				}),
-			);
-		}
-
-		if (canonical.provider === "openai") {
-			const configured = this.options.settings.providers.openai;
-			if (configured === undefined) {
-				throw new Error("Built-in OpenAI settings are unavailable");
-			}
-			const stored = await this.options.store.read("openai");
-			const apiKey =
-				environmentApiKey(this.env) ??
-				(stored?.type === "api_key" ? stored.key : undefined);
-			if (!apiKey) {
-				return this.unavailableRuntime(
-					canonical,
-					"No credentials for openai. Run /login or /model",
-					options,
-				);
-			}
-			const adapterConfig: OpenAIResponsesConfig = {
-				providerId: "openai",
-				baseUrl: configured.baseUrl,
-				apiKey,
-				retry: {
-					maxRetries: configured.maxRetries,
-					maxRetryDelayMs: configured.maxRetryDelaySeconds * 1_000,
-				},
-			};
-			const provider =
-				this.options.createOpenAIResponsesProvider?.(adapterConfig) ??
-				new OpenAIResponsesProvider(adapterConfig);
-			return this.resolveRuntimeWindow(
-				Object.freeze({
-					provider,
-					selection: canonical,
-					...(configured.timeoutSeconds === undefined
+				createConfiguredProviderRuntime(this.options.settings, canonical, {
+					env: this.env,
+					...(this.options.createProvider === undefined
 						? {}
-						: { timeoutMs: configured.timeoutSeconds * 1_000 }),
-					contextWindowTokens:
-						configured.contextWindows[canonical.model] ?? 128_000,
-					contextWindowSource:
-						configured.contextWindows[canonical.model] === undefined
-							? ("fallback" as const)
-							: ("configured" as const),
+						: { createProvider: this.options.createProvider }),
 				}),
 			);
 		}
 
+		const provider = await this.createRegisteredProvider(registration);
+		if (provider === undefined) {
+			return this.unavailableRuntime(
+				canonical,
+				`No credentials for ${canonical.provider}. Run /login or /model`,
+				options,
+			);
+		}
+		const timeoutSeconds =
+			this.options.settings.providers[canonical.provider]?.timeoutSeconds;
 		return this.resolveRuntimeWindow(
-			createConfiguredProviderRuntime(this.options.settings, canonical, {
-				env: this.env,
-				...(this.options.createProvider === undefined
+			Object.freeze({
+				provider,
+				selection: canonical,
+				...(timeoutSeconds === undefined
 					? {}
-					: { createProvider: this.options.createProvider }),
+					: { timeoutMs: timeoutSeconds * 1_000 }),
+				...this.configuredContextWindow(canonical),
 			}),
 		);
 	}
@@ -447,33 +387,66 @@ export class ProviderRuntimeService {
 			provider: new UnavailableModelProvider(selection.provider, reason),
 			selection,
 			unavailableReason: reason,
-			contextWindowTokens:
-				this.options.settings.providers[selection.provider]?.contextWindows[
-					selection.model
-				] ?? 128_000,
-			contextWindowSource:
-				this.options.settings.providers[selection.provider]?.contextWindows[
-					selection.model
-				] === undefined
-					? "fallback"
-					: "configured",
+			...this.configuredContextWindow(selection),
 		});
+	}
+
+	private configuredContextWindow(
+		selection: ProviderSelection,
+	): Pick<ProviderRuntime, "contextWindowTokens" | "contextWindowSource"> {
+		const configured =
+			this.options.settings.providers[selection.provider]?.contextWindows[
+				selection.model
+			];
+		return configured === undefined
+			? {
+					contextWindowTokens: FALLBACK_CONTEXT_WINDOW_TOKENS,
+					contextWindowSource: "fallback",
+				}
+			: { contextWindowTokens: configured, contextWindowSource: "configured" };
+	}
+
+	/** Build a built-in adapter, or return undefined when it has no credentials. */
+	private async createRegisteredProvider(
+		registration: ProviderAuthRegistration,
+	): Promise<ModelProvider | undefined> {
+		if (registration.authType === "oauth") {
+			const credential = await this.options.store.read(registration.id);
+			if (credential?.type !== "oauth") {
+				return undefined;
+			}
+			return registration.createProvider({
+				getCredential: (signal) =>
+					this.resolveOAuthCredential(registration, signal),
+			});
+		}
+
+		const config = this.options.settings.providers[registration.id];
+		if (config === undefined) {
+			throw new Error(
+				`Built-in ${registration.displayName} settings are unavailable`,
+			);
+		}
+		const stored = await this.options.store.read(registration.id);
+		const apiKey =
+			this.environmentApiKey(registration.id) ??
+			(stored?.type === "api_key" ? stored.key : undefined);
+		return apiKey === undefined
+			? undefined
+			: registration.createProvider({ config, apiKey });
 	}
 
 	private async resolveRuntimeWindow<T extends ProviderRuntime>(
 		runtime: T,
 	): Promise<T> {
-		if (runtime.provider.discoverModelLimits === undefined) {
-			return runtime;
-		}
-		let discovery = this.discoveryByProvider.get(runtime.provider);
-		if (discovery === undefined) {
-			discovery = discoverModelLimits(runtime.provider);
-			this.discoveryByProvider.set(runtime.provider, discovery);
-		}
-		const outcome = await discovery;
-		const live = outcome.limits.find(
-			(limit) => limit.model === runtime.selection.model,
+		// Cache even an empty catalog so the model list does not build a second
+		// adapter for a provider whose adapter cannot discover models.
+		const outcome = await this.discoverProviderCatalog(
+			runtime.selection.provider,
+			runtime.provider,
+		);
+		const live = outcome.models.find(
+			(model) => model.model === runtime.selection.model,
 		);
 		if (live !== undefined && isPositiveFinite(live.contextWindowTokens)) {
 			return Object.freeze({
@@ -496,6 +469,139 @@ export class ProviderRuntimeService {
 		}) as T;
 	}
 
+	private async fallbackModels(): Promise<readonly RuntimeModelCatalogEntry[]> {
+		const credentials = new Map(
+			(await this.options.store.list()).map((credential) => [
+				credential.provider,
+				credential,
+			]),
+		);
+		const entries: RuntimeModelCatalogEntry[] = [];
+		for (const providerId of Object.keys(
+			this.options.settings.providers,
+		).sort()) {
+			const provider = this.options.settings.providers[providerId];
+			if (provider === undefined) {
+				continue;
+			}
+			const registration = this.options.registry.get(providerId);
+			const usable =
+				registration === undefined
+					? !getProviderAuthStatus(provider, this.env).startsWith("missing:")
+					: this.isConnected(registration, credentials.get(providerId));
+			const models = [
+				...new Set([...provider.models, ...(registration?.models ?? [])]),
+			].sort();
+			const defaultModel = this.defaultModelFor(providerId);
+			for (const model of models) {
+				entries.push(
+					Object.freeze({
+						provider: providerId,
+						model,
+						usable,
+						isDefaultProvider:
+							providerId === this.options.settings.defaultProvider,
+						isDefaultModel: model === defaultModel,
+					}),
+				);
+			}
+		}
+		for (const registration of this.options.registry.list()) {
+			if (
+				registration.models.length === 0 ||
+				this.options.settings.providers[registration.id] !== undefined
+			) {
+				continue;
+			}
+			const usable = this.isConnected(
+				registration,
+				credentials.get(registration.id),
+			);
+			const defaultModel = this.defaultModelFor(registration.id);
+			for (const model of registration.models) {
+				entries.push(
+					Object.freeze({
+						provider: registration.id,
+						model,
+						usable,
+						isDefaultProvider:
+							registration.id === this.options.settings.defaultProvider,
+						isDefaultModel: model === defaultModel,
+					}),
+				);
+			}
+		}
+		return Object.freeze(entries);
+	}
+
+	private defaultModelFor(providerId: string): string | undefined {
+		const configured = this.options.settings.providers[providerId];
+		const registration = this.options.registry.get(providerId);
+		return providerId === this.options.settings.defaultProvider
+			? (this.options.settings.defaultModel ??
+					configured?.defaultModel ??
+					registration?.defaultModel)
+			: (configured?.defaultModel ?? registration?.defaultModel);
+	}
+
+	private discoverProviderCatalog(
+		providerId: string,
+		provider?: ModelProvider,
+	): Promise<ModelCatalogDiscovery> {
+		let discovery = this.catalogByProvider.get(providerId);
+		if (discovery === undefined) {
+			discovery = this.readProviderCatalog(providerId, provider);
+			this.catalogByProvider.set(providerId, discovery);
+		}
+		return discovery;
+	}
+
+	private async readProviderCatalog(
+		providerId: string,
+		provider?: ModelProvider,
+	): Promise<ModelCatalogDiscovery> {
+		try {
+			const connected =
+				provider ?? (await this.createDiscoveryProvider(providerId));
+			const models = await connected?.discoverModels?.();
+			return Object.freeze({
+				models: Object.freeze([...(models ?? [])]),
+			});
+		} catch (error) {
+			return Object.freeze({
+				models: Object.freeze([]),
+				error: errorMessage(error),
+			});
+		}
+	}
+
+	private async createDiscoveryProvider(
+		providerId: string,
+	): Promise<ModelProvider | undefined> {
+		const registration = this.options.registry.get(providerId);
+		if (registration !== undefined) {
+			return this.createRegisteredProvider(registration);
+		}
+
+		const configured = this.options.settings.providers[providerId];
+		if (
+			configured === undefined ||
+			getProviderAuthStatus(configured, this.env).startsWith("missing:")
+		) {
+			return undefined;
+		}
+		return createConfiguredProviderRuntime(
+			this.options.settings,
+			{ provider: providerId, model: configured.defaultModel },
+			{
+				env: this.env,
+				...(this.options.createProvider === undefined
+					? {}
+					: { createProvider: this.options.createProvider }),
+			},
+		).provider;
+	}
+
 	private resolveProviderDefault(providerId: string): ProviderSelection {
 		const configured = this.options.settings.providers[providerId];
 		if (configured !== undefined) {
@@ -514,53 +620,54 @@ export class ProviderRuntimeService {
 		throw new Error(`Unknown provider: ${providerId}`);
 	}
 
-	private async resolveCodexAuth(
+	private isConnected(
+		registration: ProviderAuthRegistration,
+		stored: StoredCredentialSummary | undefined,
+	): boolean {
+		return (
+			stored?.type === registration.authType ||
+			this.environmentApiKey(registration.id) !== undefined
+		);
+	}
+
+	/** Read the API key named by the provider's `api_key_env` setting. */
+	private environmentApiKey(providerId: string): string | undefined {
+		const name = this.options.settings.providers[providerId]?.apiKeyEnv;
+		const value =
+			name !== undefined && Object.hasOwn(this.env, name)
+				? this.env[name]?.trim()
+				: undefined;
+		return value || undefined;
+	}
+
+	/** Return a fresh OAuth credential, refreshing at most once under contention. */
+	private async resolveOAuthCredential(
+		registration: OAuthProviderRegistration,
 		signal?: AbortSignal,
-	): Promise<{ readonly access: string; readonly accountId: string }> {
-		const refresh = this.options.registry.get("openai-codex")?.refresh;
-		if (refresh === undefined) {
-			throw new Error("Codex OAuth refresh is unavailable");
-		}
+	): Promise<OAuthCredential> {
 		const credential = await this.options.store.modify(
-			"openai-codex",
+			registration.id,
 			async (current) => {
 				if (current?.type !== "oauth") {
-					throw new Error("OpenAI Codex is not logged in");
+					throw new Error(`${registration.displayName} is not logged in`);
 				}
 				if (current.expires > this.now() + OAUTH_REFRESH_WINDOW_MS) {
 					return undefined;
 				}
-				return refreshWithTimeout(refresh, current, signal);
+				return refreshWithTimeout(registration.refresh, current, signal);
 			},
 			signal,
 		);
 		if (credential?.type !== "oauth") {
-			throw new Error("OpenAI Codex is not logged in");
+			throw new Error(`${registration.displayName} is not logged in`);
 		}
-		return Object.freeze({
-			access: credential.access,
-			accountId: extractCodexAccountId(credential.access),
-		});
+		return credential;
 	}
 }
 
-interface ModelLimitDiscovery {
-	readonly limits: readonly DiscoveredModelLimit[];
+interface ModelCatalogDiscovery {
+	readonly models: readonly DiscoveredModel[];
 	readonly error?: string;
-}
-
-async function discoverModelLimits(
-	provider: ModelProvider,
-): Promise<ModelLimitDiscovery> {
-	try {
-		const limits = await provider.discoverModelLimits?.();
-		return Object.freeze({ limits: Object.freeze([...(limits ?? [])]) });
-	} catch (error) {
-		return Object.freeze({
-			limits: Object.freeze([]),
-			error: errorMessage(error),
-		});
-	}
 }
 
 function isPositiveFinite(value: unknown): value is number {
@@ -641,11 +748,4 @@ async function refreshWithTimeout(
 	const combined =
 		signal === undefined ? timeout : AbortSignal.any([signal, timeout]);
 	return refresh(credential, combined);
-}
-
-function environmentApiKey(env: ProviderEnvironment): string | undefined {
-	const value = Object.hasOwn(env, "OPENAI_API_KEY")
-		? env.OPENAI_API_KEY?.trim()
-		: undefined;
-	return value || undefined;
 }

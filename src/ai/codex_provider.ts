@@ -4,7 +4,7 @@ import {
 	createAssistantMessageEventStream,
 } from "./event-stream.ts";
 import type {
-	DiscoveredModelLimit,
+	DiscoveredModel,
 	ModelProvider,
 	ProviderContextProjection,
 	ProviderRetryConfig,
@@ -25,7 +25,7 @@ export const CODEX_RESPONSES_BASE_URL =
 	"https://chatgpt.com/backend-api/codex/responses";
 
 // The catalog endpoint rejects requests that do not report a supported Codex version.
-const CODEX_CLIENT_VERSION = "0.150.1";
+const CODEX_CLIENT_VERSION = "0.163.0";
 const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_MAX_RETRY_DELAY_MS = 60_000;
 
@@ -123,9 +123,9 @@ export class CodexProvider implements ModelProvider {
 		};
 	}
 
-	async discoverModelLimits(
+	async discoverModels(
 		signal?: AbortSignal,
-	): Promise<readonly DiscoveredModelLimit[]> {
+	): Promise<readonly DiscoveredModel[]> {
 		const auth = await this.getAuth(signal);
 		const response = await this.fetch(codexModelsUrl(this.baseUrl), {
 			method: "GET",
@@ -142,7 +142,7 @@ export class CodexProvider implements ModelProvider {
 		if (!response.ok) {
 			throw new Error(`Model catalog request failed: HTTP ${response.status}`);
 		}
-		return readDiscoveredModelLimits(await response.json());
+		return readDiscoveredModels(await response.json());
 	}
 
 	private async consume(
@@ -974,7 +974,7 @@ function codexModelsUrl(responsesUrl: string): string {
 	return url.toString();
 }
 
-function readDiscoveredModelLimits(value: unknown): DiscoveredModelLimit[] {
+function readDiscoveredModels(value: unknown): DiscoveredModel[] {
 	const items = Array.isArray(value)
 		? value
 		: typeof value === "object" && value !== null
@@ -984,7 +984,11 @@ function readDiscoveredModelLimits(value: unknown): DiscoveredModelLimit[] {
 				})
 			: [];
 	return items.flatMap((item) => {
-		if (typeof item !== "object" || item === null) {
+		if (
+			typeof item !== "object" ||
+			item === null ||
+			Reflect.get(item, "visibility") === "hide"
+		) {
 			return [];
 		}
 		const model = ["slug", "id", "model", "name"].flatMap((field) => {
@@ -1000,14 +1004,14 @@ function readDiscoveredModelLimits(value: unknown): DiscoveredModelLimit[] {
 			const candidate = Reflect.get(item, field);
 			return isPositiveFinite(candidate) ? [candidate] : [];
 		})[0];
-		if (model === undefined || contextWindowTokens === undefined) {
+		if (model === undefined) {
 			return [];
 		}
 		const effective = Reflect.get(item, "effective_context_window_percent");
 		return [
 			{
 				model,
-				contextWindowTokens,
+				...(contextWindowTokens === undefined ? {} : { contextWindowTokens }),
 				...(isPositiveFinite(effective)
 					? { effectiveContextWindowPercent: effective }
 					: {}),

@@ -495,7 +495,7 @@ describe("default slash commands", () => {
 		);
 	});
 
-	test("opens semantic pickers and validates canonical model selections", async () => {
+	test("opens semantic pickers and accepts explicit models for known providers", async () => {
 		const registry = createDefaultCommandRegistry();
 		const models: readonly CommandModelListItem[] = [
 			{ provider: "openai", model: "gpt-5.6-sol" },
@@ -528,12 +528,22 @@ describe("default slash commands", () => {
 			},
 		});
 		expect(
-			await registry.dispatch("/model local/missing", commandContext),
+			await registry.dispatch("/model local/new-release", commandContext),
+		).toEqual({
+			handled: true,
+			outcome: {
+				kind: "set-model",
+				provider: "local",
+				model: "new-release",
+			},
+		});
+		expect(
+			await registry.dispatch("/model missing/model", commandContext),
 		).toMatchObject({
 			outcome: {
 				kind: "message",
 				level: "error",
-				text: "Unknown or unavailable model: local/missing",
+				text: "Unknown or unavailable provider: missing",
 			},
 		});
 		expect(

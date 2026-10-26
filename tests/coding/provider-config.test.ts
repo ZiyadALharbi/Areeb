@@ -67,9 +67,9 @@ describe("provider settings parsing and resolution", () => {
 		expect(
 			resolveProviderSelection(settings, { model: "org/Exact:Model" }),
 		).toEqual({ provider: "openai", model: "org/Exact:Model" });
-		expect(() =>
+		expect(
 			resolveProviderSelection(settings, { model: "org/exact:model" }),
-		).toThrow('Unknown model "org/exact:model"');
+		).toEqual({ provider: "openai", model: "org/exact:model" });
 
 		let adapterConfig: OpenAICompatibleConfig | undefined;
 		const runtime = createProviderRuntime(
@@ -350,6 +350,7 @@ describe("provider settings persistence", () => {
 			"alpha",
 			"beta",
 			"openai",
+			"openrouter",
 		]);
 		const filePath = join(userRoot, "providers.json");
 		expect((await stat(userRoot)).mode & 0o777).toBe(0o700);
