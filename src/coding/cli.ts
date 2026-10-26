@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { assertUuid } from "../agent/session/session.ts";
 import type { SessionModel } from "../agent/session/types.ts";
+import type { AnthropicMessagesConfig } from "../ai/anthropic_messages_provider.ts";
 import type { CodexProviderConfig } from "../ai/codex_provider.ts";
 import type { OpenAICompatibleConfig } from "../ai/openai_compatible_provider.ts";
 import type { OpenAIResponsesConfig } from "../ai/openai_responses_provider.ts";
@@ -261,6 +262,9 @@ interface CliRuntime {
 		config: OpenAIResponsesConfig,
 	) => ModelProvider;
 	readonly createCodexProvider?: (config: CodexProviderConfig) => ModelProvider;
+	readonly createAnthropicProvider?: (
+		config: AnthropicMessagesConfig,
+	) => ModelProvider;
 	readonly runPrint?: typeof runPrintMode;
 	readonly runInteractive?: typeof runInteractiveMode;
 }
@@ -402,6 +406,9 @@ async function runSessionCommand(
 		...(runtime.createCodexProvider === undefined
 			? {}
 			: { createCodexProvider: runtime.createCodexProvider }),
+		...(runtime.createAnthropicProvider === undefined
+			? {}
+			: { createAnthropicProvider: runtime.createAnthropicProvider }),
 	});
 	const providerRuntime = new ProviderRuntimeService({
 		settings,

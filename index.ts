@@ -27,6 +27,8 @@ export type {
 	QueuedMessages,
 	QueueMode,
 } from "./src/agent/types.ts";
+export type { AnthropicMessagesConfig } from "./src/ai/anthropic_messages_provider.ts";
+export { AnthropicMessagesProvider } from "./src/ai/anthropic_messages_provider.ts";
 export type {
 	ApiKeyCredential,
 	AuthCredential,

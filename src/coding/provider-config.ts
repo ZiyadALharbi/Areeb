@@ -27,6 +27,8 @@ import { areebPaths } from "./paths.ts";
 
 export const PROVIDER_SETTINGS_VERSION = 1;
 export const DEFAULT_OPENAI_MODEL = "gpt-6.1-sol";
+export const DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com";
+export const DEFAULT_ANTHROPIC_MODEL = "claude-opus-5-5";
 export const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 export const DEFAULT_OPENROUTER_MODEL = "anthropic/claude-sonnet-5.5";
 export const DEFAULT_PROVIDER_MAX_RETRIES = 2;
@@ -55,6 +57,11 @@ const BUILT_IN_PROVIDERS: Readonly<Record<string, BuiltInProviderDefaults>> =
 			baseUrl: DEFAULT_OPENAI_BASE_URL,
 			defaultModel: DEFAULT_OPENAI_MODEL,
 		},
+		anthropic: {
+			envPrefix: "ANTHROPIC",
+			baseUrl: DEFAULT_ANTHROPIC_BASE_URL,
+			defaultModel: DEFAULT_ANTHROPIC_MODEL,
+		},
 		openrouter: {
 			envPrefix: "OPENROUTER",
 			baseUrl: DEFAULT_OPENROUTER_BASE_URL,
@@ -70,9 +77,9 @@ export interface ProviderModelReference {
 	readonly model: string;
 }
 
-export interface OpenAICompatibleProviderConfig {
+/** Endpoint settings for one provider; built-ins choose their own adapter. */
+export interface ProviderEndpointConfig {
 	readonly id: string;
-	readonly type: "openai-compatible";
 	readonly builtIn: boolean;
 	readonly baseUrl: string;
 	readonly apiKeyEnv?: string;
@@ -90,7 +97,7 @@ export interface ProviderSettings {
 	readonly path: string;
 	readonly defaultProvider: string;
 	readonly defaultModel?: string;
-	readonly providers: Readonly<Record<string, OpenAICompatibleProviderConfig>>;
+	readonly providers: Readonly<Record<string, ProviderEndpointConfig>>;
 	readonly favoriteModels: readonly ProviderModelReference[];
 }
 
@@ -577,7 +584,7 @@ export async function saveDefaultProviderModel(
 }
 
 export function getProviderAuthStatus(
-	provider: OpenAICompatibleProviderConfig,
+	provider: ProviderEndpointConfig,
 	env: ProviderEnvironment = process.env,
 ): ProviderAuthStatus {
 	if (provider.apiKeyEnv === undefined) {
@@ -596,7 +603,7 @@ function composeProviderSettings(
 	const explicitProviders = raw?.providers ?? {};
 	const providers = Object.create(null) as Record<
 		string,
-		OpenAICompatibleProviderConfig
+		ProviderEndpointConfig
 	>;
 	for (const [providerId, defaults] of Object.entries(BUILT_IN_PROVIDERS)) {
 		providers[providerId] = normalizeBuiltInProvider(
@@ -676,7 +683,7 @@ function normalizeBuiltInProvider(
 	overlay: RawProvider | undefined,
 	path: string,
 	env: ProviderEnvironment,
-): OpenAICompatibleProviderConfig {
+): ProviderEndpointConfig {
 	const prefix = defaults.envPrefix;
 	const environmentModel =
 		environmentValue(env, `${prefix}_MODEL`)?.trim() || undefined;
@@ -745,7 +752,7 @@ function normalizeCustomProvider(
 	providerId: string,
 	raw: RawProvider,
 	path: string,
-): OpenAICompatibleProviderConfig {
+): ProviderEndpointConfig {
 	assertContextWindowModels(raw, path, `$.providers.${providerId}`);
 	for (const [field, value] of [
 		["type", raw.type],
@@ -770,7 +777,7 @@ function normalizeProvider(
 	raw: RawProvider,
 	path: string,
 	builtIn: boolean,
-): OpenAICompatibleProviderConfig {
+): ProviderEndpointConfig {
 	const basePath = `$.providers.${providerId}`;
 	if (raw.base_url === undefined) {
 		throwConfig(path, `${basePath}.base_url`, "is required");
@@ -807,7 +814,6 @@ function normalizeProvider(
 
 	return Object.freeze({
 		id: providerId,
-		type: "openai-compatible",
 		builtIn,
 		baseUrl: raw.base_url.replace(/\/+$/, ""),
 		...(raw.api_key_env === undefined ? {} : { apiKeyEnv: raw.api_key_env }),
