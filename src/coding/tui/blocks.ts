@@ -8,7 +8,7 @@ import {
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { REASONING_LEVELS, type ReasoningLevel } from "../../ai/types.ts";
-import type { TuiEditDetails, TuiState } from "./state.ts";
+import type { TuiEditDetails, TuiState, TuiTestSummary } from "./state.ts";
 import { boldText, type TuiTheme } from "./theme.ts";
 
 // Every transcript row shares one gutter: a two-column inset, then a short
@@ -19,6 +19,7 @@ const GUTTER_WIDTH = INSET + TAG_WIDTH;
 const MIN_GUTTER_CONTENT = 20;
 const MAX_COLLAPSED_TOOLS = 5;
 const TOOL_PREVIEW_MAX_LINES = 16;
+const MAX_TEST_DOTS = 40;
 const HIDDEN_CODE_FENCE = "\u{e000}";
 const STATUS_SEPARATOR = " · ";
 
@@ -198,6 +199,7 @@ export interface ToolBlockOptions {
 	readonly target?: string;
 	readonly preview?: string;
 	readonly edit?: TuiEditDetails;
+	readonly tests?: TuiTestSummary;
 	readonly isError?: boolean;
 }
 
@@ -277,7 +279,11 @@ export class ToolGroupBlock implements Component {
 
 		for (const tool of shown) {
 			rendered.push(...this.renderTool(tool, availableWidth));
-			if (this.expanded) {
+			if (tool.tests !== undefined) {
+				rendered.push(...this.renderTests(tool.tests, availableWidth));
+			}
+			// Edit diffs stay visible; other tool output waits for expansion.
+			if (this.expanded || tool.edit !== undefined) {
 				rendered.push(...this.renderDetails(tool, availableWidth));
 			}
 		}
@@ -311,6 +317,39 @@ export class ToolGroupBlock implements Component {
 						? this.theme.primary(shortTarget)
 						: `${this.theme.primary(shortTarget)}${shortTarget ? "  " : ""}${meta}`;
 				return [truncateToWidth(line, contentWidth, "…")];
+			},
+			width,
+		);
+	}
+
+	/** One dot per test, scaled down for large suites, then the counts. */
+	private renderTests(tests: TuiTestSummary, width: number): string[] {
+		const { success, error } = this.theme;
+		const summary =
+			tests.failed === 0
+				? success(`✓ ${tests.passed} pass · 0 fail`)
+				: `${error("✗")} ${success(`${tests.passed} pass`)} ${this.theme.subtle("·")} ${error(`${tests.failed} fail`)}`;
+		return renderTagged(
+			"",
+			this.theme.subtle,
+			(contentWidth) => {
+				const total = tests.passed + tests.failed;
+				const dots = Math.min(
+					total,
+					MAX_TEST_DOTS,
+					contentWidth - visibleWidth(summary) - 2,
+				);
+				if (dots < 1) {
+					return [truncateToWidth(summary, contentWidth, "…")];
+				}
+				// Any failure keeps at least one red dot after scaling.
+				const failedDots =
+					tests.failed === 0
+						? 0
+						: Math.max(1, Math.round((tests.failed / total) * dots));
+				return [
+					`${success("●".repeat(dots - failedDots))}${error("●".repeat(failedDots))}  ${summary}`,
+				];
 			},
 			width,
 		);
@@ -428,14 +467,40 @@ export class ThinkingBlock implements Component {
 // The smoke entry remains intentionally unchanged for this phase.
 export { ToolBlock as CollapsedToolBlock };
 
-// Seven-row pixel glyphs for the empty-state wordmark, drawn as a dot matrix
-// like the website hero.
-const WORDMARK_GLYPHS: readonly (readonly string[])[] = [
-	[".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
-	[".....", ".....", "#.##.", "##..#", "#....", "#....", "#...."],
-	[".....", ".....", ".###.", "#...#", "#####", "#....", ".###."],
-	[".....", ".....", ".###.", "#...#", "#####", "#....", ".###."],
-	["#....", "#....", "####.", "#...#", "#...#", "#...#", "####."],
+// Dot-matrix wordmark, one character per dot. It renders as Braille, so each
+// terminal cell packs a 2x4 block of dots.
+const WORDMARK_DOTS: readonly string[] = [
+	"..........#######.............................................................................#####.................",
+	"..........#######.............................................................................#####.................",
+	".........########.............................................................................#####.................",
+	".........#########............................................................................#####.................",
+	".........#########............................................................................#####.................",
+	"........#####.#####...........................................................................#####.................",
+	"........#####.#####...........................................................................#####.................",
+	"........####...####...........#####...####.........########................#########..........#####...########......",
+	".......#####...#####..........#####.######.......############............############.........#####..##########.....",
+	".......#####...#####..........#####.######......##############..........###############.......#####.#############...",
+	"......#####.....####..........############.....################........################.......###################...",
+	"......#####.....#####.........#########.......######......######......######......######......########......######..",
+	"......#####.....#####.........#######........######........#####......#####........######.....#######........#####..",
+	".....#####.......####.........######.........#####..........#####....#####..........#####.....######..........#####.",
+	".....#####.......#####........#####..........#####..........#####....#####..........#####.....######..........#####.",
+	".....#####.......#####........#####.........#####...........#####....#####...........#####....#####...........#####.",
+	"....#####.........#####.......#####.........#####...........#####....####............#####....#####............####.",
+	"....#####.........#####.......#####.........#####################....#####################....#####............#####",
+	"....###################.......#####.........#####################....#####################....#####............#####",
+	"...#####################......#####.........#####################....#####################....#####............#####",
+	"...#####################......#####.........#####....................####.....................#####............#####",
+	"..######################......#####.........#####....................#####....................#####...........#####.",
+	"..#####.............#####.....#####..........####....................#####....................######..........#####.",
+	"..#####.............#####.....#####..........#####..........#####....#####...........####.....######..........#####.",
+	".#####..............#####.....#####..........#####..........#####.....#####.........#####.....#######........######.",
+	".#####...............#####....#####...........#####........#####......######.......######.....########......######..",
+	".#####...............#####....#####...........########...#######.......#######...#######......##########..########..",
+	"#####................#####....#####............################.........###############.......###################...",
+	"#####.................#####...#####.............##############...........#############........#####.############....",
+	"#####.................#####...#####...............##########..............###########.........#####..##########.....",
+	".....................................................####....................#####......................####........",
 ];
 
 /** Empty-session welcome: the dot-matrix wordmark and the first steps. */
@@ -494,11 +559,18 @@ export class WelcomeBlock implements Component {
 	}
 }
 
-/** The reasoning level followed by a rising meter, like a signal indicator. */
+/**
+ * The reasoning level followed by a rising Braille meter, one column per level
+ * above "off". Braille is four dots tall, so the ramp climbs half a cell at a
+ * time to give five distinct heights. Unreached columns keep a dim baseline.
+ */
 export function effortLabel(level: ReasoningLevel, theme: TuiTheme): string {
-	const bars = "▁▂▃▅▆█";
+	const columns = "⣀⣤⣴⣶⣿";
 	const filled = Math.max(0, REASONING_LEVELS.indexOf(level));
-	return `${theme.accent(level)} ${theme.accent(bars.slice(0, filled))}${theme.subtle(bars.slice(filled))}`;
+	const meter = Array.from(columns, (column, index) =>
+		index < filled ? theme.accent(column) : theme.subtle("⣀"),
+	).join("");
+	return `${theme.accent(level)} ${meter}`;
 }
 
 export function displayPath(path: string): string {
@@ -526,16 +598,31 @@ export function fitLine(line: string, width: number): string {
 	return `${fitted}${" ".repeat(Math.max(0, width - visibleWidth(fitted)))}`;
 }
 
+// Braille bit for each dot of a cell, indexed by [row][column].
+const BRAILLE_BITS = [
+	[0x01, 0x08],
+	[0x02, 0x10],
+	[0x04, 0x20],
+	[0x40, 0x80],
+];
+
 function renderWordmark(theme: TuiTheme): string[] {
-	const lit = theme.primary("●");
-	const unlit = theme.subtle("·");
-	const rows = WORDMARK_GLYPHS[0]?.length ?? 0;
+	const columns = Math.ceil((WORDMARK_DOTS[0]?.length ?? 0) / 2);
+	const rows = Math.ceil(WORDMARK_DOTS.length / 4);
 	return Array.from({ length: rows }, (_, row) =>
-		WORDMARK_GLYPHS.map((glyph) =>
-			Array.from(glyph[row] ?? "", (pixel) =>
-				pixel === "#" ? lit : unlit,
-			).join(" "),
-		).join(` ${unlit} `),
+		theme.primary(
+			Array.from({ length: columns }, (_, column) => {
+				let bits = 0;
+				for (const [dy, offsets] of BRAILLE_BITS.entries()) {
+					for (const [dx, bit] of offsets.entries()) {
+						if (WORDMARK_DOTS[row * 4 + dy]?.[column * 2 + dx] === "#") {
+							bits |= bit;
+						}
+					}
+				}
+				return bits === 0 ? " " : String.fromCodePoint(0x2800 + bits);
+			}).join(""),
+		),
 	);
 }
 
@@ -625,8 +712,9 @@ function wrapDiffLines(
 			Math.max(maximum, line.lineNumber?.toString().length ?? 0),
 		0,
 	);
-	const showNumbers = numberWidth > 0 && width > numberWidth + 2;
-	const contentWidth = showNumbers ? width - numberWidth - 2 : width;
+	// One column of padding inside the row fill, then the number and a gap.
+	const showNumbers = numberWidth > 0 && width > numberWidth + 3;
+	const contentWidth = showNumbers ? width - numberWidth - 3 : width;
 	for (const logicalLine of logicalLines) {
 		const contentStyle = diffStyle(logicalLine.kind, theme);
 		const lineStyle =
@@ -641,7 +729,7 @@ function wrapDiffLines(
 				index === 0 && logicalLine.lineNumber !== undefined
 					? logicalLine.lineNumber.toString().padStart(numberWidth, " ")
 					: " ".repeat(numberWidth);
-			const prefix = showNumbers ? `${number}  ` : "";
+			const prefix = showNumbers ? ` ${number}  ` : "";
 			const padding = " ".repeat(
 				Math.max(0, width - visibleWidth(prefix) - visibleWidth(fragment)),
 			);
@@ -689,11 +777,11 @@ function formatDisplayDiff(text: string): DiffLine[] {
 		const lineNumber = Number(match[2]);
 		const content = match[3] ?? "";
 		if (marker === "+") {
-			lines.push({ kind: "added", text: `+ ${content}`, lineNumber });
+			lines.push({ kind: "added", text: `+  ${content}`, lineNumber });
 		} else if (marker === "-") {
-			lines.push({ kind: "removed", text: `- ${content}`, lineNumber });
+			lines.push({ kind: "removed", text: `-  ${content}`, lineNumber });
 		} else {
-			lines.push({ kind: "context", text: `  ${content}`, lineNumber });
+			lines.push({ kind: "context", text: `   ${content}`, lineNumber });
 		}
 	}
 	return lines;
@@ -724,7 +812,7 @@ function formatUnifiedDiff(text: string): DiffLine[] {
 		} else if (line.startsWith("+")) {
 			lines.push({
 				kind: "added",
-				text: `+ ${line.slice(1)}`,
+				text: `+  ${line.slice(1)}`,
 				...(newLine === undefined ? {} : { lineNumber: newLine }),
 			});
 			if (newLine !== undefined) {
@@ -733,7 +821,7 @@ function formatUnifiedDiff(text: string): DiffLine[] {
 		} else if (line.startsWith("-")) {
 			lines.push({
 				kind: "removed",
-				text: `- ${line.slice(1)}`,
+				text: `-  ${line.slice(1)}`,
 				...(oldLine === undefined ? {} : { lineNumber: oldLine }),
 			});
 			if (oldLine !== undefined) {
@@ -742,7 +830,7 @@ function formatUnifiedDiff(text: string): DiffLine[] {
 		} else if (line.startsWith(" ")) {
 			lines.push({
 				kind: "context",
-				text: `  ${line.slice(1)}`,
+				text: `   ${line.slice(1)}`,
 				...(newLine === undefined ? {} : { lineNumber: newLine }),
 			});
 			if (oldLine !== undefined) {

@@ -502,7 +502,7 @@ describe("createTuiApp pickers", () => {
 			.split("\n")
 			.find((line) => line.includes("model-a · off"));
 		expect(wideMetadataLine?.trimStart()).toStartWith("/project");
-		expect(wideMetadataLine?.trimEnd()).toEndWith("model-a · off ▁▂▃▅▆█");
+		expect(wideMetadataLine?.trimEnd()).toEndWith("model-a · off ⣀⣀⣀⣀⣀");
 		state.reasoning = "high";
 		app.refresh(state);
 		expect(stripTerminalSequences(app.tui.render(32).join("\n"))).toContain(

@@ -14,6 +14,11 @@ export interface TuiEditDetails {
 	readonly firstChangedLine?: number;
 }
 
+export interface TuiTestSummary {
+	readonly passed: number;
+	readonly failed: number;
+}
+
 export type ChatItem =
 	| { readonly role: "user"; readonly text: string }
 	| { readonly role: "assistant"; readonly text: string }
@@ -27,6 +32,8 @@ export type ChatItem =
 			readonly target?: string;
 			readonly preview?: string;
 			readonly edit?: TuiEditDetails;
+			/** Pass and fail counts when a bash command ran a test suite. */
+			readonly tests?: TuiTestSummary;
 			readonly isError?: boolean;
 	  }
 	| { readonly role: "status"; readonly text: string }

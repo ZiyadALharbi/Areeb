@@ -349,8 +349,8 @@ describe("TUI transcript blocks", () => {
 			rendered.map((line) => stripTerminalSequences(line).trimEnd()),
 		).toEqual([
 			"  edit    src/file.ts  failed",
-			"          1  - old",
-			"          1  + new",
+			"           1  -  old",
+			"           1  +  new",
 		]);
 		expect(rendered[0]).toContain("38;2;239;139;128");
 		expect(rendered.join("\n")).not.toContain("patch old");
@@ -383,18 +383,18 @@ describe("TUI transcript blocks", () => {
 
 		expect(plain).toEqual([
 			"  edit    tests/coding/tui/blocks.test.ts  +1 −1",
-			"           99    context",
-			"          100  - old",
-			"          100  + new",
-			"          101    trailing",
+			"            99     context",
+			"           100  -  old",
+			"           100  +  new",
+			"           101     trailing",
 		]);
 		expect(rendered[0]).toContain(theme.diffAdded("+1"));
 		expect(rendered[0]).toContain(theme.diffRemoved("−1"));
-		expect(rendered[1]).toContain(theme.diffContext("  context"));
-		expect(rendered[2]).toContain(theme.diffMeta("100  "));
-		expect(rendered[2]).toContain(theme.diffRemoved("- old"));
+		expect(rendered[1]).toContain(theme.diffContext("   context"));
+		expect(rendered[2]).toContain(theme.diffMeta(" 100  "));
+		expect(rendered[2]).toContain(theme.diffRemoved("-  old"));
 		expect(rendered[2]).toContain("48;2;42;23;21");
-		expect(rendered[3]).toContain(theme.diffAdded("+ new"));
+		expect(rendered[3]).toContain(theme.diffAdded("+  new"));
 		expect(rendered[3]).toContain("48;2;20;35;26");
 		expect(rendered[4]).not.toContain("48;2;");
 		expect(plain.join("\n")).not.toContain("wrong.ts");
@@ -434,7 +434,7 @@ describe("TUI transcript blocks", () => {
 		expect(styledLine("context")).toContain("38;2;140;139;134");
 		expect(styledLine("removed")).toContain("38;2;239;139;128");
 		expect(styledLine("No newline")).toContain("38;2;85;85;79");
-		const addedIndex = plain.findIndex((line) => line.includes("+ added"));
+		const addedIndex = plain.findIndex((line) => line.includes("+  added"));
 		expect(addedIndex).toBeGreaterThan(0);
 		expect(rendered[addedIndex]).toContain("38;2;134;214;160");
 		expect(rendered[addedIndex + 1]).toContain("38;2;134;214;160");
@@ -468,6 +468,7 @@ describe("TUI transcript blocks", () => {
 		expect(group.render(60).map(stripTerminalSequences)).toEqual([
 			"  read",
 			"  edit    src/group.ts  +1 −0",
+			"           1  +  content".padEnd(60),
 		]);
 		group.setExpanded(true);
 		const expanded = group
@@ -477,7 +478,7 @@ describe("TUI transcript blocks", () => {
 			"  read",
 			"          content",
 			"  edit    src/group.ts  +1 −0",
-			"          1  + content",
+			"           1  +  content",
 		]);
 	});
 
